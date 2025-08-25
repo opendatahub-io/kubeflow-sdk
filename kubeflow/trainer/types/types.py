@@ -152,9 +152,7 @@ class BuiltinTrainer:
 
 
 # Change it to list: BUILTIN_CONFIGS, once we support more Builtin Trainer configs.
-TORCH_TUNE = (
-    BuiltinTrainer.__annotations__["config"].__name__.lower().replace("config", "")
-)
+TORCH_TUNE = BuiltinTrainer.__annotations__["config"].__name__.lower().replace("config", "")
 
 
 class TrainerType(Enum):
