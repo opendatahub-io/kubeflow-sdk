@@ -30,7 +30,7 @@ pip install -e .
 #### Development Build (Optional)
 To install development tools and the latest API modules directly from the master branch:
 ```sh
-pip install -e ".[dev]"
+uv pip install -e . --group dev
 ```
 
 ## Development Workflow

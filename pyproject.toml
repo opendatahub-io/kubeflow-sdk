@@ -31,7 +31,8 @@ dependencies = [
   "pydantic>=2.10.0",
   "kubeflow-trainer-api>=2.0.0",
 ]
-[project.optional-dependencies]
+
+[dependency-groups]
 dev = [
   "pytest>=7.0",
   "pytest-mock>=3.10",
