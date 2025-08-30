@@ -38,7 +38,7 @@ class TrainerClient:
         """
         # initialize training backend
         if isinstance(backend_config, KubernetesBackendConfig):
-            self.__backend = KubernetesBackend(backend_config)
+            self.backend = KubernetesBackend(backend_config)
         else:
             raise ValueError("Invalid backend config '{}'".format(backend_config))
 
@@ -53,7 +53,7 @@ class TrainerClient:
             TimeoutError: Timeout to list Runtimes.
             RuntimeError: Failed to list Runtimes.
         """
-        return self.__backend.list_runtimes()
+        return self.backend.list_runtimes()
 
     def get_runtime(self, name: str) -> types.Runtime:
         """Get the Runtime object
@@ -62,7 +62,7 @@ class TrainerClient:
             Returns:
                 types.TrainingRuntime: Runtime object.
         """
-        return self.__backend.get_runtime(name=name)
+        return self.backend.get_runtime(name=name)
 
     def get_runtime_packages(self, runtime: types.Runtime):
         """
@@ -77,7 +77,7 @@ class TrainerClient:
             RuntimeError: Failed to get Runtime.
 
         """
-        return self.__backend.get_runtime_packages(runtime=runtime)
+        return self.backend.get_runtime_packages(runtime=runtime)
 
     def train(
         self,
@@ -104,7 +104,7 @@ class TrainerClient:
             TimeoutError: Timeout to create TrainJobs.
             RuntimeError: Failed to create TrainJobs.
         """
-        return self.__backend.train(runtime=runtime, initializer=initializer, trainer=trainer)
+        return self.backend.train(runtime=runtime, initializer=initializer, trainer=trainer)
 
     def list_jobs(self, runtime: Optional[types.Runtime] = None) -> List[types.TrainJob]:
         """List of all TrainJobs.
@@ -117,11 +117,11 @@ class TrainerClient:
             TimeoutError: Timeout to list TrainJobs.
             RuntimeError: Failed to list TrainJobs.
         """
-        return self.__backend.list_jobs(runtime=runtime)
+        return self.backend.list_jobs(runtime=runtime)
 
     def get_job(self, name: str) -> types.TrainJob:
         """Get the TrainJob object"""
-        return self.__backend.get_job(name=name)
+        return self.backend.get_job(name=name)
 
     def get_job_logs(
         self,
@@ -131,7 +131,7 @@ class TrainerClient:
         node_rank: int = 0,
     ) -> Dict[str, str]:
         """Get the logs from TrainJob"""
-        return self.__backend.get_job_logs(name=name, follow=follow, step=step, node_rank=node_rank)
+        return self.backend.get_job_logs(name=name, follow=follow, step=step, node_rank=node_rank)
 
     def wait_for_job_status(
         self,
@@ -157,7 +157,7 @@ class TrainerClient:
             RuntimeError: Failed to get TrainJob or TrainJob reaches unexpected Failed status.
             TimeoutError: Timeout to wait for TrainJob status.
         """
-        return self.__backend.wait_for_job_status(
+        return self.backend.wait_for_job_status(
             name=name,
             status=status,
             timeout=timeout,
@@ -174,4 +174,4 @@ class TrainerClient:
             TimeoutError: Timeout to delete TrainJob.
             RuntimeError: Failed to delete TrainJob.
         """
-        return self.__backend.delete_job(name=name)
+        return self.backend.delete_job(name=name)
