@@ -220,11 +220,17 @@ def get_resource_requirements() -> models.IoK8sApiCoreV1ResourceRequirements:
 
 def get_custom_trainer(
     env: Optional[list[models.IoK8sApiCoreV1EnvVar]] = None,
+    pip_index_urls: Optional[list[str]] = constants.DEFAULT_PIP_INDEX_URLS,
+    packages_to_install: list[str] = ["torch", "numpy"],
 ) -> models.TrainerV1alpha1Trainer:
     """
     Get the custom trainer for the TrainJob.
     """
+    pip_command = [f"--index-url {pip_index_urls[0]}"]
+    pip_command.extend([f"--extra-index-url {repo}" for repo in pip_index_urls[1:]])
+    pip_command = " ".join(pip_command)
 
+    packages_command = " ".join(packages_to_install)
     return models.TrainerV1alpha1Trainer(
         command=[
             "bash",
@@ -232,8 +238,8 @@ def get_custom_trainer(
             '\nif ! [ -x "$(command -v pip)" ]; then\n    python -m ensurepip '
             "|| python -m ensurepip --user || apt-get install python-pip"
             "\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet"
-            "         --no-warn-script-location --index-url https://pypi.org/simple "
-            "torch numpy \n\nread -r -d '' SCRIPT << EOM\n\nfunc=lambda: "
+            f"         --no-warn-script-location {pip_command} {packages_command}"
+            "\n\nread -r -d '' SCRIPT << EOM\n\nfunc=lambda: "
             'print("Hello World"),\n\n<lambda>('
             "{'learning_rate': 0.001, 'batch_size': 32})\n\nEOM\nprintf \"%s\" "
             '"$SCRIPT" > "backend_test.py"\ntorchrun "backend_test.py"',
@@ -723,14 +729,17 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                     func=lambda: print("Hello World"),
                     func_args={"learning_rate": 0.001, "batch_size": 32},
                     packages_to_install=["torch", "numpy"],
-                    pip_index_url=constants.DEFAULT_PIP_INDEX_URL,
+                    pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
                     num_nodes=2,
                 )
             },
             expected_output=get_train_job(
                 runtime_name=TORCH_RUNTIME,
                 train_job_name=TRAIN_JOB_WITH_CUSTOM_TRAINER,
-                train_job_trainer=get_custom_trainer(),
+                train_job_trainer=get_custom_trainer(
+                    pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
+                    packages_to_install=["torch", "numpy"],
+                ),
             ),
         ),
         TestCase(
@@ -741,7 +750,7 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                     func=lambda: print("Hello World"),
                     func_args={"learning_rate": 0.001, "batch_size": 32},
                     packages_to_install=["torch", "numpy"],
-                    pip_index_url=constants.DEFAULT_PIP_INDEX_URL,
+                    pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
                     num_nodes=2,
                     env={
                         "TEST_ENV": "test_value",
@@ -757,6 +766,8 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                         models.IoK8sApiCoreV1EnvVar(name="TEST_ENV", value="test_value"),
                         models.IoK8sApiCoreV1EnvVar(name="ANOTHER_ENV", value="another_value"),
                     ],
+                    pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
+                    packages_to_install=["torch", "numpy"],
                 ),
             ),
         ),
@@ -788,6 +799,7 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
             },
             expected_error=ValueError,
         ),
+
     ],
 )
 def test_train(kubernetes_backend, test_case):
