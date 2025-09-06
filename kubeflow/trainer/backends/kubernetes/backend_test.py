@@ -24,8 +24,8 @@ import multiprocessing
 import random
 import string
 import uuid
-from dataclasses import asdict, dataclass, field
-from typing import Any, Optional, Type
+from dataclasses import asdict
+from typing import Optional
 from unittest.mock import Mock, patch
 
 import pytest
@@ -34,28 +34,17 @@ from kubeflow_trainer_api import models
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
 from kubeflow.trainer.utils import utils
-from kubeflow.trainer.backends.kubernetes.types import KubernetesBackendConfig
 from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
+from kubeflow.trainer.backends.kubernetes.types import KubernetesBackendConfig
+from kubeflow.trainer.test.common import TestCase
+from kubeflow.trainer.test.common import (
+    SUCCESS,
+    FAILED,
+    DEFAULT_NAMESPACE,
+    TIMEOUT,
+    RUNTIME,
+)
 
-
-@dataclass
-class TestCase:
-    name: str
-    expected_status: str
-    config: dict[str, Any] = field(default_factory=dict)
-    expected_output: Optional[Any] = None
-    expected_error: Optional[Type[Exception]] = None
-    __test__ = False
-
-
-# --------------------------
-# Constants for test scenarios
-# --------------------------
-TIMEOUT = "timeout"
-RUNTIME = "runtime"
-SUCCESS = "success"
-FAILED = "Failed"
-DEFAULT_NAMESPACE = "default"
 # In all tests runtime name is equal to the framework name.
 TORCH_RUNTIME = "torch"
 TORCH_TUNE_RUNTIME = "torchtune"
@@ -238,9 +227,9 @@ def get_custom_trainer(
             '\nif ! [ -x "$(command -v pip)" ]; then\n    python -m ensurepip '
             "|| python -m ensurepip --user || apt-get install python-pip"
             "\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet"
-            f"         --no-warn-script-location {pip_command} {packages_command}"
+            f" --no-warn-script-location {pip_command} {packages_command}"
             "\n\nread -r -d '' SCRIPT << EOM\n\nfunc=lambda: "
-            'print("Hello World"),\n\n<lambda>('
+            'print("Hello World"),\n\n<lambda>(**'
             "{'learning_rate': 0.001, 'batch_size': 32})\n\nEOM\nprintf \"%s\" "
             '"$SCRIPT" > "backend_test.py"\ntorchrun "backend_test.py"',
         ],

@@ -15,9 +15,9 @@
 import inspect
 import os
 import textwrap
-from typing import Any, Callable, Optional
-from urllib.parse import urlparse
 
+from typing import Callable, Optional, Any
+from urllib.parse import urlparse
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
 from kubeflow_trainer_api import models
@@ -268,15 +268,19 @@ def get_script_for_python_packages(
     if is_mpi:
         options.append("--user")
 
-    script_for_python_packages = textwrap.dedent(
+    header_script = textwrap.dedent(
         """
         if ! [ -x "$(command -v pip)" ]; then
             python -m ensurepip || python -m ensurepip --user || apt-get install python-pip
         fi
 
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \
-        --no-warn-script-location {} {}
-        """.format(
+        """
+    )
+
+    script_for_python_packages = (
+        header_script
+        + "PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet "
+        + "--no-warn-script-location {} {}\n".format(
             " ".join(options),
             packages_str,
         )
@@ -318,12 +322,16 @@ def get_command_using_train_func(
     # Wrap function code to execute it from the file. For example:
     # TODO (andreyvelich): Find a better way to run users' scripts.
     # def train(parameters):
-    #     print('Start Training...')
+    #   print('Start Training...')
     # train({'lr': 0.01})
     if train_func_parameters is None:
-        func_code = f"{func_code}\n{train_func.__name__}()\n"
+        func_call = f"{train_func.__name__}()"
     else:
-        func_code = f"{func_code}\n{train_func.__name__}({train_func_parameters})\n"
+        # Always unpack kwargs for training function calls.
+        func_call = f"{train_func.__name__}(**{train_func_parameters})"
+
+    # Combine everything into the final code string.
+    func_code = f"{func_code}\n{func_call}\n"
 
     is_mpi = runtime.trainer.command[0] == "mpirun"
     # The default file location for OpenMPI is: /home/mpiuser/<FILE_NAME>.py

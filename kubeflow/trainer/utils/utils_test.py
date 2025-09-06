@@ -12,22 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from typing import Any, Dict
-
 import pytest
 
 from kubeflow.trainer.utils import utils
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.types import types
+from kubeflow.trainer.test.common import TestCase, SUCCESS, FAILED
 
-
-@dataclass
-class TestCase:
-    name: str
-    config: Dict[str, Any]
-    expected_output: str
-    __test__ = False
-
+def _build_runtime() -> types.Runtime:
+    runtime_trainer = types.RuntimeTrainer(
+        trainer_type=types.TrainerType.CUSTOM_TRAINER,
+        framework="torch",
+        device="cpu",
+        device_count="1",
+    )
+    runtime_trainer.set_command(constants.DEFAULT_COMMAND)
+    return types.Runtime(name="test-runtime", trainer=runtime_trainer)
 
 @pytest.mark.parametrize(
     "test_case",
@@ -124,3 +124,131 @@ def test_get_script_for_python_packages(test_case):
     )
 
     assert test_case.expected_output == script
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="with args dict always unpacks kwargs",
+            expected_status=SUCCESS,
+            config={
+                "func": (lambda: print("Hello World")),
+                "func_args": {"batch_size": 128, "learning_rate": 0.001, "epochs": 20},
+                "runtime": _build_runtime(),
+            },
+            expected_output=[
+                'bash',
+                '-c',
+                (
+                    "\nread -r -d '' SCRIPT << EOM\n\n"
+                    '"func": (lambda: print("Hello World")),\n\n'
+                    "<lambda>(**{'batch_size': 128, 'learning_rate': 0.001, 'epochs': 20})\n\n"
+                    'EOM\n'
+                    'printf "%s" "$SCRIPT" > "utils_test.py"\n'
+                    'python "utils_test.py"'
+                ),
+            ]
+        ),
+        TestCase(
+            name="without args calls function with no params",
+            expected_status=SUCCESS,
+            config={
+                "func": (lambda: print("Hello World")),
+                "func_args": None,
+                "runtime": _build_runtime(),
+            },
+            expected_output=[
+                'bash',
+                '-c',
+                (
+                    "\nread -r -d '' SCRIPT << EOM\n\n"
+                    '"func": (lambda: print("Hello World")),\n\n'
+                    '<lambda>()\n\n'
+                    'EOM\n'
+                    'printf "%s" "$SCRIPT" > "utils_test.py"\n'
+                    'python "utils_test.py"'
+                ),
+            ],
+        ),
+        TestCase(
+            name="raises when runtime has no trainer",
+            expected_status=FAILED,
+            config={
+                "func": (lambda: print("Hello World")),
+                "func_args": None,
+                "runtime": types.Runtime(name="no-trainer", trainer=None),
+            },
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="raises when train_func is not callable",
+            expected_status=FAILED,
+            config={
+                "func": "not callable",
+                "func_args": None,
+                "runtime": _build_runtime(),
+            },
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="single dict param also unpacks kwargs",
+            expected_status=SUCCESS,
+            config={
+                "func": (lambda: print("Hello World")),
+                "func_args": {"a": 1, "b": 2},
+                "runtime": _build_runtime(),
+            },
+            expected_output=[
+                'bash',
+                '-c',
+                (
+                    "\nread -r -d '' SCRIPT << EOM\n\n"
+                    '"func": (lambda: print("Hello World")),\n\n'
+                    "<lambda>(**{'a': 1, 'b': 2})\n\n"
+                    'EOM\n'
+                    'printf "%s" "$SCRIPT" > "utils_test.py"\n'
+                    'python "utils_test.py"'
+                ),
+            ],
+        ),
+        TestCase(
+            name="multi-param function uses kwargs-unpacking",
+            expected_status=SUCCESS,
+            config={
+                "func": (lambda **kwargs: "ok"),
+                "func_args": {"a": 3, "b": "hi", "c": 0.2},
+                "runtime": _build_runtime(),
+            },
+            expected_output=[
+                "bash",
+                "-c",
+                (
+                    "\nread -r -d '' SCRIPT << EOM\n\n"
+                    '"func": (lambda **kwargs: "ok"),\n\n'
+                    "<lambda>(**{'a': 3, 'b': 'hi', 'c': 0.2})\n\n"
+                    'EOM\n'
+                    'printf "%s" "$SCRIPT" > "utils_test.py"\n'
+                    'python "utils_test.py"'
+                ),
+            ],
+        ),
+    ],
+)
+def test_get_command_using_train_func(test_case: TestCase):
+    print("Executing test:", test_case.name)
+
+    try:
+        command = utils.get_command_using_train_func(
+            runtime=test_case.config["runtime"],
+            train_func=test_case.config.get("func"),
+            train_func_parameters=test_case.config.get("func_args"),
+            pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
+            packages_to_install=[],
+        )
+
+        assert test_case.expected_status == SUCCESS
+        assert command == test_case.expected_output
+
+    except Exception as e:
+        assert type(e) is test_case.expected_error
+    print("test execution complete")
