@@ -51,7 +51,7 @@ ruff: ## Install Ruff
 	@uvx ruff --help &> /dev/null || uv tool install ruff
 
 .PHONY: verify
-verify: uv uv-venv ruff  ## install all required tools
+verify: install-dev  ## install all required tools
 	@uv lock --check
 	@uvx ruff check --show-fixes
 
@@ -75,3 +75,11 @@ ifeq ($(report),xml)
 else
 	@uv run coverage html
 endif
+
+
+.PHONY: install-dev
+install-dev: uv uv-venv ruff ## Install uv, create .venv, sync deps; DEV=1 to include dev group; EXTRAS=comma,list for extras
+	@echo "Using virtual environment at: $(VENV_DIR)"
+	@echo "Syncing dependencies with uv..."
+	@uv sync
+	@echo "Environment is ready."
