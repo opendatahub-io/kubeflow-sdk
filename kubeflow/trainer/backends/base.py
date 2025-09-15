@@ -13,22 +13,27 @@
 # limitations under the License.
 
 import abc
+from collections.abc import Iterator
+from typing import Optional, Union
 
-from typing import Optional, Union, Iterator
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
 
 
 class ExecutionBackend(abc.ABC):
+    @abc.abstractmethod
     def list_runtimes(self) -> list[types.Runtime]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_runtime(self, name: str) -> types.Runtime:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_runtime_packages(self, runtime: types.Runtime):
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def train(
         self,
         runtime: Optional[types.Runtime] = None,
@@ -37,12 +42,15 @@ class ExecutionBackend(abc.ABC):
     ) -> str:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def list_jobs(self, runtime: Optional[types.Runtime] = None) -> list[types.TrainJob]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_job(self, name: str) -> types.TrainJob:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_job_logs(
         self,
         name: str,
@@ -51,6 +59,7 @@ class ExecutionBackend(abc.ABC):
     ) -> Iterator[str]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def wait_for_job_status(
         self,
         name: str,
@@ -60,5 +69,6 @@ class ExecutionBackend(abc.ABC):
     ) -> types.TrainJob:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def delete_job(self, name: str):
         raise NotImplementedError()

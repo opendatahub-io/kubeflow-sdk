@@ -15,13 +15,14 @@
 import inspect
 import os
 import textwrap
-
-from typing import Callable, Optional, Any
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
-from kubeflow.trainer.constants import constants
-from kubeflow.trainer.types import types
+
 from kubeflow_trainer_api import models
 from kubernetes import config
+
+from kubeflow.trainer.constants import constants
+from kubeflow.trainer.types import types
 
 
 def is_running_in_k8s() -> bool:
@@ -41,7 +42,7 @@ def get_default_target_namespace(context: Optional[str] = None) -> str:
             return current_context["context"]["namespace"]
         except Exception:
             return constants.DEFAULT_NAMESPACE
-    with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace", "r") as f:
+    with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
         return f.readline()
 
 
@@ -221,9 +222,12 @@ def get_trainjob_node_step(
 
     if container.env:
         for env in container.env:
-            if env.value and env.value.isdigit():
-                if env.name == constants.TORCH_ENV_NUM_PROC_PER_NODE:
-                    step.device_count = env.value
+            if (
+                env.value
+                and env.value.isdigit()
+                and env.name == constants.TORCH_ENV_NUM_PROC_PER_NODE
+            ):
+                step.device_count = env.value
 
     return step
 

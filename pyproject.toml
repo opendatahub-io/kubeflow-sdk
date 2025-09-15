@@ -50,13 +50,6 @@ Source = "https://github.com/kubeflow/sdk"
 [tool.hatch.version]
 path = "kubeflow/__init__.py"
 
-[tool.ruff]
-line-length = 100
-
-[tool.ruff.lint]
-select = ["E", "F", "W"]
-ignore = ["E203"]
-
 [tool.uv]
 package = true
 
@@ -66,3 +59,46 @@ build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+# ruff configuration
+[tool.ruff]
+# Formatting + lint coordination
+line-length = 100
+target-version = "py39"
+src = ["kubeflow"]
+extend-exclude = [
+  ".venv", "venv", "build", "dist", "__pycache__", "docs/_build"
+]
+
+[tool.ruff.format]
+# Use Ruff as the formatter (Black-compatible)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+docstring-code-format = true
+docstring-code-line-length = 100
+
+[tool.ruff.lint]
+# Sensible, low-noise default rule set for a library:
+select = [
+  "F",   # pyflakes
+  "E",   # pycodestyle
+  "W",   # warnings
+  "I",   # isort (imports order)
+  "UP",  # pyupgrade
+  "N",   # pep8-naming
+  "B",   # flake8-bugbear
+  "C4",  # flake8-comprehensions
+  "SIM"  # flake8-simplify
+]
+
+ignore = [
+  "B006"  # mutable-argument-default
+]
+
+
+[tool.ruff.lint.isort]
+# Make import sorting deterministic and "first-party aware"
+known-first-party = ["kubeflow"]
+combine-as-imports = true
+force-sort-within-sections = true

@@ -12,23 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterator
 import copy
 import logging
 import multiprocessing
 import random
+import re
 import string
 import time
+from typing import Optional, Union
 import uuid
-from typing import Optional, Union, Iterator
-import re
 
+from kubeflow_trainer_api import models
+from kubernetes import client, config, watch
+
+from kubeflow.trainer.backends.base import ExecutionBackend
+from kubeflow.trainer.backends.kubernetes import types as k8s_types
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
 from kubeflow.trainer.utils import utils
-from kubeflow_trainer_api import models
-from kubernetes import client, config, watch
-from kubeflow.trainer.backends.base import ExecutionBackend
-from kubeflow.trainer.backends.kubernetes import types as k8s_types
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +143,8 @@ class KubernetesBackend(ExecutionBackend):
             runtime_copy.trainer.set_command(tuple(mpi_command))
 
         def print_packages():
-            import subprocess
             import shutil
+            import subprocess
             import sys
 
             # Print Python version.
@@ -353,8 +355,7 @@ class KubernetesBackend(ExecutionBackend):
                 )
 
                 # Stream logs incrementally.
-                for logline in log_stream:
-                    yield logline  # type:ignore
+                yield from log_stream
             else:
                 logs = self.core_api.read_namespaced_pod_log(
                     name=pod_name,
@@ -362,8 +363,7 @@ class KubernetesBackend(ExecutionBackend):
                     container=container_name,
                 )
 
-                for line in logs.splitlines():
-                    yield line
+                yield from logs.splitlines()
 
         except Exception as e:
             raise RuntimeError(
@@ -554,9 +554,12 @@ class KubernetesBackend(ExecutionBackend):
         # Update the TrainJob status from its conditions.
         if trainjob_crd.status and trainjob_crd.status.conditions:
             for c in trainjob_crd.status.conditions:
-                if c.type == constants.TRAINJOB_COMPLETE and c.status == "True":
-                    trainjob.status = c.type
-                elif c.type == constants.TRAINJOB_FAILED and c.status == "True":
+                if (
+                    c.type == constants.TRAINJOB_COMPLETE
+                    and c.status == "True"
+                    or c.type == constants.TRAINJOB_FAILED
+                    and c.status == "True"
+                ):
                     trainjob.status = c.type
         else:
             # The TrainJob running status is defined when all training node (e.g. Pods) are

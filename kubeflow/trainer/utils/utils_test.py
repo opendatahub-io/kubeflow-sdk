@@ -14,10 +14,11 @@
 
 import pytest
 
-from kubeflow.trainer.utils import utils
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 from kubeflow.trainer.types import types
-from kubeflow.trainer.test.common import TestCase, SUCCESS, FAILED
+from kubeflow.trainer.utils import utils
+
 
 def _build_runtime() -> types.Runtime:
     runtime_trainer = types.RuntimeTrainer(
@@ -29,6 +30,7 @@ def _build_runtime() -> types.Runtime:
     runtime_trainer.set_command(constants.DEFAULT_COMMAND)
     return types.Runtime(name="test-runtime", trainer=runtime_trainer)
 
+
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -39,38 +41,38 @@ def _build_runtime() -> types.Runtime:
                 "pip_index_urls": [
                     "https://pypi.org/simple",
                     "https://private.repo.com/simple",
-                    "https://internal.company.com/simple"
+                    "https://internal.company.com/simple",
                 ],
-                "is_mpi": False
+                "is_mpi": False,
             },
             expected_output=(
                 '\nif ! [ -x "$(command -v pip)" ]; then\n'
-                '    python -m ensurepip || python -m ensurepip --user || '
-                'apt-get install python-pip\n'
-                'fi\n\n'
-                'PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet '
-                '--no-warn-script-location --index-url https://pypi.org/simple '
-                '--extra-index-url https://private.repo.com/simple '
-                '--extra-index-url https://internal.company.com/simple '
-                'torch numpy custom-package\n'
-            )
+                "    python -m ensurepip || python -m ensurepip --user || "
+                "apt-get install python-pip\n"
+                "fi\n\n"
+                "PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet "
+                "--no-warn-script-location --index-url https://pypi.org/simple "
+                "--extra-index-url https://private.repo.com/simple "
+                "--extra-index-url https://internal.company.com/simple "
+                "torch numpy custom-package\n"
+            ),
         ),
         TestCase(
             name="single pip index URL (backward compatibility)",
             config={
                 "packages_to_install": ["torch", "numpy", "custom-package"],
                 "pip_index_urls": ["https://pypi.org/simple"],
-                "is_mpi": False
+                "is_mpi": False,
             },
             expected_output=(
                 '\nif ! [ -x "$(command -v pip)" ]; then\n'
-                '    python -m ensurepip || python -m ensurepip --user || '
-                'apt-get install python-pip\n'
-                'fi\n\n'
-                'PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet '
-                '--no-warn-script-location --index-url https://pypi.org/simple '
-                'torch numpy custom-package\n'
-            )
+                "    python -m ensurepip || python -m ensurepip --user || "
+                "apt-get install python-pip\n"
+                "fi\n\n"
+                "PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet "
+                "--no-warn-script-location --index-url https://pypi.org/simple "
+                "torch numpy custom-package\n"
+            ),
         ),
         TestCase(
             name="multiple pip index URLs with MPI",
@@ -79,38 +81,38 @@ def _build_runtime() -> types.Runtime:
                 "pip_index_urls": [
                     "https://pypi.org/simple",
                     "https://private.repo.com/simple",
-                    "https://internal.company.com/simple"
+                    "https://internal.company.com/simple",
                 ],
-                "is_mpi": True
+                "is_mpi": True,
             },
             expected_output=(
                 '\nif ! [ -x "$(command -v pip)" ]; then\n'
-                '    python -m ensurepip || python -m ensurepip --user || '
-                'apt-get install python-pip\n'
-                'fi\n\n'
-                'PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet '
-                '--no-warn-script-location --index-url https://pypi.org/simple '
-                '--extra-index-url https://private.repo.com/simple '
-                '--extra-index-url https://internal.company.com/simple '
-                '--user torch numpy custom-package\n'
-            )
+                "    python -m ensurepip || python -m ensurepip --user || "
+                "apt-get install python-pip\n"
+                "fi\n\n"
+                "PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet "
+                "--no-warn-script-location --index-url https://pypi.org/simple "
+                "--extra-index-url https://private.repo.com/simple "
+                "--extra-index-url https://internal.company.com/simple "
+                "--user torch numpy custom-package\n"
+            ),
         ),
         TestCase(
             name="default pip index URLs",
             config={
                 "packages_to_install": ["torch", "numpy"],
                 "pip_index_urls": constants.DEFAULT_PIP_INDEX_URLS,
-                "is_mpi": False
+                "is_mpi": False,
             },
             expected_output=(
                 '\nif ! [ -x "$(command -v pip)" ]; then\n'
-                '    python -m ensurepip || python -m ensurepip --user || '
-                'apt-get install python-pip\n'
-                'fi\n\n'
-                'PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet '
-                f'--no-warn-script-location --index-url '
-                f'{constants.DEFAULT_PIP_INDEX_URLS[0]} torch numpy\n'
-            )
+                "    python -m ensurepip || python -m ensurepip --user || "
+                "apt-get install python-pip\n"
+                "fi\n\n"
+                "PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet "
+                f"--no-warn-script-location --index-url "
+                f"{constants.DEFAULT_PIP_INDEX_URLS[0]} torch numpy\n"
+            ),
         ),
     ],
 )
@@ -120,10 +122,11 @@ def test_get_script_for_python_packages(test_case):
     script = utils.get_script_for_python_packages(
         packages_to_install=test_case.config["packages_to_install"],
         pip_index_urls=test_case.config["pip_index_urls"],
-        is_mpi=test_case.config["is_mpi"]
+        is_mpi=test_case.config["is_mpi"],
     )
 
     assert test_case.expected_output == script
+
 
 @pytest.mark.parametrize(
     "test_case",
@@ -137,17 +140,17 @@ def test_get_script_for_python_packages(test_case):
                 "runtime": _build_runtime(),
             },
             expected_output=[
-                'bash',
-                '-c',
+                "bash",
+                "-c",
                 (
                     "\nread -r -d '' SCRIPT << EOM\n\n"
                     '"func": (lambda: print("Hello World")),\n\n'
                     "<lambda>(**{'batch_size': 128, 'learning_rate': 0.001, 'epochs': 20})\n\n"
-                    'EOM\n'
+                    "EOM\n"
                     'printf "%s" "$SCRIPT" > "utils_test.py"\n'
                     'python "utils_test.py"'
                 ),
-            ]
+            ],
         ),
         TestCase(
             name="without args calls function with no params",
@@ -158,13 +161,13 @@ def test_get_script_for_python_packages(test_case):
                 "runtime": _build_runtime(),
             },
             expected_output=[
-                'bash',
-                '-c',
+                "bash",
+                "-c",
                 (
                     "\nread -r -d '' SCRIPT << EOM\n\n"
                     '"func": (lambda: print("Hello World")),\n\n'
-                    '<lambda>()\n\n'
-                    'EOM\n'
+                    "<lambda>()\n\n"
+                    "EOM\n"
                     'printf "%s" "$SCRIPT" > "utils_test.py"\n'
                     'python "utils_test.py"'
                 ),
@@ -199,13 +202,13 @@ def test_get_script_for_python_packages(test_case):
                 "runtime": _build_runtime(),
             },
             expected_output=[
-                'bash',
-                '-c',
+                "bash",
+                "-c",
                 (
                     "\nread -r -d '' SCRIPT << EOM\n\n"
                     '"func": (lambda: print("Hello World")),\n\n'
                     "<lambda>(**{'a': 1, 'b': 2})\n\n"
-                    'EOM\n'
+                    "EOM\n"
                     'printf "%s" "$SCRIPT" > "utils_test.py"\n'
                     'python "utils_test.py"'
                 ),
@@ -226,7 +229,7 @@ def test_get_script_for_python_packages(test_case):
                     "\nread -r -d '' SCRIPT << EOM\n\n"
                     '"func": (lambda **kwargs: "ok"),\n\n'
                     "<lambda>(**{'a': 3, 'b': 'hi', 'c': 0.2})\n\n"
-                    'EOM\n'
+                    "EOM\n"
                     'printf "%s" "$SCRIPT" > "utils_test.py"\n'
                     'python "utils_test.py"'
                 ),

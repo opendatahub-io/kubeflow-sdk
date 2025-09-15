@@ -11,25 +11,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from collections.abc import Iterator
+from datetime import datetime
 import logging
+import random
 import string
 import tempfile
+from typing import Optional, Union
 import uuid
-import random
-from datetime import datetime
-from typing import List, Optional, Set, Union, Iterator
 
-from kubeflow.trainer.constants import constants
-from kubeflow.trainer.types import types
 from kubeflow.trainer.backends.base import ExecutionBackend
-from kubeflow.trainer.backends.localprocess.types import (
-    LocalProcessBackendConfig,
-    LocalBackendJobs,
-    LocalBackendStep,
-)
+from kubeflow.trainer.backends.localprocess import utils as local_utils
 from kubeflow.trainer.backends.localprocess.constants import local_runtimes
 from kubeflow.trainer.backends.localprocess.job import LocalJob
-from kubeflow.trainer.backends.localprocess import utils as local_utils
+from kubeflow.trainer.backends.localprocess.types import (
+    LocalBackendJobs,
+    LocalBackendStep,
+    LocalProcessBackendConfig,
+)
+from kubeflow.trainer.constants import constants
+from kubeflow.trainer.types import types
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,10 @@ class LocalProcessBackend(ExecutionBackend):
         cfg: LocalProcessBackendConfig,
     ):
         # list of running subprocesses
-        self.__local_jobs: List[LocalBackendJobs] = []
+        self.__local_jobs: list[LocalBackendJobs] = []
         self.cfg = cfg
 
-    def list_runtimes(self) -> List[types.Runtime]:
+    def list_runtimes(self) -> list[types.Runtime]:
         return [self.__convert_local_runtime_to_runtime(local_runtime=rt) for rt in local_runtimes]
 
     def get_runtime(self, name: str) -> types.Runtime:
@@ -81,7 +82,7 @@ class LocalProcessBackend(ExecutionBackend):
 
         # create temp dir
         venv_dir = tempfile.mkdtemp(prefix=train_job_name)
-        logger.debug("operating in {}".format(venv_dir))
+        logger.debug(f"operating in {venv_dir}")
 
         runtime.trainer = local_utils.get_local_runtime_trainer(
             runtime_name=runtime.name,
@@ -103,7 +104,7 @@ class LocalProcessBackend(ExecutionBackend):
 
         # create subprocess object
         train_job = LocalJob(
-            name="{}-train".format(train_job_name),
+            name=f"{train_job_name}-train",
             command=training_command,
             execution_dir=venv_dir,
             env=trainer.env,
@@ -121,7 +122,7 @@ class LocalProcessBackend(ExecutionBackend):
 
         return train_job_name
 
-    def list_jobs(self, runtime: Optional[types.Runtime] = None) -> List[types.TrainJob]:
+    def list_jobs(self, runtime: Optional[types.Runtime] = None) -> list[types.TrainJob]:
         result = []
 
         for _job in self.__local_jobs:
@@ -144,7 +145,7 @@ class LocalProcessBackend(ExecutionBackend):
     def get_job(self, name: str) -> Optional[types.TrainJob]:
         _job = next((j for j in self.__local_jobs if j.name == name), None)
         if _job is None:
-            raise ValueError("No TrainJob with name '%s'" % name)
+            raise ValueError(f"No TrainJob with name {name}")
 
         # check and set the correct job status to match `TrainerClient` supported statuses
         status = self.__get_job_status(_job)
@@ -169,7 +170,7 @@ class LocalProcessBackend(ExecutionBackend):
     ) -> Iterator[str]:
         _job = [j for j in self.__local_jobs if j.name == name]
         if not _job:
-            raise ValueError("No TrainJob with name '%s'" % name)
+            raise ValueError(f"No TrainJob with name {name}")
 
         want_all_steps = step == constants.NODE + "-0"
 
@@ -183,7 +184,7 @@ class LocalProcessBackend(ExecutionBackend):
     def wait_for_job_status(
         self,
         name: str,
-        status: Set[str] = {constants.TRAINJOB_COMPLETE},
+        status: set[str] = {constants.TRAINJOB_COMPLETE},
         timeout: int = 600,
         polling_interval: int = 2,
     ) -> types.TrainJob:
@@ -191,7 +192,7 @@ class LocalProcessBackend(ExecutionBackend):
         _job = next((_job for _job in self.__local_jobs if _job.name == name), None)
 
         if _job is None:
-            raise ValueError("No TrainJob with name '%s'" % name)
+            raise ValueError(f"No TrainJob with name {name}")
         # find a better implementation for this
         for _step in _job.steps:
             if _step.job.status in [constants.TRAINJOB_RUNNING, constants.TRAINJOB_CREATED]:
@@ -202,7 +203,7 @@ class LocalProcessBackend(ExecutionBackend):
         # find job first.
         _job = next((j for j in self.__local_jobs if j.name == name), None)
         if _job is None:
-            raise ValueError("No TrainJob with name '%s'" % name)
+            raise ValueError(f"No TrainJob with name {name}")
 
         # cancel all nested step jobs in target job
         _ = [step.job.cancel() for step in _job.steps]
@@ -241,7 +242,7 @@ class LocalProcessBackend(ExecutionBackend):
             _step = LocalBackendStep(step_name=step_name, job=job)
             _job.steps.append(_step)
         else:
-            logger.warning("Step '{}' already registered.".format(step_name))
+            logger.warning(f"Step '{step_name}' already registered.")
 
     def __convert_local_runtime_to_runtime(self, local_runtime) -> types.Runtime:
         return types.Runtime(

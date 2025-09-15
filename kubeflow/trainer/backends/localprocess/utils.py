@@ -1,16 +1,16 @@
 import inspect
 import os
-import shutil
-import re
-import textwrap
 from pathlib import Path
+import re
+import shutil
 from string import Template
-from typing import List, Callable, Optional, Dict, Any, Tuple, Set
+import textwrap
+from typing import Any, Callable, Optional
 
 from kubeflow.trainer.backends.localprocess import constants as local_exec_constants
+from kubeflow.trainer.backends.localprocess.types import LocalRuntimeTrainer
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
-from kubeflow.trainer.backends.localprocess.types import LocalRuntimeTrainer
 
 
 def _extract_name(requirement: str) -> str:
@@ -47,9 +47,9 @@ def _canonicalize_name(name: str) -> str:
 
 
 def get_install_packages(
-    runtime_packages: List[str],
-    trainer_packages: Optional[List[str]] = None,
-) -> List[str]:
+    runtime_packages: list[str],
+    trainer_packages: Optional[list[str]] = None,
+) -> list[str]:
     """
     Merge two requirement lists into a single list of strings.
 
@@ -70,8 +70,8 @@ def get_install_packages(
         return runtime_packages
 
     # --- Parse + normalize runtime ---
-    runtime_parsed: List[Tuple[str, str]] = []  # (orig, canonical_name)
-    last_runtime_index_by_name: Dict[str, int] = {}
+    runtime_parsed: list[tuple[str, str]] = []  # (orig, canonical_name)
+    last_runtime_index_by_name: dict[str, int] = {}
 
     for i, orig in enumerate(runtime_packages):
         raw_name = _extract_name(orig)
@@ -80,8 +80,8 @@ def get_install_packages(
         last_runtime_index_by_name[canon] = i  # last occurrence index wins among runtime
 
     # --- Parse + validate trainer (detect duplicates) ---
-    trainer_parsed: List[Tuple[str, str]] = []
-    seen_trainer: Set[str] = set()
+    trainer_parsed: list[tuple[str, str]] = []
+    seen_trainer: set[str] = set()
     for orig in trainer_packages:
         raw_name = _extract_name(orig)
         canon = _canonicalize_name(raw_name)
@@ -92,13 +92,13 @@ def get_install_packages(
         seen_trainer.add(canon)
         trainer_parsed.append((orig, canon))
 
-    trainer_names: Set[str] = {canon for _, canon in trainer_parsed}
+    trainer_names: set[str] = {canon for _, canon in trainer_parsed}
 
     # --- Build merged list respecting order semantics ---
-    merged: List[str] = []
+    merged: list[str] = []
 
     # 1) Runtime-only packages (only emit the last occurrence for each name)
-    emitted_runtime_names: Set[str] = set()
+    emitted_runtime_names: set[str] = set()
     for idx, (orig, canon) in enumerate(runtime_parsed):
         if canon in trainer_names:
             continue  # overwritten by trainer
@@ -147,9 +147,9 @@ def get_local_runtime_trainer(
 
 
 def get_dependencies_command(
-    runtime_packages: List[str],
+    runtime_packages: list[str],
     pip_index_urls: str,
-    trainer_packages: List[str],
+    trainer_packages: list[str],
     quiet: bool = True,
 ) -> str:
     # resolve runtime dependencies and trainer dependencies.
@@ -178,7 +178,7 @@ def get_dependencies_command(
 def get_command_using_train_func(
     runtime: types.Runtime,
     train_func: Callable,
-    train_func_parameters: Optional[Dict[str, Any]],
+    train_func_parameters: Optional[dict[str, Any]],
     venv_dir: str,
     train_job_name: str,
 ) -> str:

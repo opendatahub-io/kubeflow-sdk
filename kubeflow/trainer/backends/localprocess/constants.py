@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import textwrap
 import re
-from kubeflow.trainer.types import types as base_types
-from kubeflow.trainer.constants import constants
+import textwrap
+
 from kubeflow.trainer.backends.localprocess import types
+from kubeflow.trainer.constants import constants
+from kubeflow.trainer.types import types as base_types
 
 TORCH_FRAMEWORK_TYPE = "torch"
 

@@ -11,12 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
-import threading
-import subprocess
-import logging
 from datetime import datetime
-from typing import List, Union, Dict, Tuple
+import logging
+import os
+import subprocess
+import threading
+from typing import Union
 
 from kubeflow.trainer.constants import constants
 
@@ -27,10 +27,10 @@ class LocalJob(threading.Thread):
     def __init__(
         self,
         name,
-        command: Union[List, Tuple[str], str],
+        command: Union[list, tuple[str], str],
         execution_dir: str = None,
-        env: Dict[str, str] = None,
-        dependencies: List = None,
+        env: dict[str, str] = None,
+        dependencies: list = None,
     ):
         """Creates a LocalJob.
 
@@ -150,7 +150,7 @@ class LocalJob(threading.Thread):
     def returncode(self):
         return self._returncode
 
-    def logs(self, follow=False) -> List[str]:
+    def logs(self, follow=False) -> list[str]:
         if not follow:
             return self._stdout.splitlines()
 

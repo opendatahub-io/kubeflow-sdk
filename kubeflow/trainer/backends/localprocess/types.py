@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import typing
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
+import typing
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -29,7 +29,7 @@ class LocalProcessBackendConfig(BaseModel):
 
 @dataclass
 class LocalRuntimeTrainer(types.RuntimeTrainer):
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
 
 
 class LocalBackendStep(BaseModel):
@@ -41,7 +41,7 @@ class LocalBackendStep(BaseModel):
 
 
 class LocalBackendJobs(BaseModel):
-    steps: Optional[List[LocalBackendStep]] = []
+    steps: Optional[list[LocalBackendStep]] = []
     runtime: Optional[types.Runtime] = None
     name: str
     created: typing.Optional[datetime] = None

@@ -19,31 +19,31 @@ This module uses pytest and unittest.mock to simulate Kubernetes API interaction
 It tests KubernetesBackend's behavior across job listing, resource creation etc
 """
 
+from dataclasses import asdict
 import datetime
 import multiprocessing
 import random
 import string
-import uuid
-from dataclasses import asdict
 from typing import Optional
 from unittest.mock import Mock, patch
+import uuid
 
-import pytest
 from kubeflow_trainer_api import models
+import pytest
 
-from kubeflow.trainer.constants import constants
-from kubeflow.trainer.types import types
-from kubeflow.trainer.utils import utils
 from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
 from kubeflow.trainer.backends.kubernetes.types import KubernetesBackendConfig
-from kubeflow.trainer.test.common import TestCase
+from kubeflow.trainer.constants import constants
 from kubeflow.trainer.test.common import (
-    SUCCESS,
-    FAILED,
     DEFAULT_NAMESPACE,
-    TIMEOUT,
+    FAILED,
     RUNTIME,
+    SUCCESS,
+    TIMEOUT,
+    TestCase,
 )
+from kubeflow.trainer.types import types
+from kubeflow.trainer.utils import utils
 
 # In all tests runtime name is equal to the framework name.
 TORCH_RUNTIME = "torch"
@@ -788,7 +788,6 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
             },
             expected_error=ValueError,
         ),
-
     ],
 )
 def test_train(kubernetes_backend, test_case):

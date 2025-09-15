@@ -116,13 +116,9 @@ POD_PENDING = "Pending"
 
 # The label selector for Pods created by the TrainJob.
 # It checks the following rJob.name: dataset-initializer, model-initializer, launcher, node.
-POD_LABEL_SELECTOR = ("{}={{trainjob_name}},{} in ({}, {}, {}, {})").format(
-    JOBSET_NAME_LABEL,
-    JOBSET_RJOB_NAME_LABEL,
-    DATASET_INITIALIZER,
-    MODEL_INITIALIZER,
-    LAUNCHER,
-    NODE,
+POD_LABEL_SELECTOR = (
+    f"{JOBSET_NAME_LABEL}={{trainjob_name}},{JOBSET_RJOB_NAME_LABEL} "
+    f"in ({DATASET_INITIALIZER}, {MODEL_INITIALIZER}, {LAUNCHER}, {NODE})"
 )
 
 # Handle environment variable for multiple URLs (comma-separated).
