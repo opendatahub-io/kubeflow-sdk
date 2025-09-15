@@ -38,6 +38,11 @@ from kubeflow.trainer.types.types import (
     TrainerType,
 )
 
+# import backends and its associated configs
+from kubeflow.trainer.backends.kubernetes.types import KubernetesBackendConfig
+from kubeflow.trainer.backends.localprocess.types import LocalProcessBackendConfig
+
+
 __all__ = [
     "BuiltinTrainer",
     "CustomTrainer",
@@ -55,4 +60,6 @@ __all__ = [
     "RuntimeTrainer",
     "TrainerClient",
     "TrainerType",
+    "LocalProcessBackendConfig",
+    "KubernetesBackendConfig",
 ]
