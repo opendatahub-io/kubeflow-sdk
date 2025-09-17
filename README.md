@@ -6,8 +6,6 @@
 [![Coverage Status](https://coveralls.io/repos/github/kubeflow/sdk/badge.svg?branch=main)](https://coveralls.io/github/kubeflow/sdk?branch=main)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kubeflow/sdk)
 
-<!-- TODO(kramaranya): update when release [![Python Supported Versions](https://img.shields.io/pypi/pyversions/kubeflow.svg?color=%2334D058)](https://pypi.org/project/kubeflow/) -->
-
 ## Overview
 
 Kubeflow SDK is a unified Python SDK that streamlines the user experience for AI Practitioners to interact with various
@@ -35,10 +33,8 @@ ML applications rather than managing complex infrastrutcure.
 ### Install Kubeflow SDK
 
 ```bash
-pip install git+https://github.com/kubeflow/sdk.git@main
+pip install -U kubeflow
 ```
-
-<!-- TODO(kramaranya): update before release pip install -U kubeflow -->
 
 ### Run your first PyTorch distributed job
 
@@ -77,12 +73,12 @@ print("\n".join(TrainerClient().get_job_logs(name=job_id)))
 
 ## Supported Kubeflow Projects
 
-| Project                     | Status           | Description                                                |
-| --------------------------- | ---------------- | ---------------------------------------------------------- |
-| **Kubeflow Trainer**        | ✅ **Available** | Train and fine-tune AI models with various frameworks      |
-| **Kubeflow Katib**          | 🚧 Planned       | Hyperparameter optimization                                |
-| **Kubeflow Pipelines**      | 🚧 Planned       | Build, run, and track AI workflows                         |
-| **Kubeflow Model Registry** | 🚧 Planned       | Manage model artifacts, versions and ML artifacts metadata |
+| Project                     | Status           | Version Support | Description                                                |
+| --------------------------- | ---------------- |-----------------| ---------------------------------------------------------- |
+| **Kubeflow Trainer**        | ✅ **Available** | v2.0.0+         | Train and fine-tune AI models with various frameworks      |
+| **Kubeflow Katib**          | 🚧 Planned       | TBD             | Hyperparameter optimization                                |
+| **Kubeflow Pipelines**      | 🚧 Planned       | TBD             | Build, run, and track AI workflows                         |
+| **Kubeflow Model Registry** | 🚧 Planned       | TBD             | Manage model artifacts, versions and ML artifacts metadata |
 
 ## Community
 
