@@ -40,6 +40,7 @@ dev = [
   "kubeflow_trainer_api@git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api",
   "ruff>=0.12.2",
   "pre-commit>=4.2.0",
+  "PyGithub>=2.7.0",
 ]
 
 [project.urls]
