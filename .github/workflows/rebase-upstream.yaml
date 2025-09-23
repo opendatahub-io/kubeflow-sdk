@@ -1,0 +1,103 @@
+name: Sync Upstream 
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      downstream_branch:
+        description: Downstream branch to update (destination)
+        required: false
+        default: main
+      upstream_branch:
+        description: Upstream branch to sync from (source)
+        required: false
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      DOWNSTREAM_BRANCH: ${{ inputs.downstream_branch || 'main' }}
+      UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'main' }}
+
+    steps:
+      - name: Checkout downstream repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DOWNSTREAM_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/kubeflow/sdk
+          git fetch upstream
+
+      - name: Check for upstream commits ahead of downstream
+        id: check_upstream
+        run: |
+          # Ensure we have the latest downstream and upstream tips
+          git fetch origin "${DOWNSTREAM_BRANCH}"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+          AHEAD_COUNT=$(git rev-list --count "${DOWNSTREAM_BRANCH}..upstream/${UPSTREAM_BRANCH}")
+          echo "Upstream is ahead by ${AHEAD_COUNT} commits"
+          if [ "$AHEAD_COUNT" -gt 0 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No upstream commits ahead of downstream; skipping branch push and PR."
+          fi
+
+      # Create a branch in downstream that points at the upstream tip
+      - name: Create branch from upstream tip
+        if: steps.check_upstream.outputs.has_changes == 'true'
+        run: |
+          git checkout -B sync/upstream-${UPSTREAM_BRANCH} upstream/${UPSTREAM_BRANCH}
+          git push origin sync/upstream-${UPSTREAM_BRANCH} --force-with-lease
+
+      # Open or update a PR into downstream
+      - name: Create or update PR
+        if: steps.check_upstream.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          HEAD_BRANCH="sync/upstream-${UPSTREAM_BRANCH}"
+          BASE_BRANCH="${DOWNSTREAM_BRANCH}"
+          REPO_REF="${GITHUB_REPOSITORY}"
+          TITLE="Sync upstream/${UPSTREAM_BRANCH} into ${DOWNSTREAM_BRANCH}"
+          BODY="Upstream -> downstream sync"
+          LABEL="automated-rebase"
+
+          # Only consider PRs that already have the automation label
+          PR_NUMBER=$(gh pr list --repo "$REPO_REF" \
+            --head "$HEAD_BRANCH" \
+            --state open \
+            --label "$LABEL" \
+            --json number --jq '.[0].number')
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --repo "$REPO_REF" \
+              --title "$TITLE" \
+              --body "$BODY"
+          else
+            gh pr create --repo "$REPO_REF" \
+              --base "$BASE_BRANCH" \
+              --head "$HEAD_BRANCH" \
+              --title "$TITLE" \
+              --body "$BODY" \
+              --label "$LABEL"
+          fi
+
+
