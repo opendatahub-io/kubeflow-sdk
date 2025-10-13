@@ -65,12 +65,18 @@ jobs:
         if: steps.check_upstream.outputs.has_changes == 'true'
         run: |
           git checkout -B sync/upstream-${UPSTREAM_BRANCH} upstream/${UPSTREAM_BRANCH}
-          # Preserve downstream-managed .github directory by restoring it from the downstream branch
-          # This ensures upstream changes never override downstream workflow/issue templates
-          git restore --source=origin/${DOWNSTREAM_BRANCH} --worktree --staged .github || true
+          # Preserve downstream-managed .github directory, owners, readme and scripts/gen-changelog.sh files 
+          # by restoring it from the downstream branch
+          git restore --source=origin/${DOWNSTREAM_BRANCH} --worktree --staged \
+            .github \
+            OWNERS \
+            README \
+            README.md \
+            scripts/gen-changelog.sh || true
           if ! git diff --quiet --cached; then
-            git commit -m "Preserve downstream .github directory"
+            git commit -m "Preserve downstream (.github, OWNERS, README, scripts/gen-changelog.sh)"
           fi
+
           git push origin sync/upstream-${UPSTREAM_BRANCH} --force-with-lease
 
       # Open or update a PR into downstream
