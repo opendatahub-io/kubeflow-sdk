@@ -62,82 +62,48 @@ jobs:
           fi
 
       # Create a branch in downstream that points at the upstream tip
-      - name: Merge upstream; auto-keep owned paths; open conflict PR if needed
+      - name: Rebase onto upstream (keep owned paths); open conflict PR if needed
         if: steps.check_upstream.outputs.has_changes == 'true'
         run: |
           set -euo pipefail
 
           HEAD_BRANCH="sync/upstream-${UPSTREAM_BRANCH}"
-          MERGED_OK=false
-
-          # Owned patterns (recursive for .github)
           OWNED_PATHS=(
-            ".github/*"
-            ".github/**"
-            "CHANGELOG"
-            "OWNERS"
-            "README"
-            "README.md"
+            ".github/*" ".github/**"
+            "CHANGELOG" "OWNERS"
+            "README" "README.md"
             "scripts/gen-changelog.py"
           )
 
-          is_owned() {
-            local f="$1"
-            for pat in "${OWNED_PATHS[@]}"; do
-              case "$f" in
-                ${pat}) return 0 ;;
-              esac
-            done
-            return 1
-          }
+          is_owned() { local f="$1"; for pat in "${OWNED_PATHS[@]}"; do case "$f" in ${pat}) return 0;; esac; done; return 1; }
 
-          # Start from downstream tip
           git checkout -B "${HEAD_BRANCH}" "origin/${DOWNSTREAM_BRANCH}"
 
-          # Merge upstream; default to upstream version on generic conflicts
-          if git merge -X theirs --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}"; then
-            MERGED_OK=true
-          else
-            # Collect conflicted files
+          # Rebase downstream commits on top of upstream (default to upstream on generic conflicts)
+          if ! git rebase -X theirs "upstream/${UPSTREAM_BRANCH}"; then
             mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U)
-
             ONLY_OWNED=true
-            for f in "${CONFLICTS[@]}"; do
-              if ! is_owned "$f"; then
-                ONLY_OWNED=false
-                break
-              fi
-            done
-
+            for f in "${CONFLICTS[@]}"; do is_owned "$f" || { ONLY_OWNED=false; break; }; done
             if "$ONLY_OWNED"; then
-              # Auto-resolve owned files to downstream ("ours") and finish the merge
-              for f in "${CONFLICTS[@]}"; do
-                git checkout --ours -- "$f"
-                git add -- "$f"
-              done
-              git commit -m "Merge upstream/${UPSTREAM_BRANCH} into ${DOWNSTREAM_BRANCH} (kept downstream-owned paths)"
-              MERGED_OK=true
+              for f in "${CONFLICTS[@]}"; do git checkout --ours -- "$f"; git add -- "$f"; done
+              git rebase --continue
             else
-              # Conflicts outside owned files: abort merge and open a PR that shows conflicts
-              git merge --abort
-              git checkout -B "${HEAD_BRANCH}" "upstream/${UPSTREAM_BRANCH}"
-              MERGED_OK=false
+              git rebase --abort
+              git checkout -B "${HEAD_BRANCH}" "upstream/${UPSTREAM_BRANCH}"   # open conflict PR instead
             fi
           fi
 
-          # Only re-pin owned paths if the merge actually completed on top of downstream
-          if [ "$MERGED_OK" = true ]; then
-            for p in ".github" "CHANGELOG" "OWNERS" "README" "README.md" "scripts/gen-changelog.py"; do
-              if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${p}" 2>/dev/null; then
-                git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$p" || true
-              elif git ls-tree -r --name-only "origin/${DOWNSTREAM_BRANCH}" | grep -q "^${p%/}/"; then
-                git checkout "origin/${DOWNSTREAM_BRANCH}" -- "${p%/}" || true
-              fi
-            done
-            if ! git diff --quiet; then
-              git add -A
-              git commit -m "Preserve downstream-owned files (.github, CHANGELOG, OWNERS, README*, scripts/gen-changelog.py)"
+          # Re-pin owned paths to downstream versions (harmless if missing/unchanged)
+          for p in ".github" "CHANGELOG" "OWNERS" "README" "README.md" "scripts/gen-changelog.py"; do
+            if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${p}" 2>/dev/null; then
+              git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$p" || true
+            elif git ls-tree -r --name-only "origin/${DOWNSTREAM_BRANCH}" | grep -q "^${p%/}/"; then
+              git checkout "origin/${DOWNSTREAM_BRANCH}" -- "${p%/}" || true
             fi
+          done
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "Preserve downstream-owned files after rebase"
           fi
 
           git push origin "${HEAD_BRANCH}" --force-with-lease
