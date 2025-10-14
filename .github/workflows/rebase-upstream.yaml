@@ -66,7 +66,8 @@ jobs:
         if: steps.check_upstream.outputs.has_changes == 'true'
         run: |
           set -euo pipefail
-          git config rerere.enabled true  # remembers resolutions across runs
+          git config rerere.enabled true
+          git config advice.skippedCherryPicks false
 
           HEAD_BRANCH="sync/upstream-${UPSTREAM_BRANCH}"
           REBASE_OK=false
@@ -81,25 +82,71 @@ jobs:
 
           git checkout -B "${HEAD_BRANCH}" "origin/${DOWNSTREAM_BRANCH}"
 
+          # Kick off the rebase; if it stops, we enter the resolution loop
           if git rebase "upstream/${UPSTREAM_BRANCH}"; then
             REBASE_OK=true
           else
-            mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U)
-            ONLY_OWNED=true
-            for f in "${CONFLICTS[@]}"; do is_owned "$f" || { ONLY_OWNED=false; break; }; done
-            if "$ONLY_OWNED"; then
-              for f in "${CONFLICTS[@]}"; do git checkout --ours -- "$f"; git add -- "$f"; done
-              git rebase --continue
-              REBASE_OK=true
-            else
-              git rebase --abort
-              git checkout -B "${HEAD_BRANCH}" "upstream/${UPSTREAM_BRANCH}"   # open conflict PR instead
-              REASON_FILES=$(printf '%s\n' "${CONFLICTS[@]}")
-              echo "Conflicts outside owned paths:\n${REASON_FILES}"
-            fi
+            while true; do
+              # List conflicted files (if any)
+              mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U || true)
+
+              # If nothing shows but rebase still non-final, fail safe
+              if ((${#CONFLICTS[@]}==0)); then
+                echo "Rebase paused but no conflicted files detected. Aborting for safety."
+                git rebase --abort
+                break
+              fi
+
+              # Are ALL conflicts only in owned paths?
+              ONLY_OWNED=true
+              for f in "${CONFLICTS[@]}"; do
+                is_owned "$f" || { ONLY_OWNED=false; break; }
+              done
+
+              if "$ONLY_OWNED"; then
+                echo "Conflicts only in owned paths; keeping downstream versions…"
+                for f in "${CONFLICTS[@]}"; do
+                  # If downstream has the file, restore it; otherwise remove (handles modify/delete)
+                  if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${f}" 2>/dev/null; then
+                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$f" || true
+                    git add -- "$f"
+                  else
+                    git rm -f -- "$f" || true
+                  fi
+                done
+                # Continue non-interactively; if next commit conflicts, loop repeats
+                if git -c core.editor=true rebase --continue; then
+                  # Rebase finished cleanly
+                  REBASE_OK=true
+                  break
+                fi
+                # else: loop again for next batch of conflicts
+              else
+                echo "Conflicts outside owned paths detected:"
+                printf '  - %s\n' "${CONFLICTS[@]}"
+                echo "Aborting rebase and switching to conflict PR path…"
+                git rebase --abort
+                git checkout -B "${HEAD_BRANCH}" "upstream/${UPSTREAM_BRANCH}"
+
+                # (Optional) keep owned paths from downstream even on the conflict PR head
+                for p in ".github" "CHANGELOG" "OWNERS" "README" "README.md" "scripts/gen-changelog.py"; do
+                  if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${p}" 2>/dev/null; then
+                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$p" || true
+                  elif git ls-tree -r --name-only "origin/${DOWNSTREAM_BRANCH}" | grep -q "^${p%/}/"; then
+                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "${p%/}" || true
+                  fi
+                done
+                if ! git diff --quiet; then
+                  git add -A
+                  git commit -m "Preserve downstream-owned files on conflict PR"
+                fi
+                REBASE_OK=false
+                break
+              fi
+            done
           fi
 
-          # Only re-pin when the rebase completed on top of downstream
+          # Only re-pin owned paths when the rebase finished on top of downstream
           if [ "$REBASE_OK" = true ]; then
             for p in ".github" "CHANGELOG" "OWNERS" "README" "README.md" "scripts/gen-changelog.py"; do
               if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${p}" 2>/dev/null; then
