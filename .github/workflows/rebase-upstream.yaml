@@ -80,7 +80,7 @@ jobs:
           git checkout -B "${HEAD_BRANCH}" "origin/${DOWNSTREAM_BRANCH}"
 
           # Rebase downstream commits on top of upstream (default to upstream on generic conflicts)
-          if ! git rebase -X theirs "upstream/${UPSTREAM_BRANCH}"; then
+          if ! git rebase "upstream/${UPSTREAM_BRANCH}"; then
             mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U)
             ONLY_OWNED=true
             for f in "${CONFLICTS[@]}"; do is_owned "$f" || { ONLY_OWNED=false; break; }; done
