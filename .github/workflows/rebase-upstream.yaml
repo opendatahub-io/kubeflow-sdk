@@ -1,0 +1,199 @@
+name: Sync Upstream 
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      downstream_branch:
+        description: Downstream branch to update (destination)
+        required: false
+        default: main
+      upstream_branch:
+        description: Upstream branch to sync from (source)
+        required: false
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      DOWNSTREAM_BRANCH: ${{ inputs.downstream_branch || 'main' }}
+      UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'main' }}
+
+    steps:
+      - name: Checkout downstream repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DOWNSTREAM_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.REPO_WORKFLOW_PAT }} 
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/kubeflow/sdk
+          git fetch upstream
+
+      - name: Check for upstream commits ahead of downstream
+        id: check_upstream
+        run: |
+          # Ensure we have the latest downstream and upstream tips
+          git fetch origin "${DOWNSTREAM_BRANCH}"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+          AHEAD_COUNT=$(git rev-list --count "${DOWNSTREAM_BRANCH}..upstream/${UPSTREAM_BRANCH}")
+          echo "Upstream is ahead by ${AHEAD_COUNT} commits"
+          if [ "$AHEAD_COUNT" -gt 0 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No upstream commits ahead of downstream; skipping branch push and PR."
+          fi
+
+      # Rebase onto upstream (keep owned paths); open conflict PR if needed
+      - name: Rebase onto upstream (keep owned paths); open conflict PR if needed
+        if: steps.check_upstream.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          git config rerere.enabled true
+          git config advice.skippedCherryPicks false
+
+          HEAD_BRANCH="sync/upstream-${UPSTREAM_BRANCH}"
+          REBASE_OK=false
+          OWNED_PATHS=(
+            ".github/*" ".github/**"
+            "CHANGELOG" "OWNERS"
+            "README" "README.md"
+            "scripts/gen-changelog.py"
+          )
+
+          is_owned() { local f="$1"; for pat in "${OWNED_PATHS[@]}"; do case "$f" in ${pat}) return 0;; esac; done; return 1; }
+
+          git checkout -B "${HEAD_BRANCH}" "origin/${DOWNSTREAM_BRANCH}"
+
+          # Kick off the rebase; if it stops, we enter the resolution loop
+          if git rebase "upstream/${UPSTREAM_BRANCH}"; then
+            REBASE_OK=true
+          else
+            while true; do
+              # List conflicted files (if any)
+              mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U || true)
+
+              # If nothing shows but rebase still non-final, fail safe
+              if ((${#CONFLICTS[@]}==0)); then
+                echo "Rebase paused but no conflicted files detected. Aborting for safety."
+                git rebase --abort
+                break
+              fi
+
+              # Are ALL conflicts only in owned paths?
+              ONLY_OWNED=true
+              for f in "${CONFLICTS[@]}"; do
+                is_owned "$f" || { ONLY_OWNED=false; break; }
+              done
+
+              if "$ONLY_OWNED"; then
+                echo "Conflicts only in owned paths; keeping downstream versions…"
+                for f in "${CONFLICTS[@]}"; do
+                  # If downstream has the file, restore it; otherwise remove (handles modify/delete)
+                  if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${f}" 2>/dev/null; then
+                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$f" || true
+                    git add -- "$f"
+                  else
+                    git rm -f -- "$f" || true
+                  fi
+                done
+                # Continue non-interactively; if next commit conflicts, loop repeats
+                if git -c core.editor=true rebase --continue; then
+                  # Rebase finished cleanly
+                  REBASE_OK=true
+                  break
+                fi
+                # else: loop again for next batch of conflicts
+              else
+                echo "Conflicts outside owned paths detected:"
+                printf '  - %s\n' "${CONFLICTS[@]}"
+                echo "Aborting rebase and switching to conflict PR path…"
+                git rebase --abort
+                git checkout -B "${HEAD_BRANCH}" "upstream/${UPSTREAM_BRANCH}"
+
+                # (Optional) keep owned paths from downstream even on the conflict PR head
+                for p in ".github" "CHANGELOG" "OWNERS" "README" "README.md" "scripts/gen-changelog.py"; do
+                  if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${p}" 2>/dev/null; then
+                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$p" || true
+                  elif git ls-tree -r --name-only "origin/${DOWNSTREAM_BRANCH}" | grep -q "^${p%/}/"; then
+                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "${p%/}" || true
+                  fi
+                done
+                if ! git diff --quiet; then
+                  git add -A
+                  git commit -m "Preserve downstream-owned files on conflict PR"
+                fi
+                REBASE_OK=false
+                break
+              fi
+            done
+          fi
+
+          # Only re-pin owned paths when the rebase finished on top of downstream
+          if [ "$REBASE_OK" = true ]; then
+            for p in ".github" "CHANGELOG" "OWNERS" "README" "README.md" "scripts/gen-changelog.py"; do
+              if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${p}" 2>/dev/null; then
+                git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$p" || true
+              elif git ls-tree -r --name-only "origin/${DOWNSTREAM_BRANCH}" | grep -q "^${p%/}/"; then
+                git checkout "origin/${DOWNSTREAM_BRANCH}" -- "${p%/}" || true
+              fi
+            done
+            if ! git diff --quiet; then
+              git add -A
+              git commit -m "Preserve downstream-owned files after rebase"
+            fi
+          fi
+
+          git push origin "${HEAD_BRANCH}" --force-with-lease
+
+      # Open or update a PR into downstream
+      - name: Create or update PR
+        if: steps.check_upstream.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          HEAD_BRANCH="sync/upstream-${UPSTREAM_BRANCH}"
+          BASE_BRANCH="${DOWNSTREAM_BRANCH}"
+          REPO_REF="${GITHUB_REPOSITORY}"
+          TITLE="Sync upstream/${UPSTREAM_BRANCH} into ${DOWNSTREAM_BRANCH}"
+          BODY="Upstream -> downstream sync"
+          LABEL="automated-rebase"
+
+          # Only consider PRs that already have the automation label
+          PR_NUMBER=$(gh pr list --repo "$REPO_REF" \
+            --head "$HEAD_BRANCH" \
+            --state open \
+            --label "$LABEL" \
+            --json number --jq '.[0].number')
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --repo "$REPO_REF" \
+              --title "$TITLE" \
+              --body "$BODY"
+          else
+            gh pr create --repo "$REPO_REF" \
+              --base "$BASE_BRANCH" \
+              --head "$HEAD_BRANCH" \
+              --title "$TITLE" \
+              --body "$BODY" \
+              --label "$LABEL"
+          fi
+
+

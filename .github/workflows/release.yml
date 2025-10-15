@@ -16,7 +16,7 @@ permissions:
 jobs:
   prepare:
     name: Prepare release branch
-    if: ${{ github.repository == 'kubeflow/sdk' && !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release-') && github.actor == 'github-actions[bot]') }}
+    if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release-') && github.actor == 'github-actions[bot]') }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.vars.outputs.version }}
