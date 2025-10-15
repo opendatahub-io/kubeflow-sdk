@@ -477,13 +477,50 @@ def get_args_using_torchtune_config(
         else:
             args.append(f"dataset.data_dir={os.path.join(constants.DATASET_PATH, relative_path)}")
 
+    if fine_tuning_config.peft_config:
+        args += get_args_from_peft_config(fine_tuning_config.peft_config)
+
     if fine_tuning_config.dataset_preprocess_config:
-        args += get_args_in_dataset_preprocess_config(fine_tuning_config.dataset_preprocess_config)
+        args += get_args_from_dataset_preprocess_config(
+            fine_tuning_config.dataset_preprocess_config
+        )
 
     return args
 
 
-def get_args_in_dataset_preprocess_config(
+def get_args_from_peft_config(peft_config: types.LoraConfig) -> list[str]:
+    """
+    Get the args from the given PEFT config.
+    """
+    args = []
+
+    if not isinstance(peft_config, types.LoraConfig):
+        raise ValueError(f"Invalid PEFT config type: {type(peft_config)}.")
+
+    field_map = {
+        "apply_lora_to_mlp": "model.apply_lora_to_mlp",
+        "apply_lora_to_output": "model.apply_lora_to_output",
+        "lora_rank": "model.lora_rank",
+        "lora_alpha": "model.lora_alpha",
+        "lora_dropout": "model.lora_dropout",
+        "quantize_base": "model.quantize_base",
+        "use_dora": "model.use_dora",
+    }
+
+    # Override the PEFT fields if they are provided.
+    for field, arg_name in field_map.items():
+        value = getattr(peft_config, field, None)
+        if value:
+            args.append(f"{arg_name}={value}")
+
+    # Override the LoRA attention modules if they are provided.
+    if peft_config.lora_attn_modules:
+        args.append(f"model.lora_attn_modules=[{','.join(peft_config.lora_attn_modules)}]")
+
+    return args
+
+
+def get_args_from_dataset_preprocess_config(
     dataset_preprocess_config: types.TorchTuneInstructDataset,
 ) -> list[str]:
     """

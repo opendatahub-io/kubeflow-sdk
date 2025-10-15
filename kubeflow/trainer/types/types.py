@@ -110,6 +110,44 @@ class TorchTuneInstructDataset:
     column_map: Optional[dict[str, str]] = None
 
 
+@dataclass
+class LoraConfig:
+    """Configuration for the LoRA/QLoRA/DoRA.
+    REF: https://meta-pytorch.org/torchtune/main/tutorials/memory_optimizations.html
+
+    Args:
+        apply_lora_to_mlp (`Optional[bool]`):
+            Whether to apply LoRA to the MLP in each transformer layer.
+        apply_lora_to_output (`Optional[bool]`):
+            Whether to apply LoRA to the model's final output projection.
+        lora_attn_modules (`list[str]`):
+            A list of strings specifying which layers of the model to apply LoRA,
+            default is ["q_proj", "v_proj", "output_proj"]:
+            1. "q_proj" applies LoRA to the query projection layer.
+            2. "k_proj" applies LoRA to the key projection layer.
+            3. "v_proj" applies LoRA to the value projection layer.
+            4. "output_proj" applies LoRA to the attention output projection layer.
+        lora_rank (`Optional[int]`): The rank of the low rank decomposition.
+        lora_alpha (`Optional[int]`):
+            The scaling factor that adjusts the magnitude of the low-rank matrices' output.
+        lora_dropout (`Optional[float]`):
+            The probability of applying Dropout to the low rank updates.
+        quantize_base (`Optional[bool]`): Whether to enable model quantization.
+        use_dora (`Optional[bool]`): Whether to enable DoRA.
+    """
+
+    apply_lora_to_mlp: Optional[bool] = None
+    apply_lora_to_output: Optional[bool] = None
+    lora_attn_modules: list[str] = field(
+        default_factory=lambda: ["q_proj", "v_proj", "output_proj"]
+    )
+    lora_rank: Optional[int] = None
+    lora_alpha: Optional[int] = None
+    lora_dropout: Optional[float] = None
+    quantize_base: Optional[bool] = None
+    use_dora: Optional[bool] = None
+
+
 # Configuration for the TorchTune LLM Trainer.
 @dataclass
 class TorchTuneConfig:
@@ -127,6 +165,9 @@ class TorchTuneConfig:
         loss (`Optional[Loss]`): The loss algorithm we use to fine-tune the LLM,
             e.g. `torchtune.modules.loss.CEWithChunkedOutputLoss`.
         num_nodes (`Optional[int]`): The number of nodes to use for training.
+        peft_config (`Optional[LoraConfig]`):
+            Configuration for the PEFT(Parameter-Efficient Fine-Tuning),
+            including LoRA/QLoRA/DoRA, etc.
         dataset_preprocess_config (`Optional[TorchTuneInstructDataset]`):
             Configuration for the dataset preprocessing.
         resources_per_node (`Optional[Dict]`): The computing resources to allocate per node.
@@ -137,6 +178,7 @@ class TorchTuneConfig:
     epochs: Optional[int] = None
     loss: Optional[Loss] = None
     num_nodes: Optional[int] = None
+    peft_config: Optional[LoraConfig] = None
     dataset_preprocess_config: Optional[TorchTuneInstructDataset] = None
     resources_per_node: Optional[dict] = None
 
