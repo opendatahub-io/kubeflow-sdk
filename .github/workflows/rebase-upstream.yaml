@@ -45,143 +45,186 @@ jobs:
       - name: Add upstream remote and fetch
         run: |
           git remote add upstream https://github.com/kubeflow/sdk || git remote set-url upstream https://github.com/kubeflow/sdk
-          git fetch --prune upstream "${UPSTREAM_BRANCH}"
-          git fetch --prune origin "${DOWNSTREAM_BRANCH}"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+          git fetch origin "${DOWNSTREAM_BRANCH}"
 
-      - name: Build/refresh sync branch from downstream base
+      - name: Create sync branch from downstream
         run: |
-          set -euo pipefail
+          # Start from downstream - preserves midstream commits on top
           git checkout -B "${HEAD_BRANCH}" "origin/${DOWNSTREAM_BRANCH}"
 
-      - name: Rebase onto upstream and preserve owned paths
+      - name: Merge upstream and handle excluded paths
+        id: merge_step
         run: |
           set -euo pipefail
-          git config rerere.enabled true
-          git config advice.skippedCherryPicks false
-          shopt -s globstar nullglob
-
-          OWNED_PATHS=(
-            ".github/**"
-            "CHANGELOG"
-            "OWNERS"
-          )
-          is_owned() {
-            local f="$1"
-            for pat in "${OWNED_PATHS[@]}"; do
-              [[ "$f" == $pat ]] && return 0
+          
+          EXCLUDED_PATHS=(".github" "CHANGELOG" "OWNERS")
+          
+          # Check if path is excluded
+          is_excluded() {
+            local file="$1"
+            for excluded in "${EXCLUDED_PATHS[@]}"; do
+              if [[ "$file" == "$excluded"* ]] || [[ "$file" == "$excluded" ]]; then
+                return 0
+              fi
             done
             return 1
           }
-
-          REBASE_OK=false
-          if git rebase "upstream/${UPSTREAM_BRANCH}"; then
-            REBASE_OK=true
+          
+          # Try merge without committing
+          if git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
+            echo "Clean merge - restoring excluded paths"
+            # Clean merge - restore excluded paths from downstream
+            for path in "${EXCLUDED_PATHS[@]}"; do
+              if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${path}" 2>/dev/null; then
+                git checkout "origin/${DOWNSTREAM_BRANCH}" -- "${path}" || true
+              elif [ -e "${path}" ]; then
+                # Path exists in merge but not in downstream - remove it
+                git rm -rf "${path}" || true
+              fi
+            done
+            
+            # Only commit if there are changes
+            if git diff --cached --quiet && git diff --quiet; then
+              echo "No changes to commit (already up to date)"
+              git merge --abort || true
+            else
+              git commit -m "Merge upstream/${UPSTREAM_BRANCH} (excluded paths preserved from midstream)"
+            fi
+            echo "has_conflict=false" >> "$GITHUB_OUTPUT"
           else
-            while true; do
-              mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U || true)
-              if ((${#CONFLICTS[@]}==0)); then
-                echo "Rebase paused without listed conflicts; aborting for safety."
-                git rebase --abort
+            # Conflicts detected
+            mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U || true)
+            
+            if [ ${#CONFLICTS[@]} -eq 0 ]; then
+              echo "ERROR: Merge failed but no conflicts listed"
+              git merge --abort
+              exit 1
+            fi
+            
+            # Check if all conflicts are in excluded paths
+            ONLY_EXCLUDED=true
+            for file in "${CONFLICTS[@]}"; do
+              if ! is_excluded "$file"; then
+                ONLY_EXCLUDED=false
+                echo "Real conflict in: $file"
                 break
               fi
-
-              ONLY_OWNED=true
-              for f in "${CONFLICTS[@]}"; do
-                if ! is_owned "$f"; then ONLY_OWNED=false; break; fi
+            done
+            
+            if [ "$ONLY_EXCLUDED" = true ]; then
+              echo "Conflicts only in excluded paths - keeping midstream version"
+              # Resolve all conflicts to keep midstream version
+              for file in "${CONFLICTS[@]}"; do
+                git checkout --ours "$file" || true
+                git add "$file" || true
               done
-
-              if "$ONLY_OWNED"; then
-                echo "Conflicts only in owned paths; keeping downstream versions…"
-                for f in "${CONFLICTS[@]}"; do
-                  if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${f}" 2>/dev/null; then
-                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$f" || true
-                    git add -- "$f"
-                  else
-                    git rm -f -- "$f" || true
-                  fi
-                done
-                if git -c core.editor=true rebase --continue; then
-                  REBASE_OK=true
-                  break
+              git commit -m "Merge upstream/${UPSTREAM_BRANCH} (excluded path conflicts kept from midstream)"
+              echo "has_conflict=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Real conflicts detected in non-excluded files"
+              echo "Conflicts:"
+              for file in "${CONFLICTS[@]}"; do
+                echo "  - $file"
+              done
+              echo ""
+              echo "Creating conflict PR for manual resolution..."
+              
+              # Resolve excluded path conflicts automatically (keep ours)
+              for file in "${CONFLICTS[@]}"; do
+                if is_excluded "$file"; then
+                  echo "Auto-resolving excluded file: $file (keeping midstream)"
+                  git checkout --ours "$file" || true
+                  git add "$file" || true
                 fi
+              done
+              
+              # Check if there are still unresolved conflicts
+              UNRESOLVED=$(git diff --name-only --diff-filter=U || echo "")
+              if [ -n "$UNRESOLVED" ]; then
+                echo "Unresolved conflicts remain in:"
+                echo "$UNRESOLVED" | while read -r file; do
+                  echo "  - $file"
+                  # Add files with conflict markers
+                  git add "$file" || true
+                done
+                # Commit with conflict markers in place
+                git commit -m "Merge upstream/${UPSTREAM_BRANCH} (HAS CONFLICTS - manual resolution needed)"
+                echo "has_conflict=true" >> "$GITHUB_OUTPUT"
               else
-                echo "Conflicts outside owned paths detected:"
-                printf '  - %s\n' "${CONFLICTS[@]}"
-                echo "Aborting rebase and switching to conflict-PR mode…"
-                git rebase --abort
-                git checkout -B "${HEAD_BRANCH}" "upstream/${UPSTREAM_BRANCH}"
-                # Keep owned paths from downstream even in conflict PR head
-                for p in ".github" "CHANGELOG" "OWNERS"; do
-                  if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${p}" 2>/dev/null; then
-                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$p" || true
-                  elif git ls-tree -r --name-only "origin/${DOWNSTREAM_BRANCH}" | grep -q "^${p%/}/"; then
-                    git checkout "origin/${DOWNSTREAM_BRANCH}" -- "${p%/}" || true
-                  fi
-                done
-                if ! git diff --quiet; then
-                  git add -A
-                  git commit -m "Preserve downstream-owned files on conflict PR"
-                fi
-                REBASE_OK=false
-                break
+                # All conflicts were in excluded paths, resolved
+                git commit -m "Merge upstream/${UPSTREAM_BRANCH} (excluded path conflicts auto-resolved)"
+                echo "has_conflict=false" >> "$GITHUB_OUTPUT"
               fi
-            done
-          fi
-
-          # Re-pin owned paths when rebase finished on top of downstream base
-          if [ "$REBASE_OK" = true ]; then
-            for p in ".github" "CHANGELOG" "OWNERS"; do
-              if git cat-file -e "origin/${DOWNSTREAM_BRANCH}:${p}" 2>/dev/null; then
-                git checkout "origin/${DOWNSTREAM_BRANCH}" -- "$p" || true
-              elif git ls-tree -r --name-only "origin/${DOWNSTREAM_BRANCH}" | grep -q "^${p%/}/"; then
-                git checkout "origin/${DOWNSTREAM_BRANCH}" -- "${p%/}" || true
-              fi
-            done
-            if ! git diff --quiet; then
-              git add -A
-              git commit -m "Preserve downstream-owned files after rebase"
             fi
           fi
 
-      - name: Detect actual changes vs downstream (tree diff)
+      - name: Check for real changes (excluding owned paths)
         id: diffcheck
         run: |
-          set -euo pipefail
-          # Use merge-base compare (same view as a PR). If nothing changed, skip push/PR.
-          if git diff --quiet "origin/${DOWNSTREAM_BRANCH}...${HEAD_BRANCH}"; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "No actual diff vs downstream; skipping push/PR."
+          # If there's a conflict, always create PR
+          if [ "${{ steps.merge_step.outputs.has_conflict }}" = "true" ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "PR needed for conflict resolution"
+            exit 0
+          fi
+          
+          # Check if there are changes outside excluded paths
+          if git diff --quiet "origin/${DOWNSTREAM_BRANCH}...${HEAD_BRANCH}" -- \
+            ':!.github' ':!CHANGELOG' ':!OWNERS'; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No changes outside excluded paths"
           else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Changes detected"
           fi
 
-      - name: Push sync branch (only if changed)
+      - name: Push sync branch
         if: steps.diffcheck.outputs.has_changes == 'true'
         run: |
-          set -euo pipefail
           git push origin "${HEAD_BRANCH}" --force-with-lease
 
-      - name: Create or update PR (only if changed)
+      - name: Create or update PR
         if: steps.diffcheck.outputs.has_changes == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          TITLE="fix: Sync upstream/${UPSTREAM_BRANCH} into ${DOWNSTREAM_BRANCH}"
-          BODY=$'Automated upstream sync rebased onto upstream; downstream-owned files preserved.\n\n- Source: upstream/'"${UPSTREAM_BRANCH}"$'\n- Base: '"${DOWNSTREAM_BRANCH}"
+          if [ "${{ steps.merge_step.outputs.has_conflict }}" = "true" ]; then
+            TITLE="⚠️ sync: Merge upstream/${UPSTREAM_BRANCH} (HAS CONFLICTS)"
+            BODY="Upstream merge has conflicts that need manual resolution. Excluded path conflicts (.github, CHANGELOG, OWNERS) have been auto-resolved to midstream version. Please resolve remaining conflicts in the Files Changed tab or locally."
+          else
+            TITLE="sync: Merge upstream/${UPSTREAM_BRANCH} into ${DOWNSTREAM_BRANCH}"
+            BODY="Successfully merged upstream changes. Excluded paths (.github, CHANGELOG, OWNERS) preserved from midstream."
+          fi
+          
           PR_NUMBER=$(gh pr list \
             --repo "${GITHUB_REPOSITORY}" \
             --head "${HEAD_BRANCH}" \
+            --base "${DOWNSTREAM_BRANCH}" \
             --state open \
             --label "${LABEL}" \
-            --json number --jq '.[0].number // empty')
-          if [ -n "${PR_NUMBER}" ]; then
-            gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body "${BODY}"
+            --json number \
+            --jq '.[0].number // empty')
+          
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Updating PR #${PR_NUMBER}"
+            gh pr edit "$PR_NUMBER" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "$TITLE" \
+              --body "$BODY"
           else
-            gh pr create --repo "${GITHUB_REPOSITORY}" \
+            echo "Creating PR"
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
               --base "${DOWNSTREAM_BRANCH}" \
               --head "${HEAD_BRANCH}" \
-              --title "${TITLE}" \
-              --body "${BODY}" \
-              --label "${LABEL}"
+              --title "$TITLE" \
+              --body "$BODY" \
+              --label "${LABEL}" || \
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base "${DOWNSTREAM_BRANCH}" \
+              --head "${HEAD_BRANCH}" \
+              --title "$TITLE" \
+              --body "$BODY"
           fi
