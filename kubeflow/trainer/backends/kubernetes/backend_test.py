@@ -31,8 +31,9 @@ import uuid
 from kubeflow_trainer_api import models
 import pytest
 
+from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
-from kubeflow.trainer.backends.kubernetes.types import KubernetesBackendConfig
+import kubeflow.trainer.backends.kubernetes.utils as utils
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.test.common import (
     DEFAULT_NAMESPACE,
@@ -43,7 +44,6 @@ from kubeflow.trainer.test.common import (
     TestCase,
 )
 from kubeflow.trainer.types import types
-from kubeflow.trainer.utils import utils
 
 # In all tests runtime name is equal to the framework name.
 TORCH_RUNTIME = "torch"
@@ -234,6 +234,24 @@ def get_custom_trainer(
             '"$SCRIPT" > "backend_test.py"\ntorchrun "backend_test.py"',
         ],
         numNodes=2,
+        env=env,
+    )
+
+
+def get_custom_trainer_container(
+    image: str,
+    num_nodes: int,
+    resources_per_node: models.IoK8sApiCoreV1ResourceRequirements,
+    env: list[models.IoK8sApiCoreV1EnvVar],
+) -> models.TrainerV1alpha1Trainer:
+    """
+    Get the custom trainer container for the TrainJob.
+    """
+
+    return models.TrainerV1alpha1Trainer(
+        image=image,
+        numNodes=num_nodes,
+        resourcesPerNode=resources_per_node,
         env=env,
     )
 
@@ -792,6 +810,43 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                     ],
                     pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
                     packages_to_install=["torch", "numpy"],
+                ),
+            ),
+        ),
+        TestCase(
+            name="valid flow with custom trainer container",
+            expected_status=SUCCESS,
+            config={
+                "trainer": types.CustomTrainerContainer(
+                    image="example.com/my-image",
+                    num_nodes=2,
+                    resources_per_node={"cpu": 5, "gpu": 3},
+                    env={
+                        "TEST_ENV": "test_value",
+                        "ANOTHER_ENV": "another_value",
+                    },
+                )
+            },
+            expected_output=get_train_job(
+                runtime_name=TORCH_RUNTIME,
+                train_job_name=TRAIN_JOB_WITH_CUSTOM_TRAINER,
+                train_job_trainer=get_custom_trainer_container(
+                    image="example.com/my-image",
+                    num_nodes=2,
+                    resources_per_node=models.IoK8sApiCoreV1ResourceRequirements(
+                        requests={
+                            "cpu": models.IoK8sApimachineryPkgApiResourceQuantity(5),
+                            "nvidia.com/gpu": models.IoK8sApimachineryPkgApiResourceQuantity(3),
+                        },
+                        limits={
+                            "cpu": models.IoK8sApimachineryPkgApiResourceQuantity(5),
+                            "nvidia.com/gpu": models.IoK8sApimachineryPkgApiResourceQuantity(3),
+                        },
+                    ),
+                    env=[
+                        models.IoK8sApiCoreV1EnvVar(name="TEST_ENV", value="test_value"),
+                        models.IoK8sApiCoreV1EnvVar(name="ANOTHER_ENV", value="another_value"),
+                    ],
                 ),
             ),
         ),

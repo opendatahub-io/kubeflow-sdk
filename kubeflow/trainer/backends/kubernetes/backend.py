@@ -26,27 +26,26 @@ import uuid
 from kubeflow_trainer_api import models
 from kubernetes import client, config, watch
 
-from kubeflow.trainer.backends.base import ExecutionBackend
-from kubeflow.trainer.backends.kubernetes import types as k8s_types
+import kubeflow.common.constants as common_constants
+from kubeflow.common.types import KubernetesBackendConfig
+import kubeflow.common.utils as common_utils
+from kubeflow.trainer.backends.base import RuntimeBackend
+import kubeflow.trainer.backends.kubernetes.utils as utils
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
-from kubeflow.trainer.utils import utils
 
 logger = logging.getLogger(__name__)
 
 
-class KubernetesBackend(ExecutionBackend):
-    def __init__(
-        self,
-        cfg: k8s_types.KubernetesBackendConfig,
-    ):
+class KubernetesBackend(RuntimeBackend):
+    def __init__(self, cfg: KubernetesBackendConfig):
         if cfg.namespace is None:
-            cfg.namespace = utils.get_default_target_namespace(cfg.context)
+            cfg.namespace = common_utils.get_default_target_namespace(cfg.context)
 
         # If client configuration is not set, use kube-config to access Kubernetes APIs.
         if cfg.client_configuration is None:
             # Load kube-config or in-cluster config.
-            if cfg.config_file or not utils.is_running_in_k8s():
+            if cfg.config_file or not common_utils.is_running_in_k8s():
                 config.load_kube_config(config_file=cfg.config_file, context=cfg.context)
             else:
                 config.load_incluster_config()
@@ -68,7 +67,7 @@ class KubernetesBackend(ExecutionBackend):
             )
 
             runtime_list = models.TrainerV1alpha1ClusterTrainingRuntimeList.from_dict(
-                thread.get(constants.DEFAULT_TIMEOUT)
+                thread.get(common_constants.DEFAULT_TIMEOUT)
             )
 
             if not runtime_list:
@@ -85,7 +84,7 @@ class KubernetesBackend(ExecutionBackend):
                         f"{constants.RUNTIME_FRAMEWORK_LABEL} label."
                     )
                     continue
-                result.append(self.__get_runtime_from_crd(runtime))
+                result.append(self.__get_runtime_from_cr(runtime))
 
         except multiprocessing.TimeoutError as e:
             raise TimeoutError(
@@ -113,7 +112,7 @@ class KubernetesBackend(ExecutionBackend):
             )
 
             runtime = models.TrainerV1alpha1ClusterTrainingRuntime.from_dict(
-                thread.get(constants.DEFAULT_TIMEOUT)  # type: ignore
+                thread.get(common_constants.DEFAULT_TIMEOUT)  # type: ignore
             )
 
         except multiprocessing.TimeoutError as e:
@@ -127,7 +126,7 @@ class KubernetesBackend(ExecutionBackend):
                 f"{self.namespace}/{name}"
             ) from e
 
-        return self.__get_runtime_from_crd(runtime)  # type: ignore
+        return self.__get_runtime_from_cr(runtime)  # type: ignore
 
     def get_runtime_packages(self, runtime: types.Runtime):
         if runtime.trainer.trainer_type == types.TrainerType.BUILTIN_TRAINER:
@@ -182,55 +181,19 @@ class KubernetesBackend(ExecutionBackend):
         self,
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
-        trainer: Optional[Union[types.CustomTrainer, types.BuiltinTrainer]] = None,
+        trainer: Optional[
+            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+        ] = None,
     ) -> str:
-        if runtime is None:
-            runtime = self.get_runtime(constants.TORCH_RUNTIME)
-
         # Generate unique name for the TrainJob.
-        # TODO (andreyvelich): Discuss this TrainJob name generation.
         train_job_name = random.choice(string.ascii_lowercase) + uuid.uuid4().hex[:11]
 
-        # Build the Trainer.
-        trainer_crd = models.TrainerV1alpha1Trainer()
-
-        if trainer:
-            # If users choose to use a custom training function.
-            if isinstance(trainer, types.CustomTrainer):
-                if runtime.trainer.trainer_type != types.TrainerType.CUSTOM_TRAINER:
-                    raise ValueError(f"CustomTrainer can't be used with {runtime} runtime")
-                trainer_crd = utils.get_trainer_crd_from_custom_trainer(runtime, trainer)
-
-            # If users choose to use a builtin trainer for post-training.
-            elif isinstance(trainer, types.BuiltinTrainer):
-                if runtime.trainer.trainer_type != types.TrainerType.BUILTIN_TRAINER:
-                    raise ValueError(f"BuiltinTrainer can't be used with {runtime} runtime")
-                trainer_crd = utils.get_trainer_crd_from_builtin_trainer(
-                    runtime, trainer, initializer
-                )
-
-            else:
-                raise ValueError(
-                    f"The trainer type {type(trainer)} is not supported. "
-                    "Please use CustomTrainer or BuiltinTrainer."
-                )
-
+        # Build the TrainJob.
         train_job = models.TrainerV1alpha1TrainJob(
             apiVersion=constants.API_VERSION,
             kind=constants.TRAINJOB_KIND,
             metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(name=train_job_name),
-            spec=models.TrainerV1alpha1TrainJobSpec(
-                runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),
-                trainer=(trainer_crd if trainer_crd != models.TrainerV1alpha1Trainer() else None),
-                initializer=(
-                    models.TrainerV1alpha1Initializer(
-                        dataset=utils.get_dataset_initializer(initializer.dataset),
-                        model=utils.get_model_initializer(initializer.model),
-                    )
-                    if isinstance(initializer, types.Initializer)
-                    else None
-                ),
-            ),
+            spec=self._get_trainjob_spec(runtime, initializer, trainer),
         )
 
         # Create the TrainJob.
@@ -269,7 +232,7 @@ class KubernetesBackend(ExecutionBackend):
             )
 
             trainjob_list = models.TrainerV1alpha1TrainJobList.from_dict(
-                thread.get(constants.DEFAULT_TIMEOUT)
+                thread.get(common_constants.DEFAULT_TIMEOUT)
             )
 
             if not trainjob_list:
@@ -285,7 +248,7 @@ class KubernetesBackend(ExecutionBackend):
                 ):
                     continue
 
-                result.append(self.__get_trainjob_from_crd(trainjob))
+                result.append(self.__get_trainjob_from_cr(trainjob))
 
         except multiprocessing.TimeoutError as e:
             raise TimeoutError(
@@ -312,7 +275,7 @@ class KubernetesBackend(ExecutionBackend):
             )
 
             trainjob = models.TrainerV1alpha1TrainJob.from_dict(
-                thread.get(constants.DEFAULT_TIMEOUT)  # type: ignore
+                thread.get(common_constants.DEFAULT_TIMEOUT)  # type: ignore
             )
 
         except multiprocessing.TimeoutError as e:
@@ -324,7 +287,7 @@ class KubernetesBackend(ExecutionBackend):
                 f"Failed to get {constants.TRAINJOB_KIND}: {self.namespace}/{name}"
             ) from e
 
-        return self.__get_trainjob_from_crd(trainjob)  # type: ignore
+        return self.__get_trainjob_from_cr(trainjob)  # type: ignore
 
     def get_job_logs(
         self,
@@ -355,7 +318,7 @@ class KubernetesBackend(ExecutionBackend):
                 )
 
                 # Stream logs incrementally.
-                yield from log_stream
+                yield from log_stream  # type: ignore
             else:
                 logs = self.core_api.read_namespaced_pod_log(
                     name=pod_name,
@@ -431,66 +394,66 @@ class KubernetesBackend(ExecutionBackend):
 
         logger.debug(f"{constants.TRAINJOB_KIND} {self.namespace}/{name} has been deleted")
 
-    def __get_runtime_from_crd(
+    def __get_runtime_from_cr(
         self,
-        runtime_crd: models.TrainerV1alpha1ClusterTrainingRuntime,
+        runtime_cr: models.TrainerV1alpha1ClusterTrainingRuntime,
     ) -> types.Runtime:
         if not (
-            runtime_crd.metadata
-            and runtime_crd.metadata.name
-            and runtime_crd.spec
-            and runtime_crd.spec.ml_policy
-            and runtime_crd.spec.template.spec
-            and runtime_crd.spec.template.spec.replicated_jobs
+            runtime_cr.metadata
+            and runtime_cr.metadata.name
+            and runtime_cr.spec
+            and runtime_cr.spec.ml_policy
+            and runtime_cr.spec.template.spec
+            and runtime_cr.spec.template.spec.replicated_jobs
         ):
-            raise Exception(f"ClusterTrainingRuntime CRD is invalid: {runtime_crd}")
+            raise Exception(f"ClusterTrainingRuntime CR is invalid: {runtime_cr}")
 
         if not (
-            runtime_crd.metadata.labels
-            and constants.RUNTIME_FRAMEWORK_LABEL in runtime_crd.metadata.labels
+            runtime_cr.metadata.labels
+            and constants.RUNTIME_FRAMEWORK_LABEL in runtime_cr.metadata.labels
         ):
             raise Exception(
-                f"Runtime {runtime_crd.metadata.name} must have "
+                f"Runtime {runtime_cr.metadata.name} must have "
                 f"{constants.RUNTIME_FRAMEWORK_LABEL} label"
             )
 
         return types.Runtime(
-            name=runtime_crd.metadata.name,
+            name=runtime_cr.metadata.name,
             trainer=utils.get_runtime_trainer(
-                runtime_crd.metadata.labels[constants.RUNTIME_FRAMEWORK_LABEL],
-                runtime_crd.spec.template.spec.replicated_jobs,
-                runtime_crd.spec.ml_policy,
+                runtime_cr.metadata.labels[constants.RUNTIME_FRAMEWORK_LABEL],
+                runtime_cr.spec.template.spec.replicated_jobs,
+                runtime_cr.spec.ml_policy,
             ),
         )
 
-    def __get_trainjob_from_crd(
+    def __get_trainjob_from_cr(
         self,
-        trainjob_crd: models.TrainerV1alpha1TrainJob,
+        trainjob_cr: models.TrainerV1alpha1TrainJob,
     ) -> types.TrainJob:
         if not (
-            trainjob_crd.metadata
-            and trainjob_crd.metadata.name
-            and trainjob_crd.metadata.namespace
-            and trainjob_crd.spec
-            and trainjob_crd.metadata.creation_timestamp
+            trainjob_cr.metadata
+            and trainjob_cr.metadata.name
+            and trainjob_cr.metadata.namespace
+            and trainjob_cr.spec
+            and trainjob_cr.metadata.creation_timestamp
         ):
-            raise Exception(f"TrainJob CRD is invalid: {trainjob_crd}")
+            raise Exception(f"TrainJob CR is invalid: {trainjob_cr}")
 
-        name = trainjob_crd.metadata.name
-        namespace = trainjob_crd.metadata.namespace
+        name = trainjob_cr.metadata.name
+        namespace = trainjob_cr.metadata.namespace
 
-        runtime = self.get_runtime(trainjob_crd.spec.runtime_ref.name)
+        runtime = self.get_runtime(trainjob_cr.spec.runtime_ref.name)
 
-        # Construct the TrainJob from the CRD.
+        # Construct the TrainJob from the CR.
         trainjob = types.TrainJob(
             name=name,
-            creation_timestamp=trainjob_crd.metadata.creation_timestamp,
+            creation_timestamp=trainjob_cr.metadata.creation_timestamp,
             runtime=runtime,
             steps=[],
             # Number of nodes is taken from TrainJob or TrainingRuntime
             num_nodes=(
-                trainjob_crd.spec.trainer.num_nodes
-                if trainjob_crd.spec.trainer and trainjob_crd.spec.trainer.num_nodes
+                trainjob_cr.spec.trainer.num_nodes
+                if trainjob_cr.spec.trainer and trainjob_cr.spec.trainer.num_nodes
                 else runtime.trainer.num_nodes
             ),
             status=constants.TRAINJOB_CREATED,  # The default TrainJob status.
@@ -502,7 +465,7 @@ class KubernetesBackend(ExecutionBackend):
                 namespace,
                 label_selector=constants.POD_LABEL_SELECTOR.format(trainjob_name=name),
                 async_req=True,
-            ).get(constants.DEFAULT_TIMEOUT)
+            ).get(common_constants.DEFAULT_TIMEOUT)
 
             # Convert Pod to the correct format.
             pod_list = models.IoK8sApiCoreV1PodList.from_dict(response.to_dict())
@@ -552,8 +515,8 @@ class KubernetesBackend(ExecutionBackend):
             ) from e
 
         # Update the TrainJob status from its conditions.
-        if trainjob_crd.status and trainjob_crd.status.conditions:
-            for c in trainjob_crd.status.conditions:
+        if trainjob_cr.status and trainjob_cr.status.conditions:
+            for c in trainjob_cr.status.conditions:
                 if (
                     c.type == constants.TRAINJOB_COMPLETE
                     and c.status == "True"
@@ -578,3 +541,52 @@ class KubernetesBackend(ExecutionBackend):
                 trainjob.status = constants.TRAINJOB_RUNNING
 
         return trainjob
+
+    def _get_trainjob_spec(
+        self,
+        runtime: Optional[types.Runtime] = None,
+        initializer: Optional[types.Initializer] = None,
+        trainer: Optional[
+            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+        ] = None,
+    ) -> models.TrainerV1alpha1TrainJobSpec:
+        """Get TrainJob spec from the given parameters"""
+        if runtime is None:
+            runtime = self.get_runtime(constants.TORCH_RUNTIME)
+
+        # Build the Trainer.
+        trainer_cr = models.TrainerV1alpha1Trainer()
+
+        if trainer:
+            # If users choose to use a custom training script.
+            if isinstance(trainer, (types.CustomTrainer, types.CustomTrainerContainer)):
+                if runtime.trainer.trainer_type != types.TrainerType.CUSTOM_TRAINER:
+                    raise ValueError(f"CustomTrainer can't be used with {runtime} runtime")
+                trainer_cr = utils.get_trainer_cr_from_custom_trainer(runtime, trainer)
+
+            # If users choose to use a builtin trainer for post-training.
+            elif isinstance(trainer, types.BuiltinTrainer):
+                if runtime.trainer.trainer_type != types.TrainerType.BUILTIN_TRAINER:
+                    raise ValueError(f"BuiltinTrainer can't be used with {runtime} runtime")
+                trainer_cr = utils.get_trainer_cr_from_builtin_trainer(
+                    runtime, trainer, initializer
+                )
+
+            else:
+                raise ValueError(
+                    f"The trainer type {type(trainer)} is not supported. "
+                    "Please use CustomTrainer or BuiltinTrainer."
+                )
+
+        return models.TrainerV1alpha1TrainJobSpec(
+            runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),
+            trainer=(trainer_cr if trainer_cr != models.TrainerV1alpha1Trainer() else None),
+            initializer=(
+                models.TrainerV1alpha1Initializer(
+                    dataset=utils.get_dataset_initializer(initializer.dataset),
+                    model=utils.get_model_initializer(initializer.model),
+                )
+                if isinstance(initializer, types.Initializer)
+                else None
+            ),
+        )

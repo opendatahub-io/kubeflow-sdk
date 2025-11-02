@@ -18,6 +18,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Callable, Optional, Union
 
+import kubeflow.common.constants as common_constants
 from kubeflow.trainer.constants import constants
 
 
@@ -46,6 +47,25 @@ class CustomTrainer:
     pip_index_urls: list[str] = field(
         default_factory=lambda: list(constants.DEFAULT_PIP_INDEX_URLS)
     )
+    num_nodes: Optional[int] = None
+    resources_per_node: Optional[dict] = None
+    env: Optional[dict[str, str]] = None
+
+
+# Configuration for the Custom Trainer Container.
+@dataclass
+class CustomTrainerContainer:
+    """Custom Trainer Container configuration. Configure the container image
+        that encapsulates the entire model training process.
+
+    Args:
+        image (`str`): The container image that encapsulates the entire model training process.
+        num_nodes (`Optional[int]`): The number of nodes to use for training.
+        resources_per_node (`Optional[dict]`): The computing resources to allocate per node.
+        env (`Optional[dict[str, str]]`): The environment variables to set in the training nodes.
+    """
+
+    image: str
     num_nodes: Optional[int] = None
     resources_per_node: Optional[dict] = None
     env: Optional[dict[str, str]] = None
@@ -212,8 +232,8 @@ class RuntimeTrainer:
     trainer_type: TrainerType
     framework: str
     num_nodes: int = 1  # The default value is set in the APIs.
-    device: str = constants.UNKNOWN
-    device_count: str = constants.UNKNOWN
+    device: str = common_constants.UNKNOWN
+    device_count: str = common_constants.UNKNOWN
     __command: tuple[str, ...] = field(init=False, repr=False)
 
     @property
@@ -238,30 +258,59 @@ class Step:
     name: str
     status: Optional[str]
     pod_name: str
-    device: str = constants.UNKNOWN
-    device_count: str = constants.UNKNOWN
+    device: str = common_constants.UNKNOWN
+    device_count: str = common_constants.UNKNOWN
 
 
 # Representation for the TrainJob.
-# TODO (andreyvelich): Discuss what fields users want to get.
 @dataclass
 class TrainJob:
     name: str
-    creation_timestamp: datetime
     runtime: Runtime
     steps: list[Step]
     num_nodes: int
-    status: str = constants.UNKNOWN
+    creation_timestamp: datetime
+    status: str = common_constants.UNKNOWN
 
 
 # Configuration for the HuggingFace dataset initializer.
 # TODO (andreyvelich): Discuss how to keep these configurations is sync with pkg.initializers.types
 @dataclass
 class HuggingFaceDatasetInitializer:
-    """Configuration for downloading datasets from HuggingFace Hub."""
+    """Configuration for downloading datasets from HuggingFace Hub.
+
+    Args:
+        storage_uri (`str`): The HuggingFace Hub model identifier in the format 'hf://username/repo_name'.
+        ignore_patterns (`Optional[list[str]]`): List of file patterns to ignore during download.
+        access_token (`Optional[str]`): HuggingFace Hub access token for private datasets.
+    """
 
     storage_uri: str
+    ignore_patterns: Optional[list[str]] = None
     access_token: Optional[str] = None
+
+
+@dataclass
+class S3DatasetInitializer:
+    """Configuration for downloading datasets from S3-compatible storage.
+
+    Args:
+        storage_uri (`str`): The S3 URI for the model in the format 's3://bucket-name/path/to/model'.
+        ignore_patterns (`Optional[list[str]]`): List of file patterns to ignore during download.
+        endpoint (`Optional[str]`): Custom S3 endpoint URL.
+        access_key_id (`Optional[str]`): Access key for authentication.
+        secret_access_key (`Optional[str]`): Secret key for authentication.
+        region (`Optional[str]`): Region used in instantiating the client.
+        role_arn (`Optional[str]`): The ARN of the role you want to assume.
+    """
+
+    storage_uri: str
+    ignore_patterns: Optional[list[str]] = None
+    endpoint: Optional[str] = None
+    access_key_id: Optional[str] = None
+    secret_access_key: Optional[str] = None
+    region: Optional[str] = None
+    role_arn: Optional[str] = None
 
 
 @dataclass
@@ -313,8 +362,43 @@ class DataCacheInitializer:
 # Configuration for the HuggingFace model initializer.
 @dataclass
 class HuggingFaceModelInitializer:
+    """Configuration for downloading models from HuggingFace Hub.
+
+    Args:
+        storage_uri (`str`): The HuggingFace Hub model identifier in the format 'hf://username/repo_name'.
+        ignore_patterns (`Optional[list[str]]`): List of file patterns to ignore during download.
+        access_token (`Optional[str]`): HuggingFace Hub access token.
+    """
+
     storage_uri: str
+    ignore_patterns: Optional[list[str]] = None
     access_token: Optional[str] = None
+
+
+@dataclass
+class S3ModelInitializer:
+    """Configuration for downloading models from S3-compatible storage.
+
+    Args:
+        storage_uri (`str`): The S3 URI for the model in the format 's3://bucket-name/path/to/model'.
+        ignore_patterns (`Optional[list[str]]`): List of file patterns to ignore during download.
+            Defaults to `['*.msgpack', '*.h5', '*.bin', '.pt', '.pth']`.
+        endpoint (`Optional[str]`): Custom S3 endpoint URL.
+        access_key_id (`Optional[str]`): Access key for authentication.
+        secret_access_key (`Optional[str]`): Secret key for authentication.
+        region (`Optional[str]`): Region used in instantiating the client.
+        role_arn (`Optional[str]`): The ARN of the role you want to assume.
+    """
+
+    storage_uri: str
+    ignore_patterns: Optional[list[str]] = field(
+        default_factory=lambda: ["*.msgpack", "*.h5", "*.bin", ".pt", ".pth"]
+    )
+    endpoint: Optional[str] = None
+    access_key_id: Optional[str] = None
+    secret_access_key: Optional[str] = None
+    region: Optional[str] = None
+    role_arn: Optional[str] = None
 
 
 @dataclass
@@ -322,11 +406,37 @@ class Initializer:
     """Initializer defines configurations for dataset and pre-trained model initialization
 
     Args:
-        dataset (`Optional[Union[HuggingFaceDatasetInitializer, DataCacheInitializer]]`):
+        dataset (`Optional[Union[HuggingFaceDatasetInitializer, S3DatasetInitializer, DataCacheInitializer]]`):
             The configuration for one of the supported dataset initializers.
-        model (`Optional[HuggingFaceModelInitializer]`): The configuration for one of the
-            supported model initializers.
+        model (`Optional[Union[HuggingFaceModelInitializer, S3ModelInitializer]]`):
+            The configuration for one of the supported model initializers.
+    """  # noqa: E501
+
+    dataset: Optional[
+        Union[HuggingFaceDatasetInitializer, S3DatasetInitializer, DataCacheInitializer]
+    ] = None
+    model: Optional[Union[HuggingFaceModelInitializer, S3ModelInitializer]] = None
+
+
+# TODO (andreyvelich): Add train() and optimize() methods to this class.
+@dataclass
+class TrainJobTemplate:
+    """TrainJob template configuration.
+
+    Args:
+        trainer (`CustomTrainer`): Configuration for a CustomTrainer.
+        runtime (`Optional[Runtime]`): Optional, reference to one of the existing runtimes. Defaults
+            to the torch-distributed runtime if not provided.
+        initializer (`Optional[Initializer]`): Optional configuration for the dataset and model
+            initializers.
     """
 
-    dataset: Optional[Union[HuggingFaceDatasetInitializer, DataCacheInitializer]] = None
-    model: Optional[HuggingFaceModelInitializer] = None
+    trainer: CustomTrainer
+    runtime: Optional[Runtime] = None
+    initializer: Optional[Initializer] = None
+
+    def keys(self):
+        return ["trainer", "runtime", "initializer"]
+
+    def __getitem__(self, key):
+        return getattr(self, key)
