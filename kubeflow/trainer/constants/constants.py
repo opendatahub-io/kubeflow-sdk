@@ -15,16 +15,10 @@
 import os
 import textwrap
 
-# How long to wait in seconds for requests to the Kubernetes API Server.
-DEFAULT_TIMEOUT = 120
-
 # Common constants.
 GROUP = "trainer.kubeflow.org"
 VERSION = "v1alpha1"
 API_VERSION = f"{GROUP}/{VERSION}"
-
-# The default Kubernetes namespace.
-DEFAULT_NAMESPACE = "default"
 
 # The Kind name for the ClusterTrainingRuntime.
 CLUSTER_TRAINING_RUNTIME_KIND = "ClusterTrainingRuntime"
@@ -51,7 +45,7 @@ TRAINJOB_COMPLETE = "Complete"
 # The failed status of the TrainJob, defined when TrainJob CR has failed condition.
 TRAINJOB_FAILED = "Failed"
 
-# The succeeded phase of the Pod.
+# The succeeded phase of the Pods.
 POD_SUCCEEDED = "Succeeded"
 
 # The label key to identify the relationship between TrainJob and Pod template in the runtime.
@@ -72,6 +66,9 @@ MODEL_INITIALIZER = "model-initializer"
 # The env name for the access token of dataset/model initializer.
 INITIALIZER_ENV_ACCESS_TOKEN = "ACCESS_TOKEN"
 
+# The default value for initializer to ignore files.
+INITIALIZER_DEFAULT_IGNORE_PATTERNS = ["*.msgpack", "*.h5", "*.bin", ".pt", ".pth"]
+
 # The default path to the users' workspace.
 # TODO (andreyvelich): Discuss how to keep this path is sync with pkg.initializers.constants
 WORKSPACE_PATH = "/workspace"
@@ -88,9 +85,6 @@ LAUNCHER = "launcher"
 # The name of the ReplicatedJob and container of the node. The node usually represents
 # single VM where distributed training code is executed.
 NODE = "node"
-
-# Unknown indicates that the value can't be identified.
-UNKNOWN = "Unknown"
 
 # The label for cpu in the container resources.
 CPU_LABEL = "cpu"
@@ -171,3 +165,12 @@ TORCH_TUNE_COMMAND = ("tune", "run")
 
 # The Instruct Datasets class in torchtune
 TORCH_TUNE_INSTRUCT_DATASET = "torchtune.datasets.instruct_dataset"
+
+# Default container images for each framework (used as fallback when runtime not provided)
+DEFAULT_FRAMEWORK_IMAGES = {
+    "torch": "pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime",
+}
+
+# The length of the UUID suffix for auto-generated job names.
+# Total name length = 1 (random letter) + 11 (UUID hex) = 12 characters
+JOB_NAME_UUID_LENGTH = 11
