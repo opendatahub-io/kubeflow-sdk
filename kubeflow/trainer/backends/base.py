@@ -20,7 +20,12 @@ from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
 
 
-class ExecutionBackend(abc.ABC):
+class RuntimeBackend(abc.ABC):
+    """Base class for runtime backends.
+
+    Options self-validate by checking the backend instance type in their __call__ method.
+    """
+
     @abc.abstractmethod
     def list_runtimes(self) -> list[types.Runtime]:
         raise NotImplementedError()
@@ -38,7 +43,10 @@ class ExecutionBackend(abc.ABC):
         self,
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
-        trainer: Optional[Union[types.CustomTrainer, types.BuiltinTrainer]] = None,
+        trainer: Optional[
+            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+        ] = None,
+        options: Optional[list] = None,
     ) -> str:
         raise NotImplementedError()
 
@@ -54,7 +62,7 @@ class ExecutionBackend(abc.ABC):
     def get_job_logs(
         self,
         name: str,
-        follow: Optional[bool] = False,
+        follow: bool = False,
         step: str = constants.NODE + "-0",
     ) -> Iterator[str]:
         raise NotImplementedError()
