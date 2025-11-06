@@ -16,8 +16,10 @@ from collections.abc import Iterator
 import logging
 from typing import Optional, Union
 
+from kubeflow.common.types import KubernetesBackendConfig
+from kubeflow.trainer.backends.container.backend import ContainerBackend
+from kubeflow.trainer.backends.container.types import ContainerBackendConfig
 from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
-from kubeflow.trainer.backends.kubernetes.types import KubernetesBackendConfig
 from kubeflow.trainer.backends.localprocess.backend import (
     LocalProcessBackend,
     LocalProcessBackendConfig,
@@ -31,20 +33,25 @@ logger = logging.getLogger(__name__)
 class TrainerClient:
     def __init__(
         self,
-        backend_config: Union[KubernetesBackendConfig, LocalProcessBackendConfig] = None,
+        backend_config: Union[
+            KubernetesBackendConfig,
+            LocalProcessBackendConfig,
+            ContainerBackendConfig,
+        ] = None,
     ):
         """Initialize a Kubeflow Trainer client.
 
         Args:
-            backend_config: Backend configuration. Either KubernetesBackendConfig or
-                            LocalProcessBackendConfig, or None to use the backend's
-                            default config class. Defaults to KubernetesBackendConfig.
+            backend_config: Backend configuration. Either KubernetesBackendConfig,
+                            LocalProcessBackendConfig, ContainerBackendConfig,
+                            or None to use the backend's default config class.
+                            Defaults to KubernetesBackendConfig.
 
         Raises:
             ValueError: Invalid backend configuration.
 
         """
-        # initialize training backend
+        # Set the default backend config.
         if not backend_config:
             backend_config = KubernetesBackendConfig()
 
@@ -52,6 +59,8 @@ class TrainerClient:
             self.backend = KubernetesBackend(backend_config)
         elif isinstance(backend_config, LocalProcessBackendConfig):
             self.backend = LocalProcessBackend(backend_config)
+        elif isinstance(backend_config, ContainerBackendConfig):
+            self.backend = ContainerBackend(backend_config)
         else:
             raise ValueError(f"Invalid backend config '{backend_config}'")
 
@@ -95,12 +104,17 @@ class TrainerClient:
         self,
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
-        trainer: Optional[Union[types.CustomTrainer, types.BuiltinTrainer]] = None,
+        trainer: Optional[
+            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+        ] = None,
+        options: Optional[list] = None,
     ) -> str:
         """Create a TrainJob. You can configure the TrainJob using one of these trainers:
 
         - CustomTrainer: Runs training with a user-defined function that fully encapsulates the
             training process.
+        - CustomTrainerContainer: Runs training with a user-defined image that fully encapsulates
+            the training process.
         - BuiltinTrainer: Uses a predefined trainer with built-in post-training logic, requiring
             only parameter configuration.
 
@@ -108,8 +122,11 @@ class TrainerClient:
             runtime: Optional reference to one of the existing runtimes. Defaults to the
                 torch-distributed runtime if not provided.
             initializer: Optional configuration for the dataset and model initializers.
-            trainer: Optional configuration for a CustomTrainer or BuiltinTrainer. If not specified,
-                the TrainJob will use the runtime's default values.
+            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer, or
+                BuiltinTrainer. If not specified, the TrainJob will use the
+                runtime's default values.
+            options: Optional list of configuration options to apply to the TrainJob.
+                Options can be imported from kubeflow.trainer.options.
 
         Returns:
             The unique name of the TrainJob that has been generated.
@@ -119,7 +136,12 @@ class TrainerClient:
             TimeoutError: Timeout to create TrainJobs.
             RuntimeError: Failed to create TrainJobs.
         """
-        return self.backend.train(runtime=runtime, initializer=initializer, trainer=trainer)
+        return self.backend.train(
+            runtime=runtime,
+            initializer=initializer,
+            trainer=trainer,
+            options=options,
+        )
 
     def list_jobs(self, runtime: Optional[types.Runtime] = None) -> list[types.TrainJob]:
         """List of the created TrainJobs. If a runtime is specified, only TrainJobs associated with
