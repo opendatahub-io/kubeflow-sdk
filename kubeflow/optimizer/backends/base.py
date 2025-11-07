@@ -21,7 +21,7 @@ from kubeflow.optimizer.types.algorithm_types import RandomSearch
 from kubeflow.optimizer.types.optimization_types import (
     Objective,
     OptimizationJob,
-    Trial,
+    Result,
     TrialConfig,
 )
 from kubeflow.trainer.types.types import TrainJobTemplate
@@ -58,6 +58,10 @@ class RuntimeBackend(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
+    def get_best_results(self, name: str) -> Optional[Result]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
     def wait_for_job_status(
         self,
         name: str,
@@ -65,10 +69,6 @@ class RuntimeBackend(abc.ABC):
         timeout: int = 3600,
         polling_interval: int = 2,
     ) -> OptimizationJob:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_best_trial(self, name: str) -> Optional[Trial]:
         raise NotImplementedError()
 
     @abc.abstractmethod

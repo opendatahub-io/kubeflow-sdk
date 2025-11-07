@@ -23,7 +23,7 @@ from kubeflow.optimizer.types.algorithm_types import BaseAlgorithm
 from kubeflow.optimizer.types.optimization_types import (
     Objective,
     OptimizationJob,
-    Trial,
+    Result,
     TrialConfig,
 )
 from kubeflow.trainer.types.types import TrainJobTemplate
@@ -160,6 +160,25 @@ class OptimizerClient:
         """
         return self.backend.get_job_logs(name=name, trial_name=trial_name, follow=follow)
 
+    def get_best_results(self, name: str) -> Optional[Result]:
+        """Get the best hyperparameters and metrics from an OptimizationJob.
+
+        This method retrieves the optimal hyperparameters and their corresponding metrics
+        from the best trial found during the optimization process.
+
+        Args:
+            name: Name of the OptimizationJob.
+
+        Returns:
+            A Result object containing the best hyperparameters and metrics, or None if
+            no best trial is available yet.
+
+        Raises:
+            TimeoutError: Timeout to get an OptimizationJob.
+            RuntimeError: Failed to get an OptimizationJob.
+        """
+        return self.backend.get_best_results(name=name)
+
     def wait_for_job_status(
         self,
         name: str,
@@ -192,22 +211,6 @@ class OptimizerClient:
             timeout=timeout,
             polling_interval=polling_interval,
         )
-
-    def get_best_trial(self, name: str) -> Optional[Trial]:
-        """Get the current best Trial for an OptimizationJob.
-
-        Args:
-            name: Name of the OptimizationJob.
-
-        Returns:
-            The current best Trial with parameters, metrics, and associated TrainJob.
-            Returns None if the best trial is not available yet.
-
-        Raises:
-            TimeoutError: Timeout to get OptimizationJob.
-            RuntimeError: Failed to get OptimizationJob.
-        """
-        return self.backend.get_best_trial(name=name)
 
     def delete_job(self, name: str):
         """Delete the OptimizationJob.
