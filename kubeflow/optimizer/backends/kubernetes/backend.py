@@ -35,6 +35,7 @@ from kubeflow.optimizer.types.optimization_types import (
     Metric,
     Objective,
     OptimizationJob,
+    Result,
     Trial,
     TrialConfig,
 )
@@ -223,7 +224,7 @@ class KubernetesBackend(RuntimeBackend):
         # Determine what trial to get logs from.
         if trial_name is None:
             # Get logs from the best current trial.
-            best_trial = self.get_best_trial(name)
+            best_trial = self._get_best_trial(name)
             if best_trial is None:
                 # Get first trial if available.
                 optimization_job = self.get_job(name)
@@ -247,6 +248,18 @@ class KubernetesBackend(RuntimeBackend):
         container_name = constants.METRICS_COLLECTOR_CONTAINER
         yield from self.trainer_backend._read_pod_logs(
             pod_name=pod_name, container_name=container_name, follow=follow
+        )
+
+    def get_best_results(self, name: str) -> Optional[Result]:
+        """Get the best hyperparameters and metrics from an OptimizationJob"""
+        best_trial = self._get_best_trial(name)
+
+        if best_trial is None:
+            return None
+
+        return Result(
+            parameters=best_trial.parameters,
+            metrics=best_trial.metrics,
         )
 
     def wait_for_job_status(
@@ -293,7 +306,29 @@ class KubernetesBackend(RuntimeBackend):
             f"{status}"
         )
 
-    def get_best_trial(self, name: str) -> Optional[Trial]:
+    def delete_job(self, name: str):
+        """Delete the OptimizationJob"""
+
+        try:
+            self.custom_api.delete_namespaced_custom_object(
+                constants.GROUP,
+                constants.VERSION,
+                self.namespace,
+                constants.EXPERIMENT_PLURAL,
+                name=name,
+            )
+        except multiprocessing.TimeoutError as e:
+            raise TimeoutError(
+                f"Timeout to delete {constants.OPTIMIZATION_JOB_KIND}: {self.namespace}/{name}"
+            ) from e
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to delete {constants.OPTIMIZATION_JOB_KIND}: {self.namespace}/{name}"
+            ) from e
+
+        logger.debug(f"{constants.OPTIMIZATION_JOB_KIND} {self.namespace}/{name} has been deleted")
+
+    def _get_best_trial(self, name: str) -> Optional[Trial]:
         """Get the best current Trial for the OptimizationJob"""
         optimization_job = self.__get_experiment_cr(name)
 
@@ -337,28 +372,6 @@ class KubernetesBackend(RuntimeBackend):
             )
 
         return None
-
-    def delete_job(self, name: str):
-        """Delete the OptimizationJob"""
-
-        try:
-            self.custom_api.delete_namespaced_custom_object(
-                constants.GROUP,
-                constants.VERSION,
-                self.namespace,
-                constants.EXPERIMENT_PLURAL,
-                name=name,
-            )
-        except multiprocessing.TimeoutError as e:
-            raise TimeoutError(
-                f"Timeout to delete {constants.OPTIMIZATION_JOB_KIND}: {self.namespace}/{name}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to delete {constants.OPTIMIZATION_JOB_KIND}: {self.namespace}/{name}"
-            ) from e
-
-        logger.debug(f"{constants.OPTIMIZATION_JOB_KIND} {self.namespace}/{name} has been deleted")
 
     def __get_experiment_cr(self, name: str) -> models.V1beta1Experiment:
         """Get the Experiment CR from Kubernetes API"""
