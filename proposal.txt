@@ -1,0 +1,627 @@
+Implementation plan
+We are targeting delivering this upstream in kubeflow/trainer and kubeflow/sdk. We will need to go through the KEP process which may take some time and may not align with the RHOAI 3.2 release deadline. As a fallback plan, we will deliver the implementation midstream with the following modifications:
+Write the TrainerStatus to an annotation on the TrainJob object rather than to the status field. The annotation key will be trainer.opendatahub.io/trainerStatus the value will be a json payload with the same schema as the TrainJobTrainerStatus struct.
+
+Rather than communicating progress messages through the pod logs, the "primary" runtime pod of the runtime will serve metrics on a webserver, which the kft control plane will periodically call using the primary pod IP address directly.
+
+We use python's built-in `http.server.ThreadingHTTPServer` library to avoid installing extra dependencies. The server runs on port 28080 (configurable via trainer.opendatahub.io/metrics-port annotation). The controller polls the endpoint at a configurable interval (default 30s, configurable via trainer.opendatahub.io/metrics-poll-interval annotation, min 5s, max 300s). Network security is handled by existing pod network policies.
+
+
+Midstream SDK design outline
+
+Objectives:
+Create framework-specific custom trainers with an API similar to the existing CustomTrainer.
+Code is added in a way that it is 
+clear to users that it is experimental
+that it is easily rebaseable on top of the upstream code.  
+
+
+Example sketch:
+from kubeflow.trainer import TrainerClient
+from kubeflow.trainer.types import experimental
+
+client = TrainerClient()
+
+def train_fn():
+   from transformers import Trainer
+
+   trainer = Trainer(
+      ...  # all user-defined code. Can include checkpointing
+   )
+   trainer.train()
+
+
+client.train(
+    trainer=experimental.TransformersTrainer(
+       train_fn=train_fn,
+	func_args=...,
+	packages_to_install=...,
+	num_nodes=...
+	resources_per_node={ ... },
+	env={ ... },
+    )
+    runtime=client.get_runtime('pytorch-distributed'),
+)
+
+
+New and changed files:
+kubeflow/
+  trainer/
+    api/
+      trainer_client.py  # Routes experimental trainers to experimental backend
+    types/
+      experimental/
+        __init__.py      # Exports TransformersTrainer
+        types.py         # TransformersTrainer dataclass
+    experimental/
+      backends/
+        kubernetes.py    # ExperimentalKubernetesBackend
+      instrumentation/
+        http_server.py   # HTTP_SERVER_TEMPLATE, ProgressMetricsHandler
+        callbacks.py     # KubeflowProgressCallback, KubeflowCheckpointCallback
+        
+
+
+Implementation structure
+
+kubeflow/
+  trainer/
+    types/
+      experimental/
+        __init__.py           # Export TransformersTrainer
+        types.py             # TransformersTrainer dataclass (extends CustomTrainer)
+    experimental/
+      backends/
+        kubernetes.py        # ExperimentalKubernetesBackend (extends KubernetesBackend)
+      instrumentation/
+        __init__.py
+        callbacks.py         # Callback wrappers and injection logic
+        http_server.py       # HTTP server template code
+
+Design Pattern: Decorator/Wrapper Approach
+Instead of creating entirely new trainer types, wrap existing patterns with automatic instrumentation:
+
+For transformers:
+
+@dataclass
+class TransformersTrainer:
+    """Experimental trainer with auto-instrumentation for Transformers library.
+    
+    EXPERIMENTAL: API may change in future releases.
+    Automatically adds progression tracking and JIT checkpointing.
+    """
+    func: Callable  # User's training function
+    func_args: Optional[dict] = None
+    packages_to_install: Optional[list[str]] = None
+    pip_index_urls: list[str] = field(default_factory=...)
+    num_nodes: Optional[int] = None
+    resources_per_node: Optional[dict] = None
+    env: Optional[dict[str, str]] = None
+    
+    # Instrumentation config
+    enable_progression_tracking: bool = True
+    enable_jit_checkpointing: bool = True
+    checkpoint_resume: bool = True  # Auto-resume from latest checkpoint
+    metrics_port: int = 28080
+    metrics_poll_interval_seconds: int = 30  # Controller polling interval
+    custom_metrics: Optional[dict[str, str]] = None  # Map log keys to metric names
+
+For TrainingHub:
+
+@dataclass
+class TrainingHubTrainer:
+    """Experimental trainer with auto-instrumentation for training_hub algorithms.
+    
+    EXPERIMENTAL: API may change in future releases.
+    """
+    algorithm: Literal["sft", "osft"]  # Which training_hub algorithm
+    algorithm_params: dict  # Parameters for the algorithm
+    num_nodes: Optional[int] = None
+    resources_per_node: Optional[dict] = None
+    env: Optional[dict[str, str]] = None
+    
+    # Instrumentation config
+    enable_progression_tracking: bool = True
+    enable_jit_checkpointing: bool = True
+    checkpoint_resume: bool = True
+    metrics_port: int = 8080
+
+
+Instrumentation Implementation
+Inject instrumentation at runtime, not at SDK level  
+
+For Transformers : Use callback injection
+
+# In kubeflow/trainer/backends/kubernetes/utils.py (or new experimental utils)
+def get_transformers_trainer_wrapper_script() -> str:
+    """Returns wrapper script that auto-instruments Transformers Trainer."""
+    return """
+import sys
+import http.server
+import threading
+import json
+import signal
+from transformers import TrainerCallback
+
+# Progress tracking callback
+class KubeflowProgressCallback(TrainerCallback):
+    def __init__(self, metrics_port=8080):
+        self.metrics = {"epoch": 0, "step": 0, "loss": 0.0, "status": "initializing"}
+        self.server = self._start_server(metrics_port)
+        
+    def _start_server(self, port):
+        # Start HTTP server in background thread
+        handler = self._make_handler()
+        server = http.server.HTTPServer(('', port), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server
+        
+    def _make_handler(self):
+        metrics = self.metrics
+        class MetricsHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(metrics).encode())
+        return MetricsHandler
+        
+    def on_epoch_end(self, args, state, control, **kwargs):
+        self.metrics.update({
+            "epoch": state.epoch,
+            "step": state.global_step,
+            "status": "training"
+        })
+        
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs and 'loss' in logs:
+            self.metrics['loss'] = logs['loss']
+
+# JIT Checkpointing callback
+class KubeflowCheckpointCallback(TrainerCallback):
+    def __init__(self, checkpoint_dir, auto_resume=True):
+        self.checkpoint_dir = checkpoint_dir
+        self.auto_resume = auto_resume
+        self._setup_signal_handlers()
+        
+    def _setup_signal_handlers(self):
+        def checkpoint_handler(signum, frame):
+            print(f"Received signal {signum}, saving checkpoint...")
+            # Trigger checkpoint save
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, checkpoint_handler)
+        
+    def get_latest_checkpoint(self):
+        # Find latest checkpoint in checkpoint_dir
+        import os
+        from pathlib import Path
+        checkpoints = sorted(Path(self.checkpoint_dir).glob("checkpoint-*"))
+        return str(checkpoints[-1]) if checkpoints else None
+
+# Auto-inject callbacks into Trainer
+from transformers import trainer as trainer_module
+
+_original_init = trainer_module.Trainer.__init__
+
+def _instrumented_init(self, *args, **kwargs):
+    # Add our callbacks to the default callbacks
+    callbacks = kwargs.get('callbacks', [])
+    callbacks.extend([
+        KubeflowProgressCallback(),
+        KubeflowCheckpointCallback(kwargs.get('output_dir', './checkpoints'))
+    ])
+    kwargs['callbacks'] = callbacks
+    
+    # Check for checkpoint resume
+    checkpoint_callback = next(c for c in callbacks if isinstance(c, KubeflowCheckpointCallback))
+    if checkpoint_callback.auto_resume:
+        latest_checkpoint = checkpoint_callback.get_latest_checkpoint()
+        if latest_checkpoint and 'resume_from_checkpoint' not in kwargs:
+            print(f"Auto-resuming from checkpoint: {latest_checkpoint}")
+            kwargs['resume_from_checkpoint'] = latest_checkpoint
+    
+    _original_init(self, *args, **kwargs)
+
+trainer_module.Trainer.__init__ = _instrumented_init
+
+# Now import and run user's training function
+{user_func_import_and_call}
+"""
+
+	For TrainingHub : Hook into backend execution
+
+# Similar approach but different hook point
+# TrainingHub already uses instructlab.training or mini_trainer
+# We can wrap their run_training calls or add callbacks if they support it
+
+
+Backend Integration
+Modify kubeflow/trainer/backends/kubernetes/backend.py to handle experimental trainers:
+
+def train(self, trainer: Union[CustomTrainer, BuiltinTrainer, TransformersTrainer, TrainingHubTrainer], ...):
+    # Detect trainer type
+    if isinstance(trainer, TransformersTrainer):
+        return self._train_experimental_transformers(trainer, runtime)
+    elif isinstance(trainer, TrainingHubTrainer):
+        return self._train_experimental_training_hub(trainer, runtime)
+    # ... existing logic for CustomTrainer/BuiltinTrainer
+
+
+Key Benefits of This Approach
+Isolation: Experimental code is clearly separated in types/experimental/
+Non-invasive: Doesn't modify existing CustomTrainer or BuiltinTrainer
+Rebaseable: Easy to upstream later or remove if needed
+Framework-agnostic: Can work with both Transformers and TrainingHub
+Automatic: Users don't need to manually add callbacks
+Backwards compatible: Existing code continues to work
+
+Usage Example :
+
+from kubeflow.trainer import TrainerClient
+from kubeflow.trainer.types import experimental
+
+client = TrainerClient()
+
+# Transformers example
+def train_fn():
+    from transformers import Trainer, TrainingArguments
+    
+    trainer = Trainer(
+        model=model,
+        args=TrainingArguments(...),
+        train_dataset=dataset,
+        # No need to add callbacks - auto-injected!
+    )
+    trainer.train()
+
+client.train(
+    trainer=experimental.TransformersTrainer(
+        func=train_fn,
+        num_nodes=2,
+        resources_per_node={"gpu": 1},
+        enable_progression_tracking=True,
+        enable_jit_checkpointing=True,
+    ),
+    runtime=client.get_runtime('pytorch-distributed')
+)
+
+# TrainingHub example
+client.train(
+    trainer=experimental.TrainingHubTrainer(
+        algorithm="sft",
+        algorithm_params={
+            "model_path": "/path/to/model",
+            "data_path": "/path/to/data",
+            "ckpt_output_dir": "/output",
+            "num_epochs": 3,
+        },
+        num_nodes=2,
+        enable_progression_tracking=True,
+    ),
+    runtime=client.get_runtime('pytorch-distributed')
+)
+
+Testing strategy
+Unit tests for callback behavior
+Mock HTTP server tests
+Integration tests with both frameworks
+Separate test files: experimental_test.py
+
+HTTP Server setup for progression tracking
+Server Initialization (Inside Training Pod)
+The HTTP server starts before user training code runs:
+
+# This code is injected into the training pod command
+import http.server
+import threading
+import json
+from typing import Dict, Any
+
+class ProgressMetricsHandler(http.server.BaseHTTPRequestHandler):
+    """Handler that serves the current training metrics."""
+    
+    # Thread-safe shared state - updated by training callbacks
+    _metrics_lock: ClassVar[threading.Lock] = threading.Lock()
+    _metrics: ClassVar[Dict[str, Any]] = {
+        "status": "initializing",
+        "status_message": "Initializing training environment",
+        "status_details": {"last_event": None, "last_event_time": None, "warnings": []},
+        "progress": {"step_current": 0, "step_total": None, "percent": 0.0, "epoch": 0},
+        "time": {"elapsed_sec": 0.0, "elapsed": "0s", "remaining_sec": None, "remaining": None,
+                 "started_sec": None, "started_at": None, "updated_sec": None, "updated_at": None},
+        "metrics": {"loss": None, "learning_rate": None, "throughput_samples_sec": None},
+        "checkpoint": {"resumed_from": None, "last_step": None, "last_path": None, "saved_at": None},
+    }
+    
+    def do_GET(self):
+        """Respond to GET requests with current metrics (any path)."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(ProgressMetricsHandler.get_metrics_json().encode('utf-8'))
+    
+    def log_message(self, format, *args):
+        """Suppress HTTP server logs to avoid cluttering training logs."""
+        pass  # Or write to separate log file
+
+    @classmethod
+    def update_metrics(cls, updates: Dict[str, Any]) -> None:
+        """Thread-safe metrics update with nested dict support."""
+        with cls._metrics_lock:
+            for key, value in updates.items():
+                if isinstance(value, dict) and key in cls._metrics and isinstance(cls._metrics[key], dict):
+                    cls._metrics[key].update(value)
+                else:
+                    cls._metrics[key] = value
+    
+    @classmethod
+    def get_metrics_json(cls) -> str:
+        """Thread-safe metrics retrieval as JSON string."""
+        with cls._metrics_lock:
+            return json.dumps(cls._metrics)
+
+def start_metrics_server(port: int = 28080) -> http.server.ThreadingHTTPServer:
+    """Start HTTP server in background thread."""
+    server = http.server.ThreadingHTTPServer(('0.0.0.0', port), ProgressMetricsHandler)
+    server_thread = threading.Thread(
+        target=server.serve_forever,
+        daemon=True,
+        name='kubeflow-metrics-server'
+    )
+    server_thread.start()
+    print(f"[Kubeflow] Metrics server started on port {port}", flush=True)
+    return server
+
+# Start server immediately
+metrics_server = start_metrics_server(port=28080)
+
+
+Metrics Update Mechanism
+For Transformers - Use callbacks to update shared state:
+
+from transformers import TrainerCallback
+import time
+
+class KubeflowProgressCallback(TrainerCallback):
+    """Callback that updates the HTTP server's metrics."""
+    
+    def __init__(self):
+        self._start_time = None
+        self._training_started = False
+    
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        """Format duration to human-readable (e.g., '2h 15m 45s')."""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        parts = []
+        if hours > 0: parts.append(f"{hours}h")
+        if minutes > 0: parts.append(f"{minutes}m")
+        parts.append(f"{secs}s")
+        return " ".join(parts)
+    
+    @staticmethod
+    def _format_timestamp(timestamp: float) -> str:
+        """Format Unix timestamp to ISO 8601 (e.g., '2025-11-10 14:30:00')."""
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+    
+    def on_train_begin(self, args, state, control, **kwargs):
+        self._start_time = time.time()
+        self._training_started = True
+        ProgressMetricsHandler.update_metrics({
+            "status": "training",
+            "status_message": "Training started",
+            "status_details": {"last_event": "training_started", "last_event_time": self._format_timestamp(self._start_time)},
+            "progress": {"step_total": state.max_steps if state.max_steps > 0 else None},
+            "time": {"started_sec": self._start_time, "started_at": self._format_timestamp(self._start_time)},
+        })
+    
+    def on_step_end(self, args, state, control, **kwargs):
+        if not self._training_started: return
+        current_time = time.time()
+        elapsed_sec = current_time - self._start_time
+        progress_pct = (state.global_step / state.max_steps * 100) if state.max_steps > 0 else 0.0
+        remaining_sec = None
+        if state.max_steps > 0 and state.global_step > 0:
+            remaining_sec = (elapsed_sec / state.global_step) * (state.max_steps - state.global_step)
+        status_msg = f"Training in progress: {progress_pct:.1f}% complete"
+        if remaining_sec: status_msg += f", {self._format_duration(remaining_sec)} remaining"
+        ProgressMetricsHandler.update_metrics({
+            "status_message": status_msg,
+            "progress": {"step_current": state.global_step, "percent": round(progress_pct, 1), "epoch": int(state.epoch) if state.epoch else 0},
+            "time": {"elapsed_sec": round(elapsed_sec, 1), "elapsed": self._format_duration(elapsed_sec),
+                     "remaining_sec": round(remaining_sec, 1) if remaining_sec else None,
+                     "remaining": self._format_duration(remaining_sec) if remaining_sec else None,
+                     "updated_sec": current_time, "updated_at": self._format_timestamp(current_time)},
+        })
+    
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs:
+            metrics_update = {}
+            if "loss" in logs: metrics_update["loss"] = round(logs["loss"], 4)
+            if "learning_rate" in logs: metrics_update["learning_rate"] = logs["learning_rate"]
+            if "train_samples_per_second" in logs: metrics_update["throughput_samples_sec"] = round(logs["train_samples_per_second"], 2)
+            if metrics_update: ProgressMetricsHandler.update_metrics({"metrics": metrics_update})
+    
+    def on_save(self, args, state, control, **kwargs):
+        checkpoint_path = f"{args.output_dir}/checkpoint-{state.global_step}"
+        ProgressMetricsHandler.update_metrics({
+            "status_details": {"last_event": "checkpoint_saved", "last_event_time": self._format_timestamp(time.time())},
+            "checkpoint": {"last_step": state.global_step, "last_path": checkpoint_path, "saved_at": self._format_timestamp(time.time())},
+        })
+    
+    def on_train_end(self, args, state, control, **kwargs):
+        elapsed_sec = time.time() - self._start_time if self._start_time else 0
+        ProgressMetricsHandler.update_metrics({
+            "status": "completed",
+            "status_message": f"Training completed successfully in {self._format_duration(elapsed_sec)}",
+            "status_details": {"last_event": "training_completed", "last_event_time": self._format_timestamp(time.time())},
+            "progress": {"percent": 100.0},
+        })
+
+# Register callback (auto-injected by our wrapper)
+
+For TrainingHub - Hook into their progress tracking:
+
+# TrainingHub already has some progress tracking
+# We need to bridge that to our HTTP server
+
+# Option 1: If they write to a file, poll it
+def poll_training_hub_progress(progress_file: str):
+    """Poll TrainingHub progress file and update metrics."""
+    while True:
+        try:
+            with open(progress_file, 'r') as f:
+                progress = json.load(f)
+                ProgressMetricsHandler.metrics.update(progress)
+        except Exception as e:
+            pass  # File might not exist yet
+        time.sleep(1)  # Poll every second
+
+# Start poller in background
+threading.Thread(
+    target=poll_training_hub_progress,
+    args=('/path/to/progress.json',),
+    daemon=True
+).start()
+
+# Option 2: If they have hooks/callbacks, use those
+# (Need to check TrainingHub implementation)
+
+Controller Polling Logic
+In the KFT controller (Go/Kubernetes side):
+
+// pkg/util/trainjob/progression.go
+func GetMetricsPollInterval(trainJob *trainer.TrainJob) time.Duration {
+    defaultInterval := time.Duration(constants.DefaultMetricsPollIntervalSecs) * time.Second
+    if trainJob.Annotations == nil {
+        return defaultInterval
+    }
+    intervalStr := trainJob.Annotations[constants.AnnotationMetricsPollInterval]
+    if intervalStr == "" {
+        return defaultInterval
+    }
+    // Parse as duration string (e.g., "30s") or integer seconds
+    interval, err := time.ParseDuration(intervalStr)
+    if err != nil {
+        if seconds, parseErr := strconv.Atoi(intervalStr); parseErr == nil {
+            interval = time.Duration(seconds) * time.Second
+        } else {
+            return defaultInterval
+        }
+    }
+    // Enforce min 5s, max 300s
+    if interval < 5*time.Second { return 5 * time.Second }
+    if interval > 300*time.Second { return 300 * time.Second }
+    return interval
+}
+
+func PollTrainingProgress(ctx context.Context, pod *corev1.Pod, metricsPort string) (*TrainerStatus, error) {
+    metricsURL := fmt.Sprintf("http://%s:%s/metrics", pod.Status.PodIP, metricsPort)
+    client := &http.Client{Timeout: 5 * time.Second}
+    resp, err := client.Get(metricsURL)
+    if err != nil { return nil, err }
+    defer resp.Body.Close()
+    
+    // Parse JSON with custom metrics support
+    var rawStatus map[string]interface{}
+    if err := json.Unmarshal(body, &rawStatus); err != nil { return nil, err }
+    var status TrainerStatus
+    if err := json.Unmarshal(body, &status); err != nil { return nil, err }
+    // Extract custom metrics
+    if metricsRaw, ok := rawStatus["metrics"].(map[string]interface{}); ok {
+        status.Metrics.Custom = make(map[string]interface{})
+        for key, value := range metricsRaw {
+            if key != "loss" && key != "learning_rate" && key != "throughput_samples_sec" {
+                status.Metrics.Custom[key] = value
+            }
+        }
+    }
+    return &status, nil
+}
+
+func UpdateTrainerStatusAnnotation(trainJob *trainer.TrainJob, status *TrainerStatus) error {
+    if trainJob.Annotations == nil {
+        trainJob.Annotations = make(map[string]string)
+    }
+    statusJSON, err := json.Marshal(status)
+    if err != nil { return err }
+    trainJob.Annotations[constants.AnnotationTrainerStatus] = string(statusJSON)
+    return nil
+}
+
+// pkg/controller/trainjob_controller.go
+func (r *TrainJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    // ... existing reconciliation logic ...
+    
+    // Poll progress for running jobs with progression tracking enabled
+    isRunning := !meta.IsStatusConditionTrue(trainJob.Status.Conditions, trainer.TrainJobSuspended) &&
+                !meta.IsStatusConditionTrue(trainJob.Status.Conditions, trainer.TrainJobComplete) &&
+                !meta.IsStatusConditionTrue(trainJob.Status.Conditions, trainer.TrainJobFailed)
+    
+    if isRunning && trainjobutil.IsProgressionTrackingEnabled(&trainJob) {
+        if updated, pollErr := trainjobutil.PollAndUpdateProgress(ctx, r.client, &trainJob); pollErr != nil {
+            log.V(1).Info("Failed to poll training progress", "error", pollErr)
+        } else if updated {
+            log.V(2).Info("Successfully updated training progress")
+        }
+        
+        // Requeue with configurable interval
+        pollInterval := trainjobutil.GetMetricsPollInterval(&trainJob)
+        return ctrl.Result{RequeueAfter: pollInterval}, nil
+    }
+    
+    return ctrl.Result{}, nil
+}
+Annotations (Configuration & Status)
+
+Configuration annotations (set by user/SDK):
+  trainer.opendatahub.io/progression-tracking: "enabled"
+  trainer.opendatahub.io/metrics-port: "28080"
+  trainer.opendatahub.io/metrics-poll-interval: "30"  # seconds or duration string
+  trainer.opendatahub.io/framework: "transformers"
+
+Status annotation (set by controller):
+  trainer.opendatahub.io/trainerStatus: <JSON payload>
+
+Response format:
+
+// GET http://pod-ip:28080/metrics
+{
+  "status": "training",
+  "status_message": "Training in progress: 45.3% complete, 2h 15m remaining",
+  "status_details": {
+    "last_event": "checkpoint_saved",
+    "last_event_time": "2025-11-10 14:30:00",
+    "warnings": []
+  },
+  "progress": {
+    "step_current": 453,
+    "step_total": 1000,
+    "percent": 45.3,
+    "epoch": 2
+  },
+  "time": {
+    "elapsed_sec": 8145.23,
+    "elapsed": "2h 15m 45s",
+    "remaining_sec": 9854.77,
+    "remaining": "2h 44m 14s",
+    "started_at": "2025-11-10 12:00:00",
+    "updated_at": "2025-11-10 14:15:45"
+  },
+  "metrics": {
+    "loss": 0.234,
+    "learning_rate": 0.0002,
+    "throughput_samples_sec": 128.5,
+    // ... custom metrics ...
+  },
+  "checkpoint": {
+    "resumed_from": "/workspace/checkpoints/checkpoint-300",
+    "last_step": 400,
+    "last_path": "/workspace/checkpoints/checkpoint-400",
+    "saved_at": "2025-11-10 14:30:00"
+  }
+}
+

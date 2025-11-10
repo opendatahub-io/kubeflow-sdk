@@ -174,3 +174,11 @@ DEFAULT_FRAMEWORK_IMAGES = {
 # The length of the UUID suffix for auto-generated job names.
 # Total name length = 1 (random letter) + 11 (UUID hex) = 12 characters
 JOB_NAME_UUID_LENGTH = 11
+
+# Experimental: Progression tracking annotations for OpenDataHub
+# These annotations enable real-time training progress monitoring via HTTP metrics
+ANNOTATION_PROGRESSION_TRACKING = "trainer.opendatahub.io/progression-tracking"
+ANNOTATION_METRICS_PORT = "trainer.opendatahub.io/metrics-port"
+ANNOTATION_METRICS_POLL_INTERVAL = "trainer.opendatahub.io/metrics-poll-interval"
+ANNOTATION_FRAMEWORK = "trainer.opendatahub.io/framework"
+ANNOTATION_TRAINER_STATUS = "trainer.opendatahub.io/trainerStatus"

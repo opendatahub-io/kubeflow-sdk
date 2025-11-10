@@ -25,7 +25,9 @@ from kubeflow.trainer.backends.localprocess.backend import (
     LocalProcessBackendConfig,
 )
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.experimental.backends import ExperimentalKubernetesBackend
 from kubeflow.trainer.types import types
+from kubeflow.trainer.types.experimental import TransformersTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +107,12 @@ class TrainerClient:
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
-            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+            Union[
+                types.CustomTrainer,
+                types.CustomTrainerContainer,
+                types.BuiltinTrainer,
+                TransformersTrainer,
+            ]
         ] = None,
         options: Optional[list] = None,
     ) -> str:
@@ -117,14 +124,16 @@ class TrainerClient:
             the training process.
         - BuiltinTrainer: Uses a predefined trainer with built-in post-training logic, requiring
             only parameter configuration.
+        - TransformersTrainer (EXPERIMENTAL): CustomTrainer with auto-instrumentation for
+            HuggingFace Transformers, including progression tracking and JIT checkpointing.
 
         Args:
             runtime: Optional reference to one of the existing runtimes. Defaults to the
                 torch-distributed runtime if not provided.
             initializer: Optional configuration for the dataset and model initializers.
-            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer, or
-                BuiltinTrainer. If not specified, the TrainJob will use the
-                runtime's default values.
+            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer,
+                BuiltinTrainer, or TransformersTrainer. If not specified,
+                the TrainJob will use the runtime's default values.
             options: Optional list of configuration options to apply to the TrainJob.
                 Options can be imported from kubeflow.trainer.options.
 
@@ -136,6 +145,25 @@ class TrainerClient:
             TimeoutError: Timeout to create TrainJobs.
             RuntimeError: Failed to create TrainJobs.
         """
+        # Use experimental backend for TransformersTrainer
+        if isinstance(trainer, TransformersTrainer):
+            if isinstance(self.backend, KubernetesBackend):
+                experimental_backend = ExperimentalKubernetesBackend(
+                    cfg=KubernetesBackendConfig(namespace=self.backend.namespace),
+                    custom_api=self.backend.custom_api,
+                    core_api=self.backend.core_api,
+                )
+                return experimental_backend.train(
+                    runtime=runtime,
+                    initializer=initializer,
+                    trainer=trainer,
+                    options=options,
+                )
+            else:
+                raise ValueError(
+                    f"TransformersTrainer requires KubernetesBackend, "
+                    f"got {type(self.backend).__name__}"
+                )
         return self.backend.train(
             runtime=runtime,
             initializer=initializer,
