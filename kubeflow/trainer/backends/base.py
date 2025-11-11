@@ -17,6 +17,7 @@ from collections.abc import Iterator
 from typing import Optional, Union
 
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai import RHAITrainer
 from kubeflow.trainer.types import types
 
 
@@ -44,7 +45,12 @@ class RuntimeBackend(abc.ABC):
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
-            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+            Union[
+                types.CustomTrainer,
+                types.CustomTrainerContainer,
+                types.BuiltinTrainer,
+                RHAITrainer,
+            ]
         ] = None,
         options: Optional[list] = None,
     ) -> str:

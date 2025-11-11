@@ -32,6 +32,9 @@ import kubeflow.common.utils as common_utils
 from kubeflow.trainer.backends.base import RuntimeBackend
 import kubeflow.trainer.backends.kubernetes.utils as utils
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai import utils as rhai_utils
+from kubeflow.trainer.rhai.traininghub import TrainingHubTrainer
+from kubeflow.trainer.rhai.transformers import TransformersTrainer
 from kubeflow.trainer.types import types
 
 logger = logging.getLogger(__name__)
@@ -593,7 +596,13 @@ class KubernetesBackend(RuntimeBackend):
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
-            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+            Union[
+                types.CustomTrainer,
+                types.CustomTrainerContainer,
+                types.BuiltinTrainer,
+                TrainingHubTrainer,
+                TransformersTrainer,
+            ]
         ] = None,
         trainer_overrides: Optional[dict[str, Any]] = None,
         spec_labels: Optional[dict[str, str]] = None,
@@ -622,10 +631,17 @@ class KubernetesBackend(RuntimeBackend):
                     runtime, trainer, initializer
                 )
 
+            # If users choose to use an RHAI trainer.
+            elif isinstance(trainer, (TrainingHubTrainer, TransformersTrainer)):
+                trainer_cr = rhai_utils.get_trainer_crd_from_rhai_trainer(
+                    runtime, trainer, initializer
+                )
+
             else:
                 raise ValueError(
                     f"The trainer type {type(trainer)} is not supported. "
-                    "Please use CustomTrainer, CustomTrainerContainer, or BuiltinTrainer."
+                    "Please use CustomTrainer, CustomTrainerContainer, BuiltinTrainer, "
+                    "or an rhai trainer."
                 )
 
         # Apply trainer overrides if trainer was not provided but overrides exist

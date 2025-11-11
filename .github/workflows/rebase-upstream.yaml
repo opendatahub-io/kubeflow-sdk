@@ -57,9 +57,9 @@ jobs:
         id: merge_step
         run: |
           set -euo pipefail
-          
+
           EXCLUDED_PATHS=(".github" "CHANGELOG" "OWNERS")
-          
+
           # Check if path is excluded
           is_excluded() {
             local file="$1"
@@ -70,7 +70,7 @@ jobs:
             done
             return 1
           }
-          
+
           # Try merge without committing
           if git merge --no-commit --no-ff "upstream/${UPSTREAM_BRANCH}"; then
             echo "Clean merge - restoring excluded paths"
@@ -83,7 +83,7 @@ jobs:
                 git rm -rf "${path}" || true
               fi
             done
-            
+
             # Only commit if there are changes
             if git diff --cached --quiet && git diff --quiet; then
               echo "No changes to commit (already up to date)"
@@ -95,13 +95,13 @@ jobs:
           else
             # Conflicts detected
             mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U || true)
-            
+
             if [ ${#CONFLICTS[@]} -eq 0 ]; then
               echo "ERROR: Merge failed but no conflicts listed"
               git merge --abort
               exit 1
             fi
-            
+
             # Check if all conflicts are in excluded paths
             ONLY_EXCLUDED=true
             for file in "${CONFLICTS[@]}"; do
@@ -111,7 +111,7 @@ jobs:
                 break
               fi
             done
-            
+
             if [ "$ONLY_EXCLUDED" = true ]; then
               echo "Conflicts only in excluded paths - keeping midstream version"
               # Resolve all conflicts to keep midstream version
@@ -129,7 +129,7 @@ jobs:
               done
               echo ""
               echo "Creating conflict PR for manual resolution..."
-              
+
               # Resolve excluded path conflicts automatically (keep ours)
               for file in "${CONFLICTS[@]}"; do
                 if is_excluded "$file"; then
@@ -138,7 +138,7 @@ jobs:
                   git add "$file" || true
                 fi
               done
-              
+
               # Check if there are still unresolved conflicts
               UNRESOLVED=$(git diff --name-only --diff-filter=U || echo "")
               if [ -n "$UNRESOLVED" ]; then
@@ -168,7 +168,7 @@ jobs:
             echo "PR needed for conflict resolution"
             exit 0
           fi
-          
+
           # Check if there are changes outside excluded paths
           if git diff --quiet "origin/${DOWNSTREAM_BRANCH}...${HEAD_BRANCH}" -- \
             ':!.github' ':!CHANGELOG' ':!OWNERS'; then
@@ -196,7 +196,7 @@ jobs:
             TITLE="sync: Merge upstream/${UPSTREAM_BRANCH} into ${DOWNSTREAM_BRANCH}"
             BODY="Successfully merged upstream changes. Excluded paths (.github, CHANGELOG, OWNERS) preserved from midstream."
           fi
-          
+
           PR_NUMBER=$(gh pr list \
             --repo "${GITHUB_REPOSITORY}" \
             --head "${HEAD_BRANCH}" \
@@ -205,7 +205,7 @@ jobs:
             --label "${LABEL}" \
             --json number \
             --jq '.[0].number // empty')
-          
+
           if [ -n "$PR_NUMBER" ]; then
             echo "Updating PR #${PR_NUMBER}"
             gh pr edit "$PR_NUMBER" \

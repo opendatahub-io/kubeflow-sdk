@@ -41,6 +41,11 @@ from kubeflow.trainer.options import (
     SpecAnnotations,
     SpecLabels,
 )
+from kubeflow.trainer.rhai import (
+    TrainingHubAlgorithms,
+    TrainingHubTrainer,
+    traininghub as rhai_traininghub,
+)
 from kubeflow.trainer.test.common import (
     DEFAULT_NAMESPACE,
     FAILED,
@@ -305,6 +310,26 @@ def get_train_job(
     )
 
     return train_job
+
+
+def get_traininghub_trainer_for_expected(
+    runtime: types.Runtime,
+    algo: TrainingHubAlgorithms,
+    func_args: Optional[dict] = None,
+    packages_to_install: Optional[list[str]] = None,
+    pip_index_urls: Optional[list[str]] = None,
+    env: Optional[dict[str, str]] = None,
+) -> models.TrainerV1alpha1Trainer:
+    """Use production builder to construct expected TrainingHub Trainer CR."""
+    trainer_cfg = TrainingHubTrainer(
+        func=None,
+        func_args=func_args,
+        packages_to_install=packages_to_install,
+        pip_index_urls=pip_index_urls or constants.DEFAULT_PIP_INDEX_URLS,
+        env=env,
+        algorithm=algo,
+    )
+    return rhai_traininghub.get_trainer_crd_from_training_hub_trainer(runtime, trainer_cfg)
 
 
 def get_cluster_custom_object_response(*args, **kwargs):
@@ -799,6 +824,30 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                 train_job_trainer=get_custom_trainer(
                     pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
                     packages_to_install=["torch", "numpy"],
+                ),
+            ),
+        ),
+        TestCase(
+            name="valid flow with experimental TrainingHub trainer (SFT)",
+            expected_status=SUCCESS,
+            config={
+                "trainer": TrainingHubTrainer(
+                    func=None,
+                    func_args={"nnodes": 2, "nproc_per_node": 2, "data_path": "/data/file.json"},
+                    packages_to_install=["training_hub"],
+                    pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
+                    algorithm=TrainingHubAlgorithms.SFT,
+                )
+            },
+            expected_output=get_train_job(
+                runtime_name=TORCH_RUNTIME,
+                train_job_name=TRAIN_JOB_WITH_CUSTOM_TRAINER,
+                train_job_trainer=get_traininghub_trainer_for_expected(
+                    runtime=create_runtime_type(name=TORCH_RUNTIME),
+                    algo=TrainingHubAlgorithms.SFT,
+                    func_args={"nnodes": 2, "nproc_per_node": 2, "data_path": "/data/file.json"},
+                    packages_to_install=["training_hub"],
+                    pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
                 ),
             ),
         ),
