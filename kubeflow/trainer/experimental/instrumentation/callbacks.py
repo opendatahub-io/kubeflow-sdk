@@ -119,9 +119,17 @@ from transformers import trainer as trainer_module
 _original_init = trainer_module.Trainer.__init__
 
 def _instrumented_init(self, *args, **kwargs):
-    callbacks = kwargs.get('callbacks', [])
+    existing_callbacks = kwargs.get("callbacks")
+    if existing_callbacks is None:
+        callbacks = []
+    elif isinstance(existing_callbacks, TrainerCallback):
+        callbacks = [existing_callbacks]
+    else:
+        # Handle list, tuple, or other iterables
+        callbacks = list(existing_callbacks) if existing_callbacks else []
+
     callbacks.append(KubeflowProgressCallback())
-    kwargs['callbacks'] = callbacks
+    kwargs["callbacks"] = callbacks
     _original_init(self, *args, **kwargs)
 
 trainer_module.Trainer.__init__ = _instrumented_init

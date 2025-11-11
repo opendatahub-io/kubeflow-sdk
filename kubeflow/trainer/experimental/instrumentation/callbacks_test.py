@@ -129,3 +129,17 @@ def test_transformers_wrapper_rejects_invalid_metrics():
 
     with pytest.raises(ValueError, match="cannot be empty"):
         get_transformers_trainer_wrapper_script(custom_metrics={"eval": "   "})
+
+
+def test_transformers_wrapper_handles_callback_edge_cases():
+    """Generated wrapper should handle None, tuple, and single callback instances."""
+    script = get_transformers_trainer_wrapper_script()
+
+    # Verify the wrapper handles different callback input types
+    # The script should normalize callbacks to a list before appending
+    assert "existing_callbacks = kwargs.get" in script
+    assert "isinstance(existing_callbacks, TrainerCallback)" in script
+    assert "list(existing_callbacks)" in script
+
+    # Script should compile successfully
+    compile(script, "<string>", "exec")
