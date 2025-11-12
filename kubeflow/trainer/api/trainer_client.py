@@ -14,7 +14,7 @@
 
 from collections.abc import Iterator
 import logging
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.trainer.backends.container.backend import ContainerBackend
@@ -25,9 +25,10 @@ from kubeflow.trainer.backends.localprocess.backend import (
     LocalProcessBackendConfig,
 )
 from kubeflow.trainer.constants import constants
-from kubeflow.trainer.experimental.backends import ExperimentalKubernetesBackend
 from kubeflow.trainer.types import types
-from kubeflow.trainer.types.experimental import TransformersTrainer
+
+if TYPE_CHECKING:
+    from kubeflow.trainer.rhai import RHAITrainer
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ class TrainerClient:
                 types.CustomTrainer,
                 types.CustomTrainerContainer,
                 types.BuiltinTrainer,
-                TransformersTrainer,
+                "RHAITrainer",
             ]
         ] = None,
         options: Optional[list] = None,
@@ -124,8 +125,8 @@ class TrainerClient:
             the training process.
         - BuiltinTrainer: Uses a predefined trainer with built-in post-training logic, requiring
             only parameter configuration.
-        - TransformersTrainer (EXPERIMENTAL): CustomTrainer with auto-instrumentation for
-            HuggingFace Transformers, including progression tracking and JIT checkpointing.
+        - TransformersTrainer: CustomTrainer with auto-instrumentation for
+            HuggingFace Transformers, including progression tracking.
 
         Args:
             runtime: Optional reference to one of the existing runtimes. Defaults to the
@@ -145,25 +146,6 @@ class TrainerClient:
             TimeoutError: Timeout to create TrainJobs.
             RuntimeError: Failed to create TrainJobs.
         """
-        # Use experimental backend for TransformersTrainer
-        if isinstance(trainer, TransformersTrainer):
-            if isinstance(self.backend, KubernetesBackend):
-                experimental_backend = ExperimentalKubernetesBackend(
-                    cfg=KubernetesBackendConfig(namespace=self.backend.namespace),
-                    custom_api=self.backend.custom_api,
-                    core_api=self.backend.core_api,
-                )
-                return experimental_backend.train(
-                    runtime=runtime,
-                    initializer=initializer,
-                    trainer=trainer,
-                    options=options,
-                )
-            else:
-                raise ValueError(
-                    f"TransformersTrainer requires KubernetesBackend, "
-                    f"got {type(self.backend).__name__}"
-                )
         return self.backend.train(
             runtime=runtime,
             initializer=initializer,

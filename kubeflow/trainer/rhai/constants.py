@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Experimental backends for instrumented training."""
+"""Constants for RHAI trainers"""
 
-from kubeflow.trainer.experimental.backends.kubernetes import ExperimentalKubernetesBackend
-
-__all__ = ["ExperimentalKubernetesBackend"]
+# Progression tracking annotations for OpenDataHub/RHAI
+# These annotations enable real-time training progress monitoring via HTTP metrics
+ANNOTATION_PROGRESSION_TRACKING = "trainer.opendatahub.io/progression-tracking"
+ANNOTATION_METRICS_PORT = "trainer.opendatahub.io/metrics-port"
+ANNOTATION_METRICS_POLL_INTERVAL = "trainer.opendatahub.io/metrics-poll-interval"
+ANNOTATION_FRAMEWORK = "trainer.opendatahub.io/framework"
+ANNOTATION_TRAINER_STATUS = "trainer.opendatahub.io/trainerStatus"

@@ -12,18 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Experimental trainer types with auto-instrumentation.
+"""Red Hat AI (RHAI) trainer implementations.
 
-EXPERIMENTAL: These APIs are subject to change in future releases.
-
-This module provides experimental trainer types that automatically add:
-- Training progression tracking via HTTP metrics endpoint
-
-These features are currently midstream-only and may be upstreamed in the future.
+This module provides RHAI trainer types and utilities:
+- TransformersTrainer: HuggingFace Transformers/TRL with instrumentation
+- TrainingHubTrainer: (future) RHAI Training Hub integration
+- get_job_progress: Retrieve training progress metrics from TrainJobs
 """
 
-from kubeflow.trainer.types.experimental.types import TransformersTrainer
+from typing import Union
+
+from kubeflow.trainer.rhai.transformers import TransformersTrainer
+from kubeflow.trainer.rhai.utils import get_job_progress
+
+# Type alias for all RHAI trainers (will expand as more are added)
+RHAITrainer = Union[TransformersTrainer]
 
 __all__ = [
     "TransformersTrainer",
+    "RHAITrainer",
+    "get_job_progress",
 ]
