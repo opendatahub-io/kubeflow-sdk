@@ -176,7 +176,7 @@ class KubernetesBackend(RuntimeBackend):
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
-            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer, Any]
         ] = None,
         options: Optional[list] = None,
     ) -> str:
@@ -208,6 +208,35 @@ class KubernetesBackend(RuntimeBackend):
             spec_annotations = spec_section.get("annotations")
             trainer_overrides = spec_section.get("trainer", {})
             pod_template_overrides = spec_section.get("podTemplateOverrides")
+
+        # Auto-add progression tracking annotations for RHAI trainers
+        if (
+            trainer
+            and hasattr(trainer, "__module__")
+            and "rhai" in trainer.__module__
+            and hasattr(trainer, "enable_progression_tracking")
+            and trainer.enable_progression_tracking
+        ):
+            # Import here to avoid circular dependency
+            from kubeflow.trainer.rhai.constants import (
+                ANNOTATION_FRAMEWORK,
+                ANNOTATION_METRICS_POLL_INTERVAL,
+                ANNOTATION_METRICS_PORT,
+                ANNOTATION_PROGRESSION_TRACKING,
+            )
+
+            progression_annotations = {
+                ANNOTATION_PROGRESSION_TRACKING: "enabled",
+                ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
+                ANNOTATION_METRICS_POLL_INTERVAL: str(trainer.metrics_poll_interval_seconds),
+                ANNOTATION_FRAMEWORK: "transformers",
+            }
+
+            # Merge with existing spec_annotations
+            if spec_annotations is None:
+                spec_annotations = progression_annotations
+            else:
+                spec_annotations = {**spec_annotations, **progression_annotations}
 
         # Generate unique name for the TrainJob if not provided
         train_job_name = name or (
@@ -593,7 +622,7 @@ class KubernetesBackend(RuntimeBackend):
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
-            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer, Any]
         ] = None,
         trainer_overrides: Optional[dict[str, Any]] = None,
         spec_labels: Optional[dict[str, str]] = None,
@@ -622,10 +651,19 @@ class KubernetesBackend(RuntimeBackend):
                     runtime, trainer, initializer
                 )
 
+            # Check for RHAI trainers (TransformersTrainer, TrainingHubTrainer, etc.)
+            elif hasattr(trainer, "__module__") and "rhai" in trainer.__module__:
+                from kubeflow.trainer.rhai import utils as rhai_utils
+
+                trainer_cr = rhai_utils.get_trainer_crd_from_rhai_trainer(
+                    runtime, trainer, initializer
+                )
+
             else:
                 raise ValueError(
                     f"The trainer type {type(trainer)} is not supported. "
-                    "Please use CustomTrainer, CustomTrainerContainer, or BuiltinTrainer."
+                    "Please use CustomTrainer, CustomTrainerContainer, BuiltinTrainer, "
+                    "or RHAI trainers (TransformersTrainer, etc.)."
                 )
 
         # Apply trainer overrides if trainer was not provided but overrides exist

@@ -14,7 +14,7 @@
 
 from collections.abc import Iterator
 import logging
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.trainer.backends.container.backend import ContainerBackend
@@ -26,6 +26,9 @@ from kubeflow.trainer.backends.localprocess.backend import (
 )
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
+
+if TYPE_CHECKING:
+    from kubeflow.trainer.rhai import RHAITrainer
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +108,12 @@ class TrainerClient:
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
-            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+            Union[
+                types.CustomTrainer,
+                types.CustomTrainerContainer,
+                types.BuiltinTrainer,
+                "RHAITrainer",
+            ]
         ] = None,
         options: Optional[list] = None,
     ) -> str:
@@ -117,14 +125,16 @@ class TrainerClient:
             the training process.
         - BuiltinTrainer: Uses a predefined trainer with built-in post-training logic, requiring
             only parameter configuration.
+        - TransformersTrainer: CustomTrainer with auto-instrumentation for
+            HuggingFace Transformers, including progression tracking.
 
         Args:
             runtime: Optional reference to one of the existing runtimes. Defaults to the
                 torch-distributed runtime if not provided.
             initializer: Optional configuration for the dataset and model initializers.
-            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer, or
-                BuiltinTrainer. If not specified, the TrainJob will use the
-                runtime's default values.
+            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer,
+                BuiltinTrainer, or TransformersTrainer. If not specified,
+                the TrainJob will use the runtime's default values.
             options: Optional list of configuration options to apply to the TrainJob.
                 Options can be imported from kubeflow.trainer.options.
 
