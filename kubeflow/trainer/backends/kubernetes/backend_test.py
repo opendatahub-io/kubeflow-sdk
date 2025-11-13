@@ -329,7 +329,7 @@ def get_traininghub_trainer_for_expected(
         env=env,
         algorithm=algo,
     )
-    return rhai_traininghub.get_trainer_crd_from_training_hub_trainer(runtime, trainer_cfg)
+    return rhai_traininghub.get_trainer_cr_from_training_hub_trainer(runtime, trainer_cfg)
 
 
 def get_cluster_custom_object_response(*args, **kwargs):

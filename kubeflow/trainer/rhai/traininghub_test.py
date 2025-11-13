@@ -21,7 +21,7 @@ import pytest
 
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import TrainingHubAlgorithms, TrainingHubTrainer
-from kubeflow.trainer.rhai.traininghub import get_trainer_crd_from_training_hub_trainer
+from kubeflow.trainer.rhai.traininghub import get_trainer_cr_from_training_hub_trainer
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 from kubeflow.trainer.types import types
 
@@ -120,7 +120,7 @@ def test_traininghub_builder(test_case):
         runtime: types.Runtime = test_case.config["runtime"]
         trainer: TrainingHubTrainer = test_case.config["trainer"]
 
-        crd = get_trainer_crd_from_training_hub_trainer(runtime=runtime, trainer=trainer)
+        crd = get_trainer_cr_from_training_hub_trainer(runtime=runtime, trainer=trainer)
 
         assert test_case.expected_status == SUCCESS
         assert isinstance(crd, models.TrainerV1alpha1Trainer)
@@ -214,7 +214,7 @@ def test_traininghub_algorithm_crd(test_case):
     trainer_cfg: TrainingHubTrainer = test_case.config["trainer"]
 
     try:
-        crd = get_trainer_crd_from_training_hub_trainer(runtime, trainer_cfg)
+        crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer_cfg)
 
         assert test_case.expected_status == SUCCESS
         # Validate topology mapping.
@@ -275,7 +275,7 @@ def test_traininghub_user_func_crd(test_case):
     trainer_cfg: TrainingHubTrainer = test_case.config["trainer"]
 
     try:
-        crd = get_trainer_crd_from_training_hub_trainer(runtime, trainer_cfg)
+        crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer_cfg)
 
         assert test_case.expected_status == SUCCESS
         # Topology defaulted to 1/1 if not specified.

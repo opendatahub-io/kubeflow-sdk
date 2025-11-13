@@ -68,54 +68,51 @@ def _build_install_snippet(
 
 def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) -> str:
     """Render a small Python script that calls training_hub.<algorithm>(**func_args)."""
-    lines: list[str] = [
-        "def training_func(func_args):",
-        "    import os",
-        f"    from training_hub import {algorithm_name}",
-        "",
-        "    _dp = (func_args or {}).get('data_path')",
-        "    if _dp:",
-        "        if os.path.isfile(_dp):",
-        '            print(f"[PY] Data file found: {_dp}")',
-        "        else:",
-        '            print(f"[PY] Data file NOT found: {_dp}")',
-        "",
-        '    master_addr = os.environ.get("PET_MASTER_ADDR", "127.0.0.1")',
-        '    master_port = os.environ.get("PET_MASTER_PORT", "29500")',
-        '    node_rank = int(os.environ.get("PET_NODE_RANK", "0"))',
-        '    rdzv_endpoint = f"{master_addr}:{master_port}"',
-        "",
-        "    args = dict(func_args or {})",
-        "    args['node_rank'] = node_rank",
-        "    args['rdzv_endpoint'] = rdzv_endpoint",
-        f'    print("[PY] Launching {algorithm_name.upper()} training...")',
-        "    try:",
-        f"        result = {algorithm_name}(**args)",
-        f'        print("[PY] {algorithm_name.upper()} training complete. Result=", result)',
-        "    except ValueError as e:",
-        '        print(f"Configuration error: {e}")',
-        "    except Exception as e:",
-        "        import traceback",
-        '        print("[PY] Training failed with error:", e)',
-        "        traceback.print_exc()",
-        "",
-        "    print('[PY] Training finished successfully.')",
-        "",
-    ]
+    base_script = textwrap.dedent("""
+    def training_func(func_args):
+        import os
+        from training_hub import {algo}
+
+        _dp = (func_args or {{}}).get('data_path')
+        if _dp:
+            print("[PY] Data file found: {{}}".format(_dp))
+        else:
+            print("[PY] Data file NOT found: {{}}".format(_dp))
+
+        master_addr = os.environ.get("PET_MASTER_ADDR", "127.0.0.1")
+        master_port = os.environ.get("PET_MASTER_PORT", "29500")
+        node_rank = int(os.environ.get("PET_NODE_RANK", "0"))
+        rdzv_endpoint = "{{}}:{{}}".format(master_addr, master_port)
+
+        args = dict(func_args or {{}})
+        args["node_rank"] = node_rank
+        args["rdzv_endpoint"] = rdzv_endpoint
+        print("[PY] Launching {algo_upper} training...")
+        try:
+            result = {algo}(**args)
+            print("[PY] {algo_upper} training complete. Result=", result)
+        except ValueError as e:
+            print("Configuration error:", e)
+        except Exception as e:
+            import traceback
+            print("[PY] Training failed with error:", e)
+            traceback.print_exc()
+
+        print("[PY] Training finished successfully.")
+    """).format(algo=algorithm_name, algo_upper=algorithm_name.upper())
 
     if func_args is None:
-        call_line = "training_func({})"
+        call_line = "training_func({})\n"
     elif isinstance(func_args, dict):
-        params_lines: list[str] = ["training_func({"]
+        params_lines: list[str] = ["training_func({\n"]
         for key, value in func_args.items():
-            params_lines.append(f"    {repr(key)}: {repr(value)},")
-        params_lines.append("})")
-        call_line = "\n".join(params_lines)
+            params_lines.append(f"    {repr(key)}: {repr(value)},\n")
+        params_lines.append("})\n")
+        call_line = "".join(params_lines)
     else:
-        call_line = f"training_func({func_args})"
+        call_line = f"training_func({func_args})\n"
 
-    lines.append(call_line)
-    return "\n".join(lines) + "\n"
+    return base_script + call_line
 
 
 def _render_user_func_code(func: Callable, func_args: Optional[dict]) -> tuple[str, str]:
@@ -150,7 +147,7 @@ def _compose_exec_script(func_code: str, func_file: str) -> str:
     )
 
 
-def get_trainer_crd_from_training_hub_trainer(
+def get_trainer_cr_from_training_hub_trainer(
     runtime: types.Runtime,
     trainer: TrainingHubTrainer,
     initializer: Optional[types.Initializer] = None,

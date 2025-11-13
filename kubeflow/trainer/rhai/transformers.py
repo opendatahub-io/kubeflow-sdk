@@ -25,7 +25,7 @@ class TransformersTrainer:
     enable_jit_checkpointing: bool = True
 
 
-def get_trainer_crd_from_transformers_trainer(
+def get_trainer_cr_from_transformers_trainer(
     runtime: types.Runtime,
     trainer: TransformersTrainer,
     initializer: Optional[types.Initializer] = None,

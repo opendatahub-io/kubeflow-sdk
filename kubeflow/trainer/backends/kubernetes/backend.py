@@ -32,7 +32,10 @@ import kubeflow.common.utils as common_utils
 from kubeflow.trainer.backends.base import RuntimeBackend
 import kubeflow.trainer.backends.kubernetes.utils as utils
 from kubeflow.trainer.constants import constants
-from kubeflow.trainer.rhai import utils as rhai_utils
+from kubeflow.trainer.rhai import (
+    RHAITrainer,
+    utils as rhai_utils,
+)
 from kubeflow.trainer.rhai.traininghub import TrainingHubTrainer
 from kubeflow.trainer.rhai.transformers import TransformersTrainer
 from kubeflow.trainer.types import types
@@ -600,8 +603,7 @@ class KubernetesBackend(RuntimeBackend):
                 types.CustomTrainer,
                 types.CustomTrainerContainer,
                 types.BuiltinTrainer,
-                TrainingHubTrainer,
-                TransformersTrainer,
+                RHAITrainer,
             ]
         ] = None,
         trainer_overrides: Optional[dict[str, Any]] = None,
@@ -633,7 +635,7 @@ class KubernetesBackend(RuntimeBackend):
 
             # If users choose to use an RHAI trainer.
             elif isinstance(trainer, (TrainingHubTrainer, TransformersTrainer)):
-                trainer_cr = rhai_utils.get_trainer_crd_from_rhai_trainer(
+                trainer_cr = rhai_utils.get_trainer_cr_from_rhai_trainer(
                     runtime, trainer, initializer
                 )
 
