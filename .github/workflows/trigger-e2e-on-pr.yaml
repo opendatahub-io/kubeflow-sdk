@@ -1,0 +1,101 @@
+name: Trigger SDK E2E Tests
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - main
+  schedule:
+    # Run every night at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  trigger-remote-e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: SDK PR Notebook E2E Runner
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.KUBEFLOW_E2E_DISPATCH_TOKEN }}
+          repository: project-codeflare/kubeflow-devx-post-merge-tests
+          event-type: run-sdk-pr-e2e-tests
+          client-payload: '{
+            "sdk_repo": "${{ github.repository }}",
+            "sdk_ref": "${{ github.event.pull_request.head.ref || github.ref_name }}",
+            "sdk_sha": "${{ github.event.pull_request.head.sha || github.sha }}",
+            "training_operator_repo_owner": "opendatahub-io",
+            "training_operator_repo_name": "trainer",
+            "training_operator_ref": "main"
+          }'
+
+      - name: Poll for remote E2E workflow completion
+        env:
+          GH_TOKEN: ${{ secrets.KUBEFLOW_E2E_DISPATCH_TOKEN }}
+          ORG: project-codeflare
+          REPO: kubeflow-devx-post-merge-tests
+        run: |
+          sleep 30 # to allow for run to start
+          echo "Polling $ORG/$REPO..."
+
+          workflow_id=$(gh api repos/$ORG/$REPO/actions/workflows \
+            | jq -r '.workflows[] | select(.name=="SDK PR Notebook E2E Runner") | .id' \
+            | head -1)
+
+          if [ -z "$workflow_id" ]; then
+            echo "Error: Workflow ID not found. Make sure the workflow name matches exactly." && exit 1
+          fi
+
+          echo "Found the workflow ID: $workflow_id"
+
+          # Wait for the workflow run to appear (retry up to 10 times, 5 seconds apart)
+          for i in {1..10}; do
+            run_id=$(
+              gh api repos/$ORG/$REPO/actions/runs \
+                | jq -r ".workflow_runs[] | select(.workflow_id==$workflow_id) | .id" \
+                | head -1 \
+                || true
+            )
+
+            echo "Attempt $i: run_id=$run_id"
+
+            if [[ -n "$run_id" && "$run_id" != "null" ]]; then
+              break
+            fi
+
+            echo "Waiting for run to start..."
+            sleep 5
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "Error: Workflow run not found" && exit 1
+          fi
+
+          echo "Monitoring run ID $run_id..."
+          echo "View logs at: https://github.com/$ORG/$REPO/actions/runs/$run_id"
+
+          # Poll for completion (up to 90 times, 30 seconds apart = 45 minutes max)
+          for i in {1..90}; do
+            status=$(gh api repos/$ORG/$REPO/actions/runs/$run_id --jq '.status')
+            conclusion=$(gh api repos/$ORG/$REPO/actions/runs/$run_id --jq '.conclusion')
+
+            echo "Status: $status | Conclusion: $conclusion"
+
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" == "success" ]]; then
+                echo "Success: Remote E2E tests completed successfully"
+                exit 0
+              else
+                echo "Error: Remote E2E tests failed with conclusion: $conclusion"
+                echo "View logs at: https://github.com/$ORG/$REPO/actions/runs/$run_id"
+                exit 1
+              fi
+            fi
+
+            sleep 30
+          done
+
+          echo "Error: Timeout waiting for remote E2E workflow"
+          exit 1
