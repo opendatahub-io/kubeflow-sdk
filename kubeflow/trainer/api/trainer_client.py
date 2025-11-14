@@ -25,6 +25,7 @@ from kubeflow.trainer.backends.localprocess.backend import (
     LocalProcessBackendConfig,
 )
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai import RHAITrainer
 from kubeflow.trainer.types import types
 
 logger = logging.getLogger(__name__)
@@ -105,26 +106,33 @@ class TrainerClient:
         runtime: Optional[types.Runtime] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
-            Union[types.CustomTrainer, types.CustomTrainerContainer, types.BuiltinTrainer]
+            Union[
+                types.CustomTrainer,
+                types.CustomTrainerContainer,
+                types.BuiltinTrainer,
+                RHAITrainer,
+            ]
         ] = None,
         options: Optional[list] = None,
     ) -> str:
         """Create a TrainJob. You can configure the TrainJob using one of these trainers:
 
-        - CustomTrainer: Runs training with a user-defined function that fully encapsulates the
-            training process.
-        - CustomTrainerContainer: Runs training with a user-defined image that fully encapsulates
-            the training process.
-        - BuiltinTrainer: Uses a predefined trainer with built-in post-training logic, requiring
-            only parameter configuration.
+        - CustomTrainer: Run a user-defined function that encapsulates the
+          training process.
+        - CustomTrainerContainer: Run a user-defined container image that
+          encapsulates the training process.
+        - BuiltinTrainer: Use a predefined trainer with built-in post-training
+          logic, configured by parameters only.
+        - RHAITrainer: Use an RHAI-compatible trainer (TrainingHubTrainer or
+          TransformersTrainer).
 
         Args:
             runtime: Optional reference to one of the existing runtimes. Defaults to the
                 torch-distributed runtime if not provided.
             initializer: Optional configuration for the dataset and model initializers.
-            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer, or
-                BuiltinTrainer. If not specified, the TrainJob will use the
-                runtime's default values.
+            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer,
+                BuiltinTrainer, or RHAITrainer. If not specified, the TrainJob
+                uses the runtime's default values.
             options: Optional list of configuration options to apply to the TrainJob.
                 Options can be imported from kubeflow.trainer.options.
 
