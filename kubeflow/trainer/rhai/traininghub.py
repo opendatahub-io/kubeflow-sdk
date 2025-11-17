@@ -79,14 +79,7 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
         else:
             print("[PY] Data file NOT found: {{}}".format(_dp))
 
-        master_addr = os.environ.get("PET_MASTER_ADDR", "127.0.0.1")
-        master_port = os.environ.get("PET_MASTER_PORT", "29500")
-        node_rank = int(os.environ.get("PET_NODE_RANK", "0"))
-        rdzv_endpoint = "{{}}:{{}}".format(master_addr, master_port)
-
         args = dict(func_args or {{}})
-        args["node_rank"] = node_rank
-        args["rdzv_endpoint"] = rdzv_endpoint
         print("[PY] Launching {algo_upper} training...")
         try:
             result = {algo}(**args)
@@ -98,7 +91,6 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
             print("[PY] Training failed with error:", e)
             traceback.print_exc()
 
-        print("[PY] Training finished successfully.")
     """).format(algo=algorithm_name, algo_upper=algorithm_name.upper())
 
     if func_args is None:
