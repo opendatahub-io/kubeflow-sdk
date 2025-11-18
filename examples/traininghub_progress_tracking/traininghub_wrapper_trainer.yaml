@@ -1,0 +1,473 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: traininghub-wrapper-storage
+  namespace: knema-ftest
+  labels:
+    app.kubernetes.io/name: "traininghub-wrapper"
+    app.kubernetes.io/component: "storage"
+    purpose: "checkpoint-storage"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 8Gi
+  storageClassName: nfs-csi
+  volumeMode: Filesystem
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traininghub-wrapper-script
+  namespace: knema-ftest
+data:
+  train_with_traininghub.py: |
+    #!/usr/bin/env python3
+    """Training Hub wrapper test: HTTP server + JSONL metrics monitoring."""
+
+    import json
+    import time
+    import threading
+    import http.server
+    import glob
+    import os
+    from typing import Dict, Any, ClassVar
+    from datetime import datetime
+    import sys
+    
+    # FIPS/MD5 workaround - patch multiprocessing BEFORE any other imports
+    import multiprocessing
+    import multiprocessing.connection
+    
+    def _deliver_challenge_sha256(connection, authkey):
+        import hmac
+        message = os.urandom(20)
+        connection.send_bytes(message)
+        digest = hmac.new(authkey, message, 'sha256').digest()
+        response = connection.recv_bytes(256)
+        if len(response) != len(digest) or response != digest:
+            raise multiprocessing.connection.AuthenticationError('digest received was wrong')
+    
+    def _answer_challenge_sha256(connection, authkey):
+        import hmac
+        message = connection.recv_bytes(256)
+        digest = hmac.new(authkey, message, 'sha256').digest()
+        connection.send_bytes(digest)
+    
+    multiprocessing.connection.deliver_challenge = _deliver_challenge_sha256
+    multiprocessing.connection.answer_challenge = _answer_challenge_sha256
+    
+    # Patch for Python 3.11 compatibility
+    if sys.version_info < (3, 12):
+        import typing
+        from typing_extensions import override
+        typing.override = override
+
+    class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
+        """HTTP handler that reads Training Hub JSONL metrics and serves them."""
+        
+        algorithm = "sft"  # Training Hub algorithm (sft or osft)
+        ckpt_output_dir = "/workspace/checkpoints"
+        
+        def do_GET(self):
+            if self.path == "/health":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"OK")
+                
+            elif self.path in ("/", "/metrics"):
+                try:
+                    # Read latest metrics from JSONL file
+                    metrics = self._read_latest_metrics()
+                    # Transform to rich UI Backend schema
+                    transformed = self._transform_schema(metrics)
+                    # Serve JSON
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(transformed, indent=2).encode())
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    error_response = {"error": str(e), "status": "error"}
+                    self.wfile.write(json.dumps(error_response).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+        
+        def _read_latest_metrics(self):
+            """Read last line of JSONL file (most recent metrics from rank 0)."""
+            # InstructLab Training (SFT): Find rank 0 file
+            pattern = f"{self.ckpt_output_dir}/training_params_and_metrics_global*.jsonl"
+            files = glob.glob(pattern)
+            
+            if not files:
+                return {}
+            
+            # Prefer rank 0 file
+            rank_0_files = [f for f in files if 'global0.jsonl' in f]
+            metrics_file = rank_0_files[0] if rank_0_files else files[0]
+            
+            # Read last line (most recent metrics)
+            try:
+                if not os.path.exists(metrics_file):
+                    return {}
+                    
+                with open(metrics_file, 'r') as f:
+                    last_line = None
+                    for line in f:
+                        if line.strip():
+                            last_line = line
+                
+                if last_line:
+                    return json.loads(last_line)
+            except FileNotFoundError:
+                return {}
+            except json.JSONDecodeError:
+                return {}
+            
+            return {}
+        
+        def _transform_schema(self, metrics):
+            """Transform InstructLab Training schema → Rich progress format."""
+            if not metrics:
+                return {
+                    # Rich format (for UI)
+                    "progressPercentage": 0,
+                    "estimatedRemainingSeconds": None,
+                    "currentStep": 0,
+                    "totalSteps": 0,
+                    "currentEpoch": 0,
+                    "totalEpochs": 0,
+                    "trainMetrics": {},
+                    "evalMetrics": {},
+                    # Controller compatibility fields
+                    "status": "initializing",
+                    "status_message": "Waiting for training to start...",
+                    "progress": {
+                        "step_current": 0,
+                        "step_total": 0,
+                        "percent": 0.0,
+                        "epoch": 0
+                    },
+                    "metrics": {},
+                    "timestamp": None,
+                }
+            
+            step = metrics.get("step", 0)
+            epoch = metrics.get("epoch", 0)
+            num_epoch_steps = metrics.get("num_epoch_steps", 0)
+            
+            # Calculate total steps
+            total_epochs = metrics.get("total_epochs", 1)
+            step_total = num_epoch_steps * total_epochs if num_epoch_steps > 0 else step
+            current_step_absolute = (epoch * num_epoch_steps) + step if num_epoch_steps > 0 else step
+            
+            # Calculate progress percentage
+            percent = (current_step_absolute / step_total * 100) if step_total > 0 else 0
+            
+            # Estimate remaining time
+            throughput = metrics.get("overall_throughput", 0)
+            throughput_samples = (throughput / 1000) if throughput > 0 else 0
+            remaining_steps = step_total - current_step_absolute
+            estimated_remaining_sec = int(remaining_steps / throughput_samples) if throughput_samples > 0 else None
+            
+            loss_val = metrics.get("avg_loss", 0)
+            lr_val = metrics.get("lr")
+            grad_norm_val = metrics.get("gradnorm", 0)
+            
+            return {
+                # Rich format (for UI display)
+                "progressPercentage": round(percent, 1),
+                "estimatedRemainingSeconds": estimated_remaining_sec,
+                "currentStep": current_step_absolute,
+                "totalSteps": step_total,
+                "currentEpoch": epoch + 1,
+                "totalEpochs": total_epochs,
+                "trainMetrics": {
+                    "loss": round(loss_val, 4) if loss_val else None,
+                    "learning_rate": lr_val,
+                    "grad_norm": round(grad_norm_val, 4) if grad_norm_val else None,
+                    "throughput_samples_sec": round(throughput_samples, 1) if throughput_samples else None,
+                },
+                "evalMetrics": {},
+                "timestamp": metrics.get("timestamp"),
+                # Controller compatibility fields
+                "status": "training",
+                "status_message": f"Training epoch {epoch + 1}/{total_epochs}, step {current_step_absolute}/{step_total} ({round(percent, 1)}%)",
+                "progress": {
+                    "step_current": current_step_absolute,
+                    "step_total": step_total,
+                    "percent": round(percent, 2),
+                    "epoch": epoch
+                },
+                "metrics": {
+                    "loss": loss_val,
+                    "learning_rate": lr_val,
+                    "throughput_samples_sec": throughput_samples,
+                },
+            }
+        
+        def log_message(self, format, *args):
+            """Suppress default HTTP server logging."""
+            pass
+
+
+    def start_metrics_server(port: int = 28080):
+        """Start HTTP metrics server in background thread."""
+        server = http.server.ThreadingHTTPServer(('0.0.0.0', port), TrainingHubMetricsHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True, name='metrics-server')
+        server_thread.start()
+        print(f"[Kubeflow] Metrics server started on port {port} for Training Hub", flush=True)
+        return server
+
+
+    def main():
+        """Run Training Hub SFT with progress tracking."""
+        # Force multiprocessing to use 'spawn' context (avoids fork issues with FIPS)
+        import multiprocessing
+        try:
+            multiprocessing.set_start_method('spawn', force=True)
+        except RuntimeError:
+            pass  # Already set
+        
+        # Patch for Python 3.11 compatibility (typing.override added in 3.12)
+        import sys
+        if sys.version_info < (3, 12):
+            import typing
+            from typing_extensions import override
+            typing.override = override
+        
+        from training_hub import sft
+        
+        print("=" * 80)
+        print("[TrainingHub] Starting Training Hub Wrapper Test")
+        print("=" * 80)
+        
+        # Start metrics server BEFORE training
+        metrics_server = start_metrics_server(port=28080)
+        print("[Kubeflow] Progress tracking initialized for Training Hub", flush=True)
+        
+        # Create training data
+        print("[TrainingHub] Creating sample training data...")
+        os.makedirs("/workspace/data", exist_ok=True)
+        
+        # Clean checkpoint directory to avoid resuming from old runs
+        import shutil
+        ckpt_dir = "/workspace/checkpoints"
+        if os.path.exists(ckpt_dir):
+            print(f"[TrainingHub] Cleaning old checkpoints from {ckpt_dir}")
+            shutil.rmtree(ckpt_dir)
+        os.makedirs(ckpt_dir, exist_ok=True)
+        print(f"[TrainingHub] Checkpoint directory ready: {ckpt_dir}")
+        
+        sample_data = [
+            {"messages": [{"role": "user", "content": "What is AI?"}, {"role": "assistant", "content": "Artificial Intelligence"}]},
+            {"messages": [{"role": "user", "content": "What is ML?"}, {"role": "assistant", "content": "Machine Learning"}]},
+            {"messages": [{"role": "user", "content": "What is DL?"}, {"role": "assistant", "content": "Deep Learning"}]},
+            {"messages": [{"role": "user", "content": "What is NLP?"}, {"role": "assistant", "content": "Natural Language Processing"}]},
+            {"messages": [{"role": "user", "content": "What is CV?"}, {"role": "assistant", "content": "Computer Vision"}]},
+        ]
+        
+        # Duplicate for more training steps
+        sample_data = sample_data * 4  # 20 total samples
+        
+        data_file = "/workspace/data/training.jsonl"
+        with open(data_file, 'w') as f:
+            for item in sample_data:
+                f.write(json.dumps(item) + '\n')
+        
+        print(f"[TrainingHub] Created {len(sample_data)} training samples")
+        print(f"[TrainingHub] Data file: {data_file}")
+        
+        # Run Training Hub SFT
+        print("[TrainingHub] Starting SFT training...")
+        print()
+        
+        result = sft(
+            model_path="Qwen/Qwen2.5-0.5B-Instruct",
+            data_path=data_file,
+            ckpt_output_dir="/workspace/checkpoints",
+            data_output_dir="/workspace/processed",
+            num_epochs=2,
+            effective_batch_size=2,
+            learning_rate=5e-5,
+            max_seq_len=256,
+            max_tokens_per_gpu=1024,
+            warmup_steps=2,
+            save_samples=5,
+            nnodes=1,
+            nproc_per_node=1,
+            disable_flash_attn=True,  # Disable Flash Attention for compatibility
+        )
+        
+        print()
+        print("=" * 80)
+        print("[TrainingHub] Training completed!")
+        print("=" * 80)
+        print(f"Result: {result}")
+        
+        # Keep server running for debugging and final metrics capture
+        print()
+        print("=" * 80)
+        print("[DEBUG] Pod will stay alive for 10 minutes for debugging")
+        print("=" * 80)
+        print()
+        print("You can now:")
+        print("  1. Check HTTP metrics endpoint:")
+        print("     kubectl exec -n kap-test <pod-name> -- curl http://localhost:28080/metrics | jq")
+        print()
+        print("  2. Check trainerStatus annotation:")
+        print("     kubectl get trainjob traininghub-wrapper-test -n kap-test \\")
+        print("       -o jsonpath='{.metadata.annotations.trainer\\.opendatahub\\.io/trainerStatus}' | jq")
+        print()
+        print("  3. Check JSONL metrics file:")
+        print("     kubectl exec -n kap-test <pod-name> -- cat /workspace/checkpoints/training_params_and_metrics_global0.jsonl")
+        print()
+        print("  4. Monitor controller logs:")
+        print("     kubectl logs -n opendatahub deployment/kubeflow-trainer-controller-manager --tail=50")
+        print()
+        print("Pod will terminate automatically after 10 minutes...")
+        print("=" * 80)
+        
+        # Wait 10 minutes for debugging
+        for remaining in range(600, 0, -30):
+            mins = remaining // 60
+            secs = remaining % 60
+            print(f"[DEBUG] Time remaining: {mins}m {secs}s", flush=True)
+            time.sleep(30)
+
+
+    if __name__ == "__main__":
+        main()
+
+---
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  name: traininghub-wrapper-runtime
+  labels:
+    trainer.kubeflow.org/framework: torch
+    project: traininghub-wrapper
+spec:
+  mlPolicy:
+    numNodes: 1
+    torch:
+      numProcPerNode: 1
+  template:
+    spec:
+      replicatedJobs:
+        - name: node
+          template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
+            spec:
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                    - name: node
+                      image: quay.io/modh/training:py311-cuda124-torch251
+                      volumeMounts:
+                        - name: shared-workspace
+                          mountPath: /workspace
+                        - name: training-script
+                          mountPath: /workspace/train_with_traininghub.py
+                          subPath: train_with_traininghub.py
+                      env:
+                        - name: PYTHONUNBUFFERED
+                          value: "1"
+                        - name: HF_HOME
+                          value: "/workspace/cache"
+                        - name: PYTHONHASHSEED
+                          value: "0"
+                        - name: OPENSSL_CONF
+                          value: "/dev/null"
+                        - name: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
+                          value: "python"
+                      command: ["bash", "-c"]
+                      args:
+                        - |
+                          set -e
+                          
+                          echo "[TrainingHub Wrapper] Checking dependencies..."
+                          
+                          # Check if training-hub is already installed
+                          if python -c "import training_hub" 2>/dev/null; then
+                              echo "[TrainingHub Wrapper] ✅ training-hub already installed, skipping installation"
+                              echo "[TrainingHub Wrapper] This will save 3-5 minutes!"
+                          else
+                              echo "[TrainingHub Wrapper] Installing dependencies..."
+                              
+                              # Install typing-extensions for Python 3.11 compatibility
+                              echo "[TrainingHub Wrapper] Installing typing-extensions..."
+                              PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --no-cache-dir typing-extensions
+                              
+                              # Install training-hub with all dependencies
+                              echo "[TrainingHub Wrapper] Installing training-hub (this may take 5-10 minutes)..."
+                              PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install \
+                                --index-url https://pypi.org/simple \
+                                --no-cache-dir \
+                                training-hub 2>&1 | tee /tmp/pip-install.log || {
+                                  echo "ERROR: training-hub installation failed"
+                                  echo "Last 50 lines of installation log:"
+                                  tail -50 /tmp/pip-install.log
+                                  echo ""
+                                  echo "This likely failed due to CUDA compilation requirements."
+                                  echo "training-hub dependencies (flash-attn, mamba-ssm) need GPU and CUDA toolkit."
+                                  exit 1
+                              }
+                              
+                              echo "[TrainingHub Wrapper] Installation successful!"
+                          fi
+                          
+                          echo "[TrainingHub Wrapper] Starting training script..."
+                          python /workspace/train_with_traininghub.py
+                      resources:
+                        requests:
+                          cpu: "2"
+                          memory: "8Gi"      # Reduced to fit node capacity
+                          nvidia.com/gpu: "1"
+                        limits:
+                          cpu: "4"
+                          memory: "14Gi"
+                          nvidia.com/gpu: "1"
+                  volumes:
+                    - name: shared-workspace
+                      persistentVolumeClaim:
+                        claimName: traininghub-wrapper-storage
+                    - name: training-script
+                      configMap:
+                        name: traininghub-wrapper-script
+
+---
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: traininghub-wrapper-test
+  namespace: knema-ftest
+  labels:
+    app.kubernetes.io/name: "traininghub-wrapper"
+    app.kubernetes.io/component: "training"
+    experiment: "traininghub-progression-tracking-test"
+  annotations:
+    # Training Hub progression tracking annotations
+    trainer.opendatahub.io/progression-tracking: "true"
+    trainer.opendatahub.io/metrics-port: "28080"
+    trainer.opendatahub.io/metrics-poll-interval: "30s"
+    trainer.opendatahub.io/framework: "traininghub"
+spec:
+  runtimeRef:
+    apiGroup: trainer.kubeflow.org
+    kind: ClusterTrainingRuntime
+    name: traininghub-wrapper-runtime
+  trainer:
+    numNodes: 1
+    numProcPerNode: 1
+  managedBy: trainer.kubeflow.org/trainjob-controller
+
