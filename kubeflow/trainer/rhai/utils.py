@@ -1,5 +1,5 @@
 import logging
-from typing import Any, NoReturn, Optional, Union
+from typing import Optional, Union
 
 from kubeflow_trainer_api import models
 
@@ -29,81 +29,52 @@ def get_trainer_cr_from_rhai_trainer(
         )
 
     else:
-        _raise_unknown_rhai_trainer(trainer)
+        raise ValueError(f"Unknown trainer {trainer}.")
 
 
-def _raise_unknown_rhai_trainer(trainer: object) -> NoReturn:
-    raise ValueError(f"Unknown trainer {trainer}.")
-
-
-def get_job_progress(
-    name: str,
-    namespace: str = "default",
-    backend_config: Optional[Any] = None,
-) -> Optional[dict[str, Any]]:
-    """Get training progress metrics from TrainJob annotations.
-
-    Only works for jobs with progression tracking enabled (e.g., TransformersTrainer
-    with enable_progression_tracking=True).
+def merge_progression_annotations(
+    trainer: Union[transformers.TransformersTrainer, traininghub.TrainingHubTrainer],
+    spec_annotations: Optional[dict[str, str]] = None,
+) -> Optional[dict[str, str]]:
+    """Merge progression tracking annotations for RHAI trainers with existing annotations.
 
     Args:
-        name: Name of the TrainJob
-        namespace: Kubernetes namespace (only for KubernetesBackend)
-        backend_config: Backend configuration (defaults to KubernetesBackendConfig)
+        trainer: RHAI trainer instance (TransformersTrainer or TrainingHubTrainer).
+        spec_annotations: Existing annotations dict to merge with, if any.
 
     Returns:
-        Dictionary with progress data including progressPercentage, estimatedRemainingSeconds,
-        currentStep, totalSteps, currentEpoch, totalEpochs, trainMetrics, and evalMetrics.
-        Returns None if progression tracking not enabled or metrics unavailable.
-
-    Raises:
-        TimeoutError: Timeout to get TrainJob
-        RuntimeError: Failed to get TrainJob
+        Merged annotations dict with progression tracking added (if enabled),
+        or original spec_annotations if progression tracking is disabled.
     """
-    from kubeflow.common.types import KubernetesBackendConfig
-    from kubeflow.trainer.api import TrainerClient
+    if (
+        not hasattr(trainer, "enable_progression_tracking")
+        or not trainer.enable_progression_tracking
+        or not hasattr(trainer, "metrics_port")
+        or not hasattr(trainer, "metrics_poll_interval_seconds")
+    ):
+        return spec_annotations
 
-    if backend_config is None:
-        backend_config = KubernetesBackendConfig(namespace=namespace)
+    from kubeflow.trainer.rhai.constants import (
+        ANNOTATION_FRAMEWORK,
+        ANNOTATION_METRICS_POLL_INTERVAL,
+        ANNOTATION_METRICS_PORT,
+        ANNOTATION_PROGRESSION_TRACKING,
+    )
 
-    client = TrainerClient(backend_config=backend_config)
-    job = client.get_job(name=name)
-    return _parse_progress_from_job(job)
-
-
-def _parse_progress_from_job(job: Any) -> Optional[dict[str, Any]]:
-    """Parse progression tracking metrics from TrainJob annotations.
-
-    Args:
-        job: TrainJob object (supports dict or V1ObjectMeta)
-
-    Returns:
-        Progress data dictionary or None if unavailable
-    """
-    import json
-
-    from kubernetes import client
-
-    from kubeflow.trainer.rhai.constants import ANNOTATION_TRAINER_STATUS
-
-    if hasattr(job, "metadata") and isinstance(job.metadata, client.V1ObjectMeta):
-        annotations = job.metadata.annotations or {}
-    elif isinstance(job, dict):
-        annotations = job.get("metadata", {}).get("annotations", {})
+    if isinstance(trainer, transformers.TransformersTrainer):
+        framework = "transformers"
+    elif isinstance(trainer, traininghub.TrainingHubTrainer):
+        framework = "traininghub"
     else:
-        return None
+        framework = "unknown"
 
-    status_annotation = annotations.get(ANNOTATION_TRAINER_STATUS)
-    if not status_annotation:
-        logger.info(
-            "Progression tracking is not enabled for this TrainJob. "
-            "Use TransformersTrainer with enable_progression_tracking=True "
-            "to enable real-time progress."
-        )
-        return None
+    progression_annotations = {
+        ANNOTATION_PROGRESSION_TRACKING: "true",
+        ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
+        ANNOTATION_METRICS_POLL_INTERVAL: str(trainer.metrics_poll_interval_seconds),
+        ANNOTATION_FRAMEWORK: framework,
+    }
 
-    try:
-        return json.loads(status_annotation)
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse progression tracking data: {e}")
-        return None
+    if spec_annotations is None:
+        return progression_annotations
+    return {**spec_annotations, **progression_annotations}

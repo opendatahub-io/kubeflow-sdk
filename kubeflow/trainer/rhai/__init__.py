@@ -17,14 +17,12 @@
 This module provides RHAI trainer types and utilities:
 - TransformersTrainer: HuggingFace Transformers/TRL with instrumentation
 - TrainingHubTrainer: RHAI Training Hub integration
-- get_job_progress: Retrieve training progress metrics from TrainJobs
 """
 
 from typing import Union
 
 from kubeflow.trainer.rhai.traininghub import TrainingHubAlgorithms, TrainingHubTrainer
 from kubeflow.trainer.rhai.transformers import TransformersTrainer
-from kubeflow.trainer.rhai.utils import get_job_progress
 
 # Type alias for all RHAI trainers
 RHAITrainer = Union[TransformersTrainer, TrainingHubTrainer]
@@ -34,5 +32,4 @@ __all__ = [
     "TrainingHubAlgorithms",
     "TrainingHubTrainer",
     "TransformersTrainer",
-    "get_job_progress",
 ]

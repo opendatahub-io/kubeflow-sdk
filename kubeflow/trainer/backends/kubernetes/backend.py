@@ -220,45 +220,9 @@ class KubernetesBackend(RuntimeBackend):
             trainer_overrides = spec_section.get("trainer", {})
             pod_template_overrides = spec_section.get("podTemplateOverrides")
 
-        # Auto-add progression tracking annotations for RHAI trainers
-        if (
-            isinstance(trainer, (TransformersTrainer, TrainingHubTrainer))
-            and hasattr(trainer, "enable_progression_tracking")
-            and trainer.enable_progression_tracking
-            and hasattr(trainer, "metrics_port")
-            and hasattr(trainer, "metrics_poll_interval_seconds")
-        ):
-            # Import here to avoid circular dependency
-            from kubeflow.trainer.rhai.constants import (
-                ANNOTATION_FRAMEWORK,
-                ANNOTATION_METRICS_POLL_INTERVAL,
-                ANNOTATION_METRICS_PORT,
-                ANNOTATION_PROGRESSION_TRACKING,
-            )
+        if isinstance(trainer, RHAITrainer):
+            spec_annotations = rhai_utils.merge_progression_annotations(trainer, spec_annotations)
 
-            # Determine framework based on trainer type
-            if isinstance(trainer, TransformersTrainer):
-                framework = "transformers"
-            elif isinstance(trainer, TrainingHubTrainer):
-                framework = "traininghub"
-            else:
-                # Fallback for unknown RHAI trainer types
-                framework = "unknown"
-
-            progression_annotations = {
-                ANNOTATION_PROGRESSION_TRACKING: "true",
-                ANNOTATION_METRICS_PORT: str(trainer.metrics_port),  # type: ignore[attr-defined]
-                ANNOTATION_METRICS_POLL_INTERVAL: str(trainer.metrics_poll_interval_seconds),  # type: ignore[attr-defined]
-                ANNOTATION_FRAMEWORK: framework,
-            }
-
-            # Merge with existing spec_annotations
-            if spec_annotations is None:
-                spec_annotations = progression_annotations
-            else:
-                spec_annotations = {**spec_annotations, **progression_annotations}
-
-        # Generate unique name for the TrainJob if not provided
         train_job_name = name or (
             random.choice(string.ascii_lowercase)
             + uuid.uuid4().hex[: constants.JOB_NAME_UUID_LENGTH]
