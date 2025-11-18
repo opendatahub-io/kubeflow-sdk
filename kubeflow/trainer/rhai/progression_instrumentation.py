@@ -21,7 +21,7 @@ import http.server
 import json
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # Transformers will be available in training pods where this code runs
 try:
@@ -234,3 +234,34 @@ def enable_tracking(custom_metrics: dict, metrics_port: int = 28080):
         return result
 
     trainer_module.Trainer.__init__ = _instrumented_trainer_init
+
+
+def create_instrumentation(
+    custom_metrics: dict[str, str],
+    metrics_port: int = 28080,
+) -> Callable[[], None]:
+    """Create instrumentation function for progression tracking.
+
+    This is the main entry point for training pods. Returns a function that
+    enables tracking when called, avoiding the need for string construction.
+
+    Args:
+        custom_metrics: Dictionary mapping log keys to metric names
+        metrics_port: Port for HTTP metrics server (default: 28080)
+
+    Returns:
+        Callable that enables progression tracking when invoked
+
+    Example:
+        >>> enable_fn = create_instrumentation({"accuracy": "eval_accuracy"}, 28080)
+        >>> enable_fn()  # Call before training starts
+        >>> # Your training code here
+    """
+
+    def _enable():
+        """Enable progression tracking."""
+        print("[Kubeflow] Initializing progression tracking", flush=True)
+        enable_tracking(custom_metrics, metrics_port)
+        print("[Kubeflow] Progression tracking enabled", flush=True)
+
+    return _enable

@@ -23,6 +23,7 @@ from kubeflow.trainer.rhai.progression_instrumentation import (
     ProgressCallback,
     _metrics_state,
     _update_metrics,
+    create_instrumentation,
 )
 
 
@@ -311,6 +312,37 @@ def test_on_train_end_sets_completion():
 
     assert _metrics_state["progressPercentage"] == 100
     assert _metrics_state["estimatedRemainingSeconds"] == 0
+
+    print("test execution complete")
+
+
+def test_create_instrumentation_returns_callable():
+    """Test create_instrumentation returns a callable that enables tracking."""
+    print("Executing test: create_instrumentation returns callable")
+
+    custom_metrics = {"accuracy": "eval_accuracy"}
+    enable_fn = create_instrumentation(custom_metrics, metrics_port=28080)
+
+    # Verify it returns a callable
+    assert callable(enable_fn)
+
+    # Verify calling it doesn't raise errors
+    with patch("kubeflow.trainer.rhai.progression_instrumentation.enable_tracking") as mock_enable:
+        enable_fn()
+        mock_enable.assert_called_once_with(custom_metrics, 28080)
+
+    print("test execution complete")
+
+
+def test_create_instrumentation_with_defaults():
+    """Test create_instrumentation with default port."""
+    print("Executing test: create_instrumentation with defaults")
+
+    enable_fn = create_instrumentation({})
+
+    with patch("kubeflow.trainer.rhai.progression_instrumentation.enable_tracking") as mock_enable:
+        enable_fn()
+        mock_enable.assert_called_once_with({}, 28080)  # Default port
 
     print("test execution complete")
 

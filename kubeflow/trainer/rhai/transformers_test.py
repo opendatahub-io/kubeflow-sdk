@@ -118,22 +118,20 @@ def test_instrumentation_wrapper_generation_basic():
     # Verify wrapper is a string
     assert isinstance(wrapper, str)
 
-    # Verify it contains all required components
-    assert "# METRICS SERVER" in wrapper
-    assert "class MetricsServer" in wrapper
-    assert "def start_server" in wrapper
-    assert "# PROGRESS CALLBACK" in wrapper
-    assert "class ProgressCallback" in wrapper
-    assert "# TRAINER MONKEY-PATCH" in wrapper
-    assert "def enable_tracking" in wrapper
+    # Verify it imports from SDK (new import-based approach)
+    assert (
+        "from kubeflow.trainer.rhai.progression_instrumentation import create_instrumentation"
+    ) in wrapper
+
+    # Verify it calls create_instrumentation
+    assert "create_instrumentation" in wrapper
+    assert "enable_tracking" in wrapper
+
+    # Verify user code placeholder
     assert "{{user_func_import_and_call}}" in wrapper
 
     # Verify port is injected correctly
-    assert f"port={28080}" in wrapper or f"port = {28080}" in wrapper
-
-    # Verify no SDK imports at runtime
-    assert "from kubeflow.trainer" not in wrapper
-    assert "from kubeflow.common" not in wrapper
+    assert f"metrics_port={28080}" in wrapper
 
     print("test execution complete")
 
@@ -167,98 +165,70 @@ def test_instrumentation_wrapper_with_custom_metrics():
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_self_contained():
-    """Test that wrapper is self-contained with no external dependencies."""
-    print("Executing test: Wrapper is self-contained")
+def test_instrumentation_wrapper_imports_sdk():
+    """Test that wrapper imports from SDK (import-based approach)."""
+    print("Executing test: Wrapper imports SDK")
 
     wrapper = get_transformers_instrumentation_wrapper(
         metrics_port=28080,
         custom_metrics={},
     )
 
-    # Verify no kubeflow imports (SDK shouldn't be needed at runtime)
-    assert "from kubeflow" not in wrapper
-    assert "import kubeflow" not in wrapper
+    # Verify SDK import is present (new import-based approach)
+    assert (
+        "from kubeflow.trainer.rhai.progression_instrumentation import create_instrumentation"
+    ) in wrapper
 
-    # Verify all stdlib imports are present
-    assert "import http.server" in wrapper
-    assert "import json" in wrapper
-    assert "import threading" in wrapper
-    assert "import time" in wrapper
-
-    # Verify transformers import (expected)
-    assert "from transformers import" in wrapper
+    # Verify wrapper is concise (no class/function definitions)
+    assert "class MetricsServer" not in wrapper
+    assert "class ProgressCallback" not in wrapper
+    assert "def start_server" not in wrapper
 
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_http_server_structure():
-    """Test HTTP server implementation in wrapper."""
-    print("Executing test: HTTP server structure")
+def test_instrumentation_wrapper_structure():
+    """Test wrapper structure and function call."""
+    print("Executing test: Wrapper structure")
 
     wrapper = get_transformers_instrumentation_wrapper(
         metrics_port=28080,
         custom_metrics={},
     )
 
-    # Verify HTTP server has required methods
-    assert "def do_GET(self):" in wrapper
-    assert 'self.path == "/health"' in wrapper
-    assert 'self.path in ("/", "/metrics")' in wrapper
+    # Verify wrapper calls create_instrumentation with correct args
+    assert "create_instrumentation(" in wrapper
+    assert "custom_metrics={}" in wrapper
+    assert "metrics_port=28080" in wrapper
 
-    # Verify metrics handler functions (module-level, not class methods)
-    assert "def _update_metrics(updates: dict)" in wrapper
-    assert "def _get_metrics_json() -> str:" in wrapper
+    # Verify enable_tracking() is called
+    assert "enable_tracking()" in wrapper
 
-    # Verify metrics structure (KEP-2779 format)
-    assert '"progressPercentage":' in wrapper
-    assert '"estimatedRemainingSeconds":' in wrapper
-    assert '"currentStep":' in wrapper
-    assert '"totalSteps":' in wrapper
-    assert '"trainMetrics":' in wrapper
-    assert '"evalMetrics":' in wrapper
+    # Verify user code section
+    assert "# USER TRAINING CODE" in wrapper
 
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_callback_structure():
-    """Test progress callback implementation in wrapper."""
-    print("Executing test: Progress callback structure")
+def test_instrumentation_wrapper_conciseness():
+    """Test wrapper is concise (no class/function definitions)."""
+    print("Executing test: Wrapper conciseness")
 
     wrapper = get_transformers_instrumentation_wrapper(
         metrics_port=28080,
         custom_metrics={},
     )
 
-    # Verify callback methods
-    assert "def on_train_begin(self, args, state, control, **kwargs)" in wrapper
-    assert "def on_step_end(self, args, state, control, **kwargs)" in wrapper
-    assert "def on_log(self, args, state, control, logs=None, **kwargs)" in wrapper
-    assert "def on_train_end(self, args, state, control, **kwargs)" in wrapper
+    # Verify wrapper doesn't contain implementation details (those are in SDK)
+    assert "def on_train_begin" not in wrapper
+    assert "def on_step_end" not in wrapper
+    assert "def on_log" not in wrapper
+    assert "def on_train_end" not in wrapper
+    assert "_original_init" not in wrapper
+    assert "def _instrumented_trainer_init" not in wrapper
 
-    # Verify callback initializes with custom metrics map
-    assert "self.custom_metrics_map = " in wrapper
-
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_trainer_patching():
-    """Test Trainer patching logic in wrapper."""
-
-    wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
-        custom_metrics={},
-    )
-
-    # Verify trainer patching implementation
-    assert "from transformers import trainer as trainer_module" in wrapper
-    assert "_original_init = trainer_module.Trainer.__init__" in wrapper
-    assert "def _instrumented_trainer_init(self, *args, **kwargs):" in wrapper
-    assert "ProgressCallback(custom_metrics, metrics_port)" in wrapper
-    assert "trainer_module.Trainer.__init__ = _instrumented_trainer_init" in wrapper
-
-    # Verify enable_tracking function is called
-    assert "enable_tracking" in wrapper
+    # Wrapper should be very short (just imports and calls)
+    assert len(wrapper.split("\n")) < 30, "Wrapper should be concise (< 30 lines)"
 
     print("test execution complete")
 
@@ -313,53 +283,31 @@ def test_instrumentation_wrapper_empty_custom_metrics():
         custom_metrics={},
     )
 
-    # Should have empty dict and metrics_port passed to enable_tracking
-    assert "enable_tracking({}, metrics_port=28080)" in wrapper
+    # Should have empty dict and metrics_port passed to create_instrumentation
+    assert "create_instrumentation(" in wrapper
+    assert "custom_metrics={}" in wrapper
+    assert "metrics_port=28080" in wrapper
 
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_metrics_tracking():
-    """Test that wrapper tracks standard metrics."""
-    print("Executing test: Standard metrics tracking")
+def test_instrumentation_wrapper_sdk_delegation():
+    """Test that wrapper delegates logic to SDK module."""
+    print("Executing test: SDK delegation")
 
     wrapper = get_transformers_instrumentation_wrapper(
         metrics_port=28080,
         custom_metrics={},
     )
 
-    # Verify standard metrics are tracked
-    assert '"loss"' in wrapper
-    assert '"learning_rate"' in wrapper
-    assert '"train_samples_per_second"' in wrapper or '"throughput_samples_sec"' in wrapper
+    # Verify wrapper delegates to SDK (doesn't contain implementation details)
+    # All metrics tracking, progress calculation, etc. are in progression_instrumentation module
+    assert "from kubeflow.trainer.rhai.progression_instrumentation" in wrapper
 
-    # Verify metrics update logic (new format uses train_metrics/eval_metrics)
-    assert "train_metrics" in wrapper
-    assert "eval_metrics" in wrapper
-    assert "_update_metrics" in wrapper
-
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_progress_calculation():
-    """Test progress calculation logic in wrapper."""
-    print("Executing test: Progress calculation")
-
-    wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
-        custom_metrics={},
-    )
-
-    # Verify progress calculation
-    assert "state.global_step" in wrapper
-    assert "state.max_steps" in wrapper
-    assert "progress_pct" in wrapper
-    assert "/ total_steps * 100" in wrapper or "current_step / total_steps" in wrapper
-
-    # Verify time estimation
-    assert "elapsed_sec" in wrapper
-    assert "remaining_sec" in wrapper
-    assert "estimated_total_time" in wrapper
+    # These should NOT be in the wrapper (they're in the SDK module)
+    assert "state.global_step" not in wrapper
+    assert "progress_pct" not in wrapper
+    assert "elapsed_sec" not in wrapper
 
     print("test execution complete")
 
