@@ -8,7 +8,7 @@ from typing import Optional
 
 from kubeflow_trainer_api import models
 
-import kubeflow.trainer.backends.kubernetes.utils as k8s_utils
+import kubeflow.trainer.utils.utils as k8s_utils
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
 
@@ -32,11 +32,11 @@ class TrainingHubTrainer:
     func_args: Optional[dict] = None
     packages_to_install: Optional[list[str]] = None
     pip_index_urls: list[str] = field(
-        default_factory=lambda: list(constants.DEFAULT_PIP_INDEX_URLS)
+        default_factory=lambda: [constants.DEFAULT_PIP_INDEX_URL]
     )
     env: Optional[dict[str, str]] = None
     algorithm: Optional[TrainingHubAlgorithms] = None
-    
+
     # Progress tracking parameters
     enable_progress_tracking: bool = True
     metrics_port: int = 28080
@@ -61,11 +61,19 @@ def _build_install_snippet(
     pip_index_urls: list[str],
 ) -> str:
     """Build the shell snippet to install Python packages if requested."""
-    is_mpi = len(runtime.trainer.command) > 0 and runtime.trainer.command[0] == "mpirun"
+    # Check if runtime has trainer and command attribute
+    is_mpi = False
+    if runtime and runtime.trainer:
+        try:
+            is_mpi = len(runtime.trainer.command) > 0 and runtime.trainer.command[0] == "mpirun"
+        except (AttributeError, TypeError):
+            # If command attribute doesn't exist or isn't accessible, assume not MPI
+            is_mpi = False
+    
     if packages_to_install:
         return k8s_utils.get_script_for_python_packages(
             packages_to_install,
-            pip_index_urls,
+            pip_index_urls[0] if pip_index_urls else "https://pypi.org/simple",
             is_mpi,
         )
     return ""
@@ -230,19 +238,31 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             rank_0_files = [f for f in files if 'global0.jsonl' in f]
             metrics_file = rank_0_files[0] if rank_0_files else files[0]
         
-        # Read last line (most recent metrics)
+        # Read configuration from first line and metrics from last line
         try:
             if not os.path.exists(metrics_file):
                 return {{}}
-                
+            
+            config = {{}}
+            last_line = None
+            
             with open(metrics_file, 'r') as f:
-                last_line = None
-                for line in f:
+                for i, line in enumerate(f):
                     if line.strip():
+                        if i == 0:
+                            # First line contains training configuration
+                            try:
+                                config = json.loads(line)
+                            except:
+                                pass
                         last_line = line
             
             if last_line:
-                return json.loads(last_line)
+                metrics = json.loads(last_line)
+                # Merge config into metrics for access to num_epochs
+                if config:
+                    metrics['_config'] = config
+                return metrics
         except FileNotFoundError:
             return {{}}
         except json.JSONDecodeError:
@@ -251,29 +271,22 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         return {{}}
     
     def _transform_schema(self, metrics):
-        """Transform backend schema → Rich progress format (with controller compatibility)."""
+        """Transform backend schema → Controller-compatible progress format."""
         if not metrics:
             return {{
-                # Rich format (for UI)
                 "progressPercentage": 0,
                 "estimatedRemainingSeconds": None,
                 "currentStep": 0,
                 "totalSteps": 0,
-                "currentEpoch": 0,
-                "totalEpochs": 0,
-                "trainMetrics": {{}},
-                "evalMetrics": {{}},
-                # Controller compatibility fields
-                "status": "initializing",
-                "status_message": "Waiting for training to start...",
-                "progress": {{
-                    "step_current": 0,
-                    "step_total": 0,
-                    "percent": 0.0,
-                    "epoch": 0
+                "currentEpoch": 1,
+                "totalEpochs": 1,
+                "trainMetrics": {{
+                    "loss": None,
+                    "learning_rate": None,
+                    "grad_norm": None,
                 }},
-                "metrics": {{}},
-                "timestamp": None,
+                "evalMetrics": {{}},
+                "elapsedSeconds": None,
             }}
         
         # Detect backend based on metrics keys
@@ -295,13 +308,18 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         step_total = steps_per_epoch * total_epochs if steps_per_epoch > 0 else step
         current_step_absolute = (epoch * steps_per_epoch) + step if steps_per_epoch > 0 else step
         
-        # Calculate progress percentage
-        percent = (current_step_absolute / step_total * 100) if step_total > 0 else 0
+        # Calculate progress percentage (cap at 100%)
+        percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
         
         # Estimate remaining time
         time_per_batch = metrics.get("time_per_batch", 0)
         remaining_steps = step_total - current_step_absolute
-        estimated_remaining_sec = int(remaining_steps * time_per_batch) if time_per_batch > 0 else None
+        
+        # If training is complete (100%), set remaining time to 0
+        if percent >= 100 or remaining_steps <= 0:
+            estimated_remaining_sec = 0
+        else:
+            estimated_remaining_sec = int(remaining_steps * time_per_batch) if time_per_batch > 0 else None
         
         loss_val = metrics.get("loss", 0)
         lr_val = metrics.get("lr")
@@ -310,93 +328,105 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         val_loss_val = metrics.get("val_loss")
         
         return {{
-            # Rich format (for UI display)
-            "progressPercentage": round(percent, 1),
+            # Controller-compatible format  
+            "progressPercentage": int(round(percent)),
             "estimatedRemainingSeconds": estimated_remaining_sec,
             "currentStep": current_step_absolute,
             "totalSteps": step_total,
             "currentEpoch": epoch + 1,
             "totalEpochs": total_epochs,
             "trainMetrics": {{
-                "loss": round(loss_val, 4) if loss_val else None,
-                "learning_rate": lr_val,
-                "grad_norm": round(grad_norm_val, 4) if grad_norm_val else None,
-                "throughput_samples_sec": round(throughput_val, 1) if throughput_val else None,
+                "loss": f"{{loss_val:.4f}}" if loss_val else None,
+                "learning_rate": f"{{lr_val:.6f}}" if lr_val else None,
+                "grad_norm": f"{{grad_norm_val:.4f}}" if grad_norm_val else None,
             }},
             "evalMetrics": {{
-                "eval_loss": round(val_loss_val, 4) if val_loss_val else None,
+                "eval_loss": f"{{val_loss_val:.4f}}" if val_loss_val else None,
             }},
-            "timestamp": metrics.get("timestamp"),
-            # Controller compatibility fields
-            "status": "training",
-            "status_message": f"Training epoch {{epoch + 1}}/{{total_epochs}}, step {{current_step_absolute}}/{{step_total}} ({{round(percent, 1)}}%)",
-            "progress": {{
-                "step_current": current_step_absolute,
-                "step_total": step_total,
-                "percent": round(percent, 2),
-                "epoch": epoch
-            }},
-            "metrics": {{
-                "loss": loss_val,
-                "learning_rate": lr_val,
-                "throughput_samples_sec": throughput_val,
-            }},
+            "elapsedSeconds": None,
         }}
     
     def _transform_instructlab(self, metrics):
-        """Transform InstructLab Training (SFT) schema to rich progress format with controller compatibility."""
+        """Transform InstructLab Training (SFT) schema to controller-compatible format."""
         step = metrics.get("step", 0)
         epoch = metrics.get("epoch", 0)
         num_epoch_steps = metrics.get("num_epoch_steps", 0)
+        total_samples = metrics.get("total_samples", 0)
+        
+        # Extract real num_epochs from config (first line of JSONL)
+        config = metrics.get("_config", {{}})
+        configured_num_epochs = config.get("num_epochs")
         
         # Calculate total steps
-        total_epochs = metrics.get("total_epochs", 1)
-        step_total = num_epoch_steps * total_epochs if num_epoch_steps > 0 else step
-        current_step_absolute = (epoch * num_epoch_steps) + step if num_epoch_steps > 0 else step
+        current_epoch = epoch + 1  # Current epoch number (0-indexed, so +1)
+        current_step_absolute = step  # Current step (already properly indexed)
         
-        # Calculate progress percentage
-        percent = (current_step_absolute / step_total * 100) if step_total > 0 else 0
+        # Use samples_seen to detect when we've moved to a new epoch
+        samples_seen = metrics.get("samples_seen", 0)
         
-        # Estimate remaining time
-        throughput = metrics.get("overall_throughput", 0)
-        throughput_samples = (throughput / 1000) if throughput > 0 else 0
+        # Determine total epochs
+        if configured_num_epochs:
+            # Use the real configured value from training config!
+            estimated_total_epochs = configured_num_epochs
+        elif total_samples > 0 and samples_seen > 0:
+            # Fallback: estimate based on samples_seen if config not available
+            epochs_ratio = samples_seen / total_samples
+            if epochs_ratio > 1.0:
+                import math
+                estimated_total_epochs = max(math.ceil(epochs_ratio), current_epoch)
+            elif current_step_absolute > 0 and num_epoch_steps > 0:
+                if current_step_absolute < num_epoch_steps * 0.9:
+                    estimated_total_epochs = max(2, current_epoch)
+                else:
+                    estimated_total_epochs = current_epoch
+            else:
+                estimated_total_epochs = current_epoch
+        else:
+            # Final fallback
+            estimated_total_epochs = max(2, current_epoch) if current_step_absolute > 0 else current_epoch
+        
+        # Calculate total expected steps based on current knowledge
+        if num_epoch_steps > 0:
+            step_total = num_epoch_steps * estimated_total_epochs
+        else:
+            # Fallback: use current step + some buffer
+            step_total = max(step, step + 10)
+        
+        # Calculate progress percentage (cap at 100%)
+        percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
+        
+        # Estimate remaining time based on throughput
+        throughput = metrics.get("overall_throughput", 0)  # samples/second
         remaining_steps = step_total - current_step_absolute
-        estimated_remaining_sec = int(remaining_steps / throughput_samples) if throughput_samples > 0 else None
         
+        # If training is complete (100%), set remaining time to 0
+        if percent >= 100 or remaining_steps <= 0:
+            estimated_remaining_sec = 0
+        else:
+            estimated_remaining_sec = int(remaining_steps / throughput) if throughput > 0 and remaining_steps > 0 else None
+        
+        # Extract training metrics from JSONL
         loss_val = metrics.get("avg_loss", 0)
         lr_val = metrics.get("lr")
-        grad_norm_val = metrics.get("gradnorm", 0)
+        grad_norm_val = metrics.get("gradnorm")
+        throughput_val = metrics.get("overall_throughput")
         
         return {{
-            # Rich format (for UI display)
-            "progressPercentage": round(percent, 1),
+            # Controller-compatible format
+            "progressPercentage": int(round(percent)),
             "estimatedRemainingSeconds": estimated_remaining_sec,
             "currentStep": current_step_absolute,
             "totalSteps": step_total,
-            "currentEpoch": epoch + 1,
-            "totalEpochs": total_epochs,
+            "currentEpoch": current_epoch,
+            "totalEpochs": estimated_total_epochs,
             "trainMetrics": {{
-                "loss": round(loss_val, 4) if loss_val else None,
-                "learning_rate": lr_val,
-                "grad_norm": round(grad_norm_val, 4) if grad_norm_val else None,
-                "throughput_samples_sec": round(throughput_samples, 1) if throughput_samples else None,
+                "loss": f"{{loss_val:.4f}}" if loss_val else None,
+                "learning_rate": f"{{lr_val:.6f}}" if lr_val is not None and lr_val > 0 else None,
+                "grad_norm": f"{{grad_norm_val:.4f}}" if grad_norm_val is not None else None,
+                "throughput": f"{{throughput_val:.2f}}" if throughput_val else None,
             }},
             "evalMetrics": {{}},
-            "timestamp": metrics.get("timestamp"),
-            # Controller compatibility fields
-            "status": "training",
-            "status_message": f"Training epoch {{epoch + 1}}/{{total_epochs}}, step {{current_step_absolute}}/{{step_total}} ({{round(percent, 1)}}%)",
-            "progress": {{
-                "step_current": current_step_absolute,
-                "step_total": step_total,
-                "percent": round(percent, 2),
-                "epoch": epoch
-            }},
-            "metrics": {{
-                "loss": loss_val,
-                "learning_rate": lr_val,
-                "throughput_samples_sec": throughput_samples,
-            }},
+            "elapsedSeconds": None,
         }}
     
     def log_message(self, format, *args):
@@ -405,7 +435,12 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
 
 def start_metrics_server(port={port}):
     """Start HTTP metrics server in background thread."""
+    import socket
+    
+    # Enable SO_REUSEADDR to allow port reuse
     server = http.server.HTTPServer(("", port), TrainingHubMetricsHandler)
+    server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
     print(f"[Kubeflow] Metrics server started on port {{port}} for {{TrainingHubMetricsHandler.algorithm}}", flush=True)
     
     # Run server in background thread
@@ -414,9 +449,16 @@ def start_metrics_server(port={port}):
     
     return server
 
-# Start metrics server
-_metrics_server = start_metrics_server()
-print("[Kubeflow] Progress tracking initialized for Training Hub", flush=True)
+# Start metrics server with error handling
+try:
+    _metrics_server = start_metrics_server()
+    print("[Kubeflow] Progress tracking initialized for Training Hub", flush=True)
+except OSError as e:
+    if e.errno == 98:  # Address already in use
+        print(f"[Kubeflow] Warning: Port {port} already in use, progress tracking may not work correctly", flush=True)
+        _metrics_server = None
+    else:
+        raise
 
 # ==============================================================================
 # End of Progress Tracking Code

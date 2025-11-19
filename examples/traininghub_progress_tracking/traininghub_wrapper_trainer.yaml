@@ -12,7 +12,7 @@ spec:
     - ReadWriteMany
   resources:
     requests:
-      storage: 8Gi
+      storage: 20Gi
   storageClassName: nfs-csi
   volumeMode: Filesystem
 
@@ -162,54 +162,70 @@ data:
             epoch = metrics.get("epoch", 0)
             num_epoch_steps = metrics.get("num_epoch_steps", 0)
             
-            # Calculate total steps
-            total_epochs = metrics.get("total_epochs", 1)
-            step_total = num_epoch_steps * total_epochs if num_epoch_steps > 0 else step
-            current_step_absolute = (epoch * num_epoch_steps) + step if num_epoch_steps > 0 else step
+            # Calculate total steps - PROGRESSIVE ESTIMATION
+            # Since JSONL doesn't include planned total_epochs, we can't know the final totalSteps upfront
+            # Strategy: Show progress within current epoch, and update totalSteps as we discover more epochs
             
-            # Calculate progress percentage
-            percent = (current_step_absolute / step_total * 100) if step_total > 0 else 0
+            current_epoch = epoch + 1  # Current epoch number (0-indexed, so +1)
+            current_step_absolute = step  # Current step (already properly indexed)
+            
+            # Use samples_seen to detect when we've moved to a new epoch
+            total_samples = metrics.get("total_samples", 0)
+            samples_seen = metrics.get("samples_seen", 0)
+            
+            # Estimate how many epochs we'll do based on how far we've progressed
+            if total_samples > 0 and samples_seen > 0:
+                epochs_ratio = samples_seen / total_samples
+                if epochs_ratio > 1.0:
+                    # We've seen multiple epochs - estimate based on pattern
+                    import math
+                    estimated_total_epochs = max(math.ceil(epochs_ratio), current_epoch)
+                else:
+                    # Still in first epoch
+                    estimated_total_epochs = current_epoch
+            else:
+                estimated_total_epochs = current_epoch
+            
+            # Calculate total expected steps
+            if num_epoch_steps > 0:
+                step_total = num_epoch_steps * estimated_total_epochs
+            else:
+                step_total = max(step, step + 10)
+            
+            # Calculate progress percentage (cap at 100%)
+            percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
             
             # Estimate remaining time
-            throughput = metrics.get("overall_throughput", 0)
-            throughput_samples = (throughput / 1000) if throughput > 0 else 0
+            # Estimate remaining time based on throughput
+            throughput = metrics.get("overall_throughput", 0)  # samples/second
             remaining_steps = step_total - current_step_absolute
-            estimated_remaining_sec = int(remaining_steps / throughput_samples) if throughput_samples > 0 else None
             
+            # If training is complete (100%), set remaining time to 0
+            if percent >= 100 or remaining_steps <= 0:
+                estimated_remaining_sec = 0
+            else:
+                estimated_remaining_sec = int(remaining_steps / throughput) if throughput > 0 and remaining_steps > 0 else None
+            
+            # Extract training metrics from JSONL
             loss_val = metrics.get("avg_loss", 0)
             lr_val = metrics.get("lr")
-            grad_norm_val = metrics.get("gradnorm", 0)
+            grad_norm_val = metrics.get("gradnorm")
             
             return {
-                # Rich format (for UI display)
-                "progressPercentage": round(percent, 1),
+                # Controller-compatible format (what controller expects from HTTP endpoint)
+                "progressPercentage": int(round(percent)),
                 "estimatedRemainingSeconds": estimated_remaining_sec,
                 "currentStep": current_step_absolute,
                 "totalSteps": step_total,
-                "currentEpoch": epoch + 1,
-                "totalEpochs": total_epochs,
+                "currentEpoch": current_epoch,
+                "totalEpochs": estimated_total_epochs,
                 "trainMetrics": {
-                    "loss": round(loss_val, 4) if loss_val else None,
-                    "learning_rate": lr_val,
-                    "grad_norm": round(grad_norm_val, 4) if grad_norm_val else None,
-                    "throughput_samples_sec": round(throughput_samples, 1) if throughput_samples else None,
+                    "loss": f"{loss_val:.4f}" if loss_val else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val else None,
+                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val else None,
                 },
                 "evalMetrics": {},
-                "timestamp": metrics.get("timestamp"),
-                # Controller compatibility fields
-                "status": "training",
-                "status_message": f"Training epoch {epoch + 1}/{total_epochs}, step {current_step_absolute}/{step_total} ({round(percent, 1)}%)",
-                "progress": {
-                    "step_current": current_step_absolute,
-                    "step_total": step_total,
-                    "percent": round(percent, 2),
-                    "epoch": epoch
-                },
-                "metrics": {
-                    "loss": loss_val,
-                    "learning_rate": lr_val,
-                    "throughput_samples_sec": throughput_samples,
-                },
+                "elapsedSeconds": None,
             }
         
         def log_message(self, format, *args):
@@ -261,7 +277,7 @@ data:
         ckpt_dir = "/workspace/checkpoints"
         if os.path.exists(ckpt_dir):
             print(f"[TrainingHub] Cleaning old checkpoints from {ckpt_dir}")
-            shutil.rmtree(ckpt_dir)
+            shutil.rmtree(ckpt_dir, ignore_errors=True)
         os.makedirs(ckpt_dir, exist_ok=True)
         print(f"[TrainingHub] Checkpoint directory ready: {ckpt_dir}")
         
@@ -273,8 +289,8 @@ data:
             {"messages": [{"role": "user", "content": "What is CV?"}, {"role": "assistant", "content": "Computer Vision"}]},
         ]
         
-        # Duplicate for more training steps
-        sample_data = sample_data * 4  # 20 total samples
+        # Duplicate for longer training (200 samples for extended training duration)
+        sample_data = sample_data * 40  # 200 total samples (40 * 5 = 200)
         
         data_file = "/workspace/data/training.jsonl"
         with open(data_file, 'w') as f:
@@ -372,7 +388,7 @@ spec:
                   restartPolicy: Never
                   containers:
                     - name: node
-                      image: quay.io/modh/training:py311-cuda124-torch251
+                      image: quay.io/opendatahub/odh-training-th03-cuda128-torch28-py312-rhel9:latest
                       volumeMounts:
                         - name: shared-workspace
                           mountPath: /workspace
@@ -395,47 +411,28 @@ spec:
                         - |
                           set -e
                           
-                          echo "[TrainingHub Wrapper] Checking dependencies..."
+                          echo "[TrainingHub Wrapper] Using pre-built Training Hub image"
+                          echo "[TrainingHub Wrapper] Image: quay.io/opendatahub/odh-training-th03-cuda128-torch28-py312-rhel9:latest"
                           
-                          # Check if training-hub is already installed
+                          # Verify training-hub is available
                           if python -c "import training_hub" 2>/dev/null; then
-                              echo "[TrainingHub Wrapper] ✅ training-hub already installed, skipping installation"
-                              echo "[TrainingHub Wrapper] This will save 3-5 minutes!"
+                              echo "[TrainingHub Wrapper] ✅ training-hub is available"
+                              python -c "import training_hub; print(f'Version: {training_hub.__version__ if hasattr(training_hub, \"__version__\") else \"unknown\"}')" || true
                           else
-                              echo "[TrainingHub Wrapper] Installing dependencies..."
-                              
-                              # Install typing-extensions for Python 3.11 compatibility
-                              echo "[TrainingHub Wrapper] Installing typing-extensions..."
-                              PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --no-cache-dir typing-extensions
-                              
-                              # Install training-hub with all dependencies
-                              echo "[TrainingHub Wrapper] Installing training-hub (this may take 5-10 minutes)..."
-                              PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install \
-                                --index-url https://pypi.org/simple \
-                                --no-cache-dir \
-                                training-hub 2>&1 | tee /tmp/pip-install.log || {
-                                  echo "ERROR: training-hub installation failed"
-                                  echo "Last 50 lines of installation log:"
-                                  tail -50 /tmp/pip-install.log
-                                  echo ""
-                                  echo "This likely failed due to CUDA compilation requirements."
-                                  echo "training-hub dependencies (flash-attn, mamba-ssm) need GPU and CUDA toolkit."
-                                  exit 1
-                              }
-                              
-                              echo "[TrainingHub Wrapper] Installation successful!"
+                              echo "[TrainingHub Wrapper] ❌ ERROR: training-hub not found in image"
+                              exit 1
                           fi
                           
                           echo "[TrainingHub Wrapper] Starting training script..."
                           python /workspace/train_with_traininghub.py
                       resources:
                         requests:
-                          cpu: "2"
-                          memory: "8Gi"      # Reduced to fit node capacity
+                          cpu: "4"
+                          memory: "16Gi"
                           nvidia.com/gpu: "1"
                         limits:
-                          cpu: "4"
-                          memory: "14Gi"
+                          cpu: "8"
+                          memory: "32Gi"
                           nvidia.com/gpu: "1"
                   volumes:
                     - name: shared-workspace
