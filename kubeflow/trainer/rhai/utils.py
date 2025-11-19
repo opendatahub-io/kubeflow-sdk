@@ -1,9 +1,13 @@
 import logging
-from typing import Optional, Union
+from typing import Optional
 
 from kubeflow_trainer_api import models
 
-from kubeflow.trainer.rhai import traininghub, transformers
+from kubeflow.trainer.rhai import (
+    RHAITrainer,
+    traininghub,
+    transformers,
+)
 from kubeflow.trainer.types import types
 
 logger = logging.getLogger(__name__)
@@ -11,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def get_trainer_cr_from_rhai_trainer(
     runtime: types.Runtime,
-    trainer: Union[transformers.TransformersTrainer, traininghub.TrainingHubTrainer],
+    trainer: RHAITrainer,
     initializer: Optional[types.Initializer] = None,
 ) -> models.TrainerV1alpha1Trainer:
     if isinstance(trainer, traininghub.TrainingHubTrainer):
@@ -33,7 +37,7 @@ def get_trainer_cr_from_rhai_trainer(
 
 
 def merge_progression_annotations(
-    trainer: Union[transformers.TransformersTrainer, traininghub.TrainingHubTrainer],
+    trainer: RHAITrainer,
     spec_annotations: Optional[dict[str, str]] = None,
 ) -> Optional[dict[str, str]]:
     """Merge progression tracking annotations for RHAI trainers with existing annotations.
