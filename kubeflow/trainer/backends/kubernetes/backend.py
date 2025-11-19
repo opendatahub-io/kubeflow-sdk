@@ -20,7 +20,7 @@ import random
 import re
 import string
 import time
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, get_args
 import uuid
 
 from kubeflow_trainer_api import models
@@ -36,8 +36,6 @@ from kubeflow.trainer.rhai import (
     RHAITrainer,
     utils as rhai_utils,
 )
-from kubeflow.trainer.rhai.traininghub import TrainingHubTrainer
-from kubeflow.trainer.rhai.transformers import TransformersTrainer
 from kubeflow.trainer.types import types
 
 logger = logging.getLogger(__name__)
@@ -220,7 +218,7 @@ class KubernetesBackend(RuntimeBackend):
             trainer_overrides = spec_section.get("trainer", {})
             pod_template_overrides = spec_section.get("podTemplateOverrides")
 
-        if isinstance(trainer, RHAITrainer):
+        if isinstance(trainer, get_args(RHAITrainer)):
             spec_annotations = rhai_utils.merge_progression_annotations(trainer, spec_annotations)
 
         train_job_name = name or (
@@ -641,7 +639,7 @@ class KubernetesBackend(RuntimeBackend):
                 )
 
             # If users choose to use an RHAI trainer.
-            elif isinstance(trainer, (TrainingHubTrainer, TransformersTrainer)):
+            elif isinstance(trainer, get_args(RHAITrainer)):
                 trainer_cr = rhai_utils.get_trainer_cr_from_rhai_trainer(
                     runtime, trainer, initializer
                 )
