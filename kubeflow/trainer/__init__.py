@@ -31,7 +31,6 @@ from kubeflow.trainer.constants.constants import DATASET_PATH, MODEL_PATH
 from kubeflow.trainer.types.types import (
     BuiltinTrainer,
     CustomTrainer,
-    CustomTrainerContainer,
     DataCacheInitializer,
     DataFormat,
     DataType,
@@ -53,7 +52,6 @@ from kubeflow.trainer.types.types import (
 __all__ = [
     "BuiltinTrainer",
     "CustomTrainer",
-    "CustomTrainerContainer",
     "DataCacheInitializer",
     "DataFormat",
     "DATASET_PATH",

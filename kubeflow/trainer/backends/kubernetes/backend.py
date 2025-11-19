@@ -220,7 +220,7 @@ class KubernetesBackend(RuntimeBackend):
             trainer_overrides = spec_section.get("trainer", {})
             pod_template_overrides = spec_section.get("podTemplateOverrides")
 
-        if isinstance(trainer, (TransformersTrainer, TrainingHubTrainer)):
+        if isinstance(trainer, RHAITrainer):
             spec_annotations = rhai_utils.merge_progression_annotations(trainer, spec_annotations)
 
         train_job_name = name or (

@@ -248,13 +248,29 @@ def _create_progression_instrumentation(metrics_port: int):
             self.start_time = time.time()
 
             if state.is_world_process_zero and self.server is None:
-                server = http.server.HTTPServer(
-                    ("0.0.0.0", self.metrics_port), ProgressionMetricsHandler
-                )
-                thread = threading.Thread(target=server.serve_forever, daemon=True)
-                thread.start()
-                self.server = server
-                print(f"[Kubeflow] Metrics server started on port {self.metrics_port}", flush=True)
+                try:
+                    server = http.server.HTTPServer(
+                        ("0.0.0.0", self.metrics_port), ProgressionMetricsHandler
+                    )
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    self.server = server
+                    print(
+                        f"[Kubeflow] Metrics server started on port {self.metrics_port}",
+                        flush=True,
+                    )
+                except OSError as e:
+                    print(
+                        f"[Kubeflow] Warning: Failed to start metrics server on port "
+                        f"{self.metrics_port}: {e}. Training will continue without metrics server.",
+                        flush=True,
+                    )
+                except Exception as e:
+                    print(
+                        f"[Kubeflow] Warning: Unexpected error starting metrics server: {e}. "
+                        f"Training will continue without metrics server.",
+                        flush=True,
+                    )
 
             _update_progression_metrics(
                 {
