@@ -77,4 +77,5 @@ def merge_progression_annotations(
 
     if spec_annotations is None:
         return progression_annotations
-    return {**spec_annotations, **progression_annotations}
+    # Merge spec_annotations last to allow users to override progression annotations
+    return {**progression_annotations, **spec_annotations}

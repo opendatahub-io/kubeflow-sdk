@@ -357,5 +357,213 @@ def test_instrumentation_wrapper_thread_safety():
     print("test execution complete")
 
 
+def test_get_trainer_cr_basic():
+    """Test basic Trainer CRD generation from TransformersTrainer."""
+    print("Executing test: Basic Trainer CRD generation")
+
+    def dummy_train():
+        print("Training...")
+
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    trainer = TransformersTrainer(func=dummy_train)
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    assert trainer_crd is not None
+    assert trainer_crd.command is not None
+    assert len(trainer_crd.command) > 0
+    # Check progression tracking is wrapped
+    assert "[Kubeflow] Initializing progression tracking" in " ".join(trainer_crd.command)
+
+    print("test execution complete")
+
+
+def test_get_trainer_cr_with_num_nodes():
+    """Test Trainer CRD generation with num_nodes set."""
+    print("Executing test: Trainer CRD with num_nodes")
+
+    def dummy_train():
+        print("Training...")
+
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    trainer = TransformersTrainer(func=dummy_train, num_nodes=4)
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    assert trainer_crd.num_nodes == 4
+
+    print("test execution complete")
+
+
+def test_get_trainer_cr_with_resources():
+    """Test Trainer CRD generation with resources_per_node."""
+    print("Executing test: Trainer CRD with resources")
+
+    def dummy_train():
+        print("Training...")
+
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    trainer = TransformersTrainer(
+        func=dummy_train, resources_per_node={"cpu": 4, "memory": "8Gi", "nvidia.com/gpu": 1}
+    )
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    assert trainer_crd.resources_per_node is not None
+    assert trainer_crd.resources_per_node.requests is not None
+
+    print("test execution complete")
+
+
+def test_get_trainer_cr_with_env():
+    """Test Trainer CRD generation with environment variables."""
+    print("Executing test: Trainer CRD with environment variables")
+
+    def dummy_train():
+        print("Training...")
+
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    trainer = TransformersTrainer(
+        func=dummy_train, env={"HF_HOME": "/data/huggingface", "WANDB_DISABLED": "true"}
+    )
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    assert trainer_crd.env is not None
+    assert len(trainer_crd.env) == 2
+    env_dict = {env.name: env.value for env in trainer_crd.env}
+    assert env_dict["HF_HOME"] == "/data/huggingface"
+    assert env_dict["WANDB_DISABLED"] == "true"
+
+    print("test execution complete")
+
+
+def test_get_trainer_cr_with_func_args():
+    """Test Trainer CRD generation with function arguments."""
+    print("Executing test: Trainer CRD with function arguments")
+
+    def train_with_args(lr: float, batch_size: int):
+        print(f"Training with lr={lr}, batch_size={batch_size}")
+
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    trainer = TransformersTrainer(func=train_with_args, func_args={"lr": 0.001, "batch_size": 32})
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    command_str = " ".join(trainer_crd.command)
+    assert "lr=0.001" in command_str
+    assert "batch_size=32" in command_str
+
+    print("test execution complete")
+
+
+def test_get_trainer_cr_progression_disabled():
+    """Test Trainer CRD generation with progression tracking disabled."""
+    print("Executing test: Trainer CRD with progression tracking disabled")
+
+    def dummy_train():
+        print("Training...")
+
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    trainer = TransformersTrainer(func=dummy_train, enable_progression_tracking=False)
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    command_str = " ".join(trainer_crd.command)
+    # Should NOT contain progression tracking code
+    assert "[Kubeflow] Initializing progression tracking" not in command_str
+    assert "KubeflowProgressCallback" not in command_str
+
+    print("test execution complete")
+
+
+def test_get_trainer_cr_custom_metrics_port():
+    """Test Trainer CRD generation with custom metrics port."""
+    print("Executing test: Trainer CRD with custom metrics port")
+
+    def dummy_train():
+        print("Training...")
+
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    trainer = TransformersTrainer(func=dummy_train, metrics_port=8888)
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    command_str = " ".join(trainer_crd.command)
+    assert "metrics_port = 8888" in command_str
+
+    print("test execution complete")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -328,6 +328,7 @@ def _create_progression_instrumentation(metrics_port: int):
             return result
 
         trainer_module.Trainer.__init__ = _instrumented_trainer_init
+
     # END_PROGRESSION_INSTRUMENTATION_CODE
 
     return apply_progression_tracking, KubeflowProgressCallback, ProgressionMetricsHandler
@@ -418,9 +419,22 @@ def get_trainer_cr_from_transformers_trainer(
         Trainer CRD with wrapped training function and annotations
     """
     import inspect
+    import os
     import textwrap
 
     from kubeflow.trainer.backends.kubernetes import utils
+    from kubeflow.trainer.constants import constants
+
+    # Ensure runtime trainer has a command set
+    # This handles cases where RuntimeTrainer is created without calling set_command()
+    try:
+        _ = runtime.trainer.command
+    except AttributeError:
+        # Command not set, use default based on framework
+        if runtime.trainer.framework == "pytorch":
+            runtime.trainer.set_command(constants.TORCH_COMMAND)
+        else:
+            runtime.trainer.set_command(constants.DEFAULT_COMMAND)
 
     trainer_crd = models.TrainerV1alpha1Trainer()
 
@@ -458,14 +472,33 @@ def get_trainer_cr_from_transformers_trainer(
         )
         func_code = wrapper_code.replace("{{user_func_import_and_call}}", func_code)
 
-    # Generate the command using the progression logic wrappedfunction code
-    trainer_crd.command = utils.get_command_using_train_func(
-        runtime,
-        trainer.func,
-        trainer.func_args,
-        trainer.pip_index_urls,
-        trainer.packages_to_install,
-        func_code_override=func_code,
-    )
+    # Build the command directly with the wrapped function code
+    func_file = os.path.basename(inspect.getfile(trainer.func))
+
+    is_mpi = runtime.trainer.command[0] == "mpirun"
+    if is_mpi:
+        func_file = os.path.join(constants.DEFAULT_MPI_USER_HOME, func_file)
+
+    # Install Python packages if required
+    install_packages = ""
+    if trainer.packages_to_install:
+        install_packages = utils.get_script_for_python_packages(
+            trainer.packages_to_install,
+            trainer.pip_index_urls,
+            is_mpi,
+        )
+
+    # Build the trainer command with wrapped function code
+    command = []
+    for c in runtime.trainer.command:
+        if "{func_file}" in c:
+            exec_script = c.format(func_code=func_code, func_file=func_file)
+            if install_packages:
+                exec_script = install_packages + exec_script
+            command.append(exec_script)
+        else:
+            command.append(c)
+
+    trainer_crd.command = command
 
     return trainer_crd

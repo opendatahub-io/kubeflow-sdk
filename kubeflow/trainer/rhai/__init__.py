@@ -24,12 +24,11 @@ from typing import Union
 from kubeflow.trainer.rhai.traininghub import TrainingHubAlgorithms, TrainingHubTrainer
 from kubeflow.trainer.rhai.transformers import TransformersTrainer
 
-# Type alias for all RHAI trainers
-RHAITrainer = Union[TransformersTrainer, TrainingHubTrainer]
-
-__all__ = [
+__all__ = (
     "RHAITrainer",
     "TrainingHubAlgorithms",
     "TrainingHubTrainer",
     "TransformersTrainer",
-]
+)
+
+RHAITrainer = Union[TransformersTrainer, TrainingHubTrainer]
