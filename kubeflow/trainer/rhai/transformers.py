@@ -38,9 +38,21 @@ class TransformersTrainer:
         env: The environment variables to set in the training nodes.
         enable_progression_tracking: Enable HTTP metrics server. Default: True.
         metrics_port: Port for HTTP metrics server. Default: 28080.
+                     Valid range: 1024-65535 (non-privileged ports).
+                     Ports 0-1023 are reserved and require root privileges.
+                     This range is required for OpenShift restricted SCCs and Kubernetes
+                     non-root security policies. Common safe ports: 8080-8999, 28000-29000.
         metrics_poll_interval_seconds: How often controller should poll metrics (seconds).
-                                       Default: 30. Lower values = more frequent updates,
-                                       higher controller load. Recommended range: 5-60 seconds.
+                                       Default: 30 seconds.
+                                       Lower values = more frequent updates but higher
+                                       controller load. Recommended: 5-60 seconds.
+                                       Values < 5 will trigger a warning.
+
+    Raises:
+        ValueError: If metrics_port is not in range 1024-65535.
+        ValueError: If metrics_poll_interval_seconds is not in range 1-3600.
+        ValueError: If func is not callable.
+        UserWarning: If metrics_poll_interval_seconds < 5 (performance consideration).
     """
 
     # Core training function (same as CustomTrainer)
@@ -59,6 +71,67 @@ class TransformersTrainer:
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
 
+    def __post_init__(self):
+        """Validate configuration after initialization.
+
+        Validation ensures compatibility with:
+        - OpenShift restricted Security Context Constraints (SCCs)
+        - Kubernetes non-root security policies
+        - Standard container best practices
+        """
+        # Validate func is callable
+        if not callable(self.func):
+            raise ValueError(
+                f"func must be callable, got {type(self.func).__name__}. "
+                f"Please provide a training function."
+            )
+
+        # Validate metrics_port (must work with OpenShift restricted SCCs)
+        if not isinstance(self.metrics_port, int):
+            raise ValueError(
+                f"metrics_port must be an integer, got {type(self.metrics_port).__name__}"
+            )
+
+        if self.metrics_port < 1024 or self.metrics_port > 65535:
+            raise ValueError(
+                f"metrics_port must be in range 1024-65535 (non-privileged ports), "
+                f"got {self.metrics_port}. Ports 0-1023 are reserved and require root privileges. "
+                f"This range (1024-65535) is required for OpenShift restricted SCCs and "
+                f"Kubernetes non-root containers."
+            )
+
+        # Validate metrics_poll_interval_seconds
+        if not isinstance(self.metrics_poll_interval_seconds, int):
+            raise ValueError(
+                f"metrics_poll_interval_seconds must be an integer, "
+                f"got {type(self.metrics_poll_interval_seconds).__name__}"
+            )
+
+        if self.metrics_poll_interval_seconds < 1:
+            raise ValueError(
+                f"metrics_poll_interval_seconds must be positive, "
+                f"got {self.metrics_poll_interval_seconds}"
+            )
+
+        if self.metrics_poll_interval_seconds > 3600:
+            raise ValueError(
+                f"metrics_poll_interval_seconds must be <= 3600 (1 hour), "
+                f"got {self.metrics_poll_interval_seconds}. "
+                f"Use a smaller interval for better tracking."
+            )
+
+        # Warn about very small poll intervals (performance consideration)
+        if self.metrics_poll_interval_seconds < 5:
+            import warnings
+
+            warnings.warn(
+                f"metrics_poll_interval_seconds is set to "
+                f"{self.metrics_poll_interval_seconds}s, which is very frequent. "
+                f"Consider using >= 5 seconds to avoid performance overhead.",
+                UserWarning,
+                stacklevel=2,
+            )
+
 
 def _create_progression_instrumentation(metrics_port: int):
     """Instrumentation code injected into training pods (extracted via inspect.getsource).
@@ -67,9 +140,17 @@ def _create_progression_instrumentation(metrics_port: int):
     into training scripts, providing syntax highlighting and testability while avoiding
     runtime SDK dependencies.
 
+    The code between BEGIN_PROGRESSION_INSTRUMENTATION_CODE and
+    END_PROGRESSION_INSTRUMENTATION_CODE markers is extracted and injected into
+    user training scripts. These markers enable robust extraction without fragile
+    pattern matching on function signatures or return statements.
+
     Args:
         metrics_port: Port for HTTP metrics server
     """
+    # BEGIN_PROGRESSION_INSTRUMENTATION_CODE
+    # ⚠️ Everything between BEGIN and END markers gets injected into training pods.
+    # Do not add helper functions with returns between these markers.
     from dataclasses import asdict, dataclass, field
     import http.server
     import json
@@ -204,8 +285,9 @@ def _create_progression_instrumentation(metrics_port: int):
                     if isinstance(value, (int, float)):
                         metric_value = value
                     else:
+                        # Try to extract scalar from torch tensor (graceful degradation)
                         try:
-                            import torch
+                            import torch  # type: ignore[import-not-found]
 
                             if isinstance(value, torch.Tensor) and value.numel() == 1:
                                 metric_value = value.item()
@@ -246,6 +328,7 @@ def _create_progression_instrumentation(metrics_port: int):
             return result
 
         trainer_module.Trainer.__init__ = _instrumented_trainer_init
+    # END_PROGRESSION_INSTRUMENTATION_CODE
 
     return apply_progression_tracking, KubeflowProgressCallback, ProgressionMetricsHandler
 
@@ -269,24 +352,26 @@ def get_transformers_instrumentation_wrapper(
     instrumentation_code = inspect.getsource(_create_progression_instrumentation)
     instrumentation_code = textwrap.dedent(instrumentation_code)
 
+    # Extract code between explicit markers for robust, maintainable extraction
     lines = instrumentation_code.split("\n")
-    code_start = 0
-    code_end = len(lines)
-    in_docstring = False
-    for i, line in enumerate(lines):
-        if '"""' in line:
-            if not in_docstring:
-                in_docstring = True
-            else:
-                code_start = i + 1
-                break
-        elif line.strip().startswith("def "):
-            code_start = i + 1
+    code_start = None
+    code_end = None
 
-    for i in range(len(lines) - 1, code_start - 1, -1):
-        if lines[i].strip().startswith("return "):
-            code_end = i
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Only match exact comment markers to avoid false positives
+        if stripped == "# BEGIN_PROGRESSION_INSTRUMENTATION_CODE":
+            code_start = i + 1  # Start after the marker comment
+        elif stripped == "# END_PROGRESSION_INSTRUMENTATION_CODE":
+            code_end = i  # End before the marker comment
             break
+
+    if code_start is None or code_end is None:
+        raise RuntimeError(
+            "Failed to extract instrumentation code: BEGIN_PROGRESSION_INSTRUMENTATION_CODE "
+            "and/or END_PROGRESSION_INSTRUMENTATION_CODE markers not found in "
+            "_create_progression_instrumentation()"
+        )
 
     instrumentation_body = "\n".join(lines[code_start:code_end])
     instrumentation_body = textwrap.dedent(instrumentation_body)
@@ -305,8 +390,7 @@ metrics_port = {metrics_port}
 {instrumentation_body}
 
 # Apply instrumentation before user code runs
-apply_progression_tracking_fn, _, _ = apply_progression_tracking, None, None
-apply_progression_tracking_fn()
+apply_progression_tracking()
 print("[Kubeflow] Progression tracking enabled", flush=True)
 
 # =============================================================================
@@ -333,49 +417,55 @@ def get_trainer_cr_from_transformers_trainer(
     Returns:
         Trainer CRD with wrapped training function and annotations
     """
+    import inspect
+    import textwrap
+
     from kubeflow.trainer.backends.kubernetes import utils
-    from kubeflow.trainer.rhai.constants import (
-        ANNOTATION_FRAMEWORK,
-        ANNOTATION_METRICS_POLL_INTERVAL,
-        ANNOTATION_METRICS_PORT,
-        ANNOTATION_PROGRESSION_TRACKING,
-    )
-    from kubeflow.trainer.types import types
 
-    # NOTE: SDK not needed at runtime - instrumentation code is self-contained
-    base_trainer = types.CustomTrainer(
-        func=trainer.func,
-        func_args=trainer.func_args,
-        packages_to_install=trainer.packages_to_install,
-        pip_index_urls=trainer.pip_index_urls,
-        num_nodes=trainer.num_nodes,
-        resources_per_node=trainer.resources_per_node,
-        env=trainer.env,
-    )
+    trainer_crd = models.TrainerV1alpha1Trainer()
 
-    trainer_crd = utils.get_trainer_cr_from_custom_trainer(runtime, base_trainer)
+    # Add number of nodes
+    if trainer.num_nodes:
+        trainer_crd.num_nodes = trainer.num_nodes
 
+    # Add resources per node
+    if trainer.resources_per_node:
+        trainer_crd.resources_per_node = utils.get_resources_per_node(trainer.resources_per_node)
+
+    # Add environment variables
+    if trainer.env:
+        trainer_crd.env = [
+            models.IoK8sApiCoreV1EnvVar(name=key, value=value) for key, value in trainer.env.items()
+        ]
+
+    # Generate function code
+    func_code = inspect.getsource(trainer.func)
+    func_code = textwrap.dedent(func_code)
+
+    # Generate function call
+    func_call = f"{trainer.func.__name__}("
+    if trainer.func_args:
+        for key, value in trainer.func_args.items():
+            func_call += f"{key}={value},"
+    func_call += ")"
+
+    func_code = f"{func_code}\n{func_call}\n"
+
+    # Wrap with progression tracking instrumentation if enabled
     if trainer.enable_progression_tracking:
         wrapper_code = get_transformers_instrumentation_wrapper(
             metrics_port=trainer.metrics_port,
         )
+        func_code = wrapper_code.replace("{{user_func_import_and_call}}", func_code)
 
-        wrapped_code = wrapper_code.replace("{{user_func_import_and_call}}", "{func_code}")
-        trainer_crd.command = [
-            cmd.replace("{func_code}", wrapped_code) if "{func_code}" in cmd else cmd
-            for cmd in trainer_crd.command
-        ]
-
-        if trainer_crd.annotations is None:
-            trainer_crd.annotations = {}
-
-        trainer_crd.annotations.update(
-            {
-                ANNOTATION_PROGRESSION_TRACKING: "true",
-                ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
-                ANNOTATION_METRICS_POLL_INTERVAL: str(trainer.metrics_poll_interval_seconds),
-                ANNOTATION_FRAMEWORK: "transformers",
-            }
-        )
+    # Generate the command using the progression logic wrappedfunction code
+    trainer_crd.command = utils.get_command_using_train_func(
+        runtime,
+        trainer.func,
+        trainer.func_args,
+        trainer.pip_index_urls,
+        trainer.packages_to_install,
+        func_code_override=func_code,
+    )
 
     return trainer_crd

@@ -146,7 +146,7 @@ def test_instrumentation_wrapper_structure():
 
     assert "apply_progression_tracking" in wrapper
     assert "metrics_port = 28080" in wrapper
-    assert "apply_progression_tracking_fn()" in wrapper
+    assert "apply_progression_tracking()" in wrapper
     assert "# USER TRAINING CODE" in wrapper
 
     print("test execution complete")
