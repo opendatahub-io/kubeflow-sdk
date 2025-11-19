@@ -113,7 +113,7 @@ def test_instrumentation_wrapper_generation_basic():
     assert "class ProgressionMetricsHandler" in wrapper
     assert "def apply_progression_tracking" in wrapper
     assert "{{user_func_import_and_call}}" in wrapper
-    assert f"metrics_port = {28080}" in wrapper
+    assert f"metrics_port={28080}" in wrapper
 
     print("test execution complete")
 
@@ -145,7 +145,7 @@ def test_instrumentation_wrapper_structure():
     )
 
     assert "apply_progression_tracking" in wrapper
-    assert "metrics_port = 28080" in wrapper
+    assert "metrics_port=28080" in wrapper
     assert "apply_progression_tracking()" in wrapper
     assert "# USER TRAINING CODE" in wrapper
 
@@ -322,7 +322,7 @@ def test_instrumentation_wrapper_different_ports():
 
     for port in test_ports:
         wrapper = get_transformers_instrumentation_wrapper(metrics_port=port)
-        assert f"metrics_port = {port}" in wrapper
+        assert f"metrics_port={port}" in wrapper
         print(f"  ✓ Port {port} correctly set")
 
     print("test execution complete")
@@ -560,7 +560,7 @@ def test_get_trainer_cr_custom_metrics_port():
     trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
 
     command_str = " ".join(trainer_crd.command)
-    assert "metrics_port = 8888" in command_str
+    assert "metrics_port=8888" in command_str
 
     print("test execution complete")
 
