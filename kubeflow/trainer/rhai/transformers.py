@@ -205,13 +205,16 @@ def _create_progression_instrumentation(metrics_port: int):
                 estimated_total_time = elapsed_sec / (current_step / total_steps)
                 remaining_sec = max(0, int(estimated_total_time - elapsed_sec))
 
+            # Calculate current epoch: round instead of truncate to handle partial epochs (e.g., 1.98 → 2)
+            current_epoch = 0
+            if hasattr(state, "epoch") and state.epoch:
+                current_epoch = round(state.epoch) if is_final else int(state.epoch)
+
             _update_progression_metrics(
                 {
                     "currentStep": current_step,
                     "totalSteps": total_steps if total_steps > 0 else None,
-                    "currentEpoch": (
-                        int(state.epoch) if hasattr(state, "epoch") and state.epoch else 0
-                    ),
+                    "currentEpoch": current_epoch,
                     "progressPercentage": progress_pct,
                     "estimatedRemainingSeconds": remaining_sec,
                 }
