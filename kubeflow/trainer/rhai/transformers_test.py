@@ -390,9 +390,7 @@ def test_instrumentation_wrapper_user_code_ordering():
     wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
 
     lines = wrapper.split("\n")
-    user_code_marker_index = next(
-        i for i, line in enumerate(lines) if "USER TRAINING CODE" in line
-    )
+    user_code_marker_index = next(i for i, line in enumerate(lines) if "USER TRAINING CODE" in line)
     placeholder_index = next(
         i for i, line in enumerate(lines) if "{{user_func_import_and_call}}" in line
     )
@@ -404,8 +402,6 @@ def test_instrumentation_wrapper_user_code_ordering():
     )
 
     print("test execution complete")
-
-
 
 
 def test_instrumentation_wrapper_no_syntax_errors():
@@ -770,7 +766,7 @@ def test_callback_completion_state_protection(test_case):
         # Replace user code placeholder
         wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
         # Skip the actual patching call (line after _create_progression_instrumentation)
-        lines = wrapper_code.split('\n')
+        lines = wrapper_code.split("\n")
         modified_lines = []
         for line in lines:
             # Comment out the standalone apply_progression_tracking() call
@@ -778,7 +774,7 @@ def test_callback_completion_state_protection(test_case):
                 modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
             else:
                 modified_lines.append(line)
-        wrapper_code = '\n'.join(modified_lines)
+        wrapper_code = "\n".join(modified_lines)
         exec(wrapper_code, namespace)
 
         (
@@ -917,7 +913,7 @@ def test_callback_metrics_categorization(test_case):
         # Replace user code placeholder
         wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
         # Skip the actual patching call (line after _create_progression_instrumentation)
-        lines = wrapper_code.split('\n')
+        lines = wrapper_code.split("\n")
         modified_lines = []
         for line in lines:
             # Comment out the standalone apply_progression_tracking() call
@@ -925,7 +921,7 @@ def test_callback_metrics_categorization(test_case):
                 modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
             else:
                 modified_lines.append(line)
-        wrapper_code = '\n'.join(modified_lines)
+        wrapper_code = "\n".join(modified_lines)
         exec(wrapper_code, namespace)
 
         (

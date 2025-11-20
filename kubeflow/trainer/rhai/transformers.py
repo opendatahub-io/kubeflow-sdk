@@ -319,17 +319,15 @@ def _create_progression_instrumentation(metrics_port: int):
             self.training_finished = True
 
             total_steps = state.max_steps if state.max_steps > 0 else None
-            total_epochs = (
-                int(args.num_train_epochs) if hasattr(args, "num_train_epochs") else None
-            )
+            total_epochs = int(args.num_train_epochs) if hasattr(args, "num_train_epochs") else None
 
             _update_progression_metrics(
                 {
                     "currentStep": total_steps if total_steps else state.global_step,
                     "totalSteps": total_steps,
-                    "currentEpoch": total_epochs if total_epochs else (
-                        int(state.epoch) if hasattr(state, "epoch") and state.epoch else 0
-                    ),
+                    "currentEpoch": total_epochs
+                    if total_epochs
+                    else (int(state.epoch) if hasattr(state, "epoch") and state.epoch else 0),
                     "totalEpochs": total_epochs,
                     "progressPercentage": 100,
                     "estimatedRemainingSeconds": 0,
