@@ -1,0 +1,55 @@
+name: Update requirements.txt
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'uv.lock'
+  workflow_dispatch:  # Allow manual triggers
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-requirements:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.REPO_WORKFLOW_PAT || github.token }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Generate requirements.txt
+        run: |
+          uv export --format requirements-txt > requirements.txt
+
+      - name: Check for changes
+        id: git-check
+        run: |
+          git diff --exit-code requirements.txt || echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        if: steps.git-check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.REPO_WORKFLOW_PAT || github.token }}
+          commit-message: "chore(deps): Update requirements.txt from uv.lock"
+          title: "chore(deps): Update requirements.txt"
+          body: |
+            Automated update of `requirements.txt` based on current `uv.lock`.
+            
+            Generated with: `uv export --format requirements-txt`
+            
+            Triggered by changes to `uv.lock` in commit ${{ github.sha }}
+          branch: auto/update-requirements
+          delete-branch: true
+          labels: |
+            automated-update
+            dependencies
+
