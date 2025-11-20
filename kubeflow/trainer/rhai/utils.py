@@ -38,17 +38,17 @@ def get_trainer_cr_from_rhai_trainer(
 
 def merge_progression_annotations(
     trainer: RHAITrainer,
-    spec_annotations: Optional[dict[str, str]] = None,
+    metadata_annotations: Optional[dict[str, str]] = None,
 ) -> Optional[dict[str, str]]:
-    """Merge progression tracking annotations for RHAI trainers with existing annotations.
+    """Merge progression tracking annotations for RHAI trainers with existing metadata annotations.
 
     Args:
         trainer: RHAI trainer instance (TransformersTrainer or TrainingHubTrainer).
-        spec_annotations: Existing annotations dict to merge with, if any.
+        metadata_annotations: Existing metadata annotations dict to merge with, if any.
 
     Returns:
         Merged annotations dict with progression tracking added (if enabled),
-        or original spec_annotations if progression tracking is disabled.
+        or original metadata_annotations if progression tracking is disabled.
     """
     if (
         not hasattr(trainer, "enable_progression_tracking")
@@ -56,7 +56,7 @@ def merge_progression_annotations(
         or not hasattr(trainer, "metrics_port")
         or not hasattr(trainer, "metrics_poll_interval_seconds")
     ):
-        return spec_annotations
+        return metadata_annotations
 
     from kubeflow.trainer.rhai.constants import (
         ANNOTATION_FRAMEWORK,
@@ -79,7 +79,7 @@ def merge_progression_annotations(
         ANNOTATION_FRAMEWORK: framework,
     }
 
-    if spec_annotations is None:
+    if metadata_annotations is None:
         return progression_annotations
-    # Merge spec_annotations last to allow users to override progression annotations
-    return {**progression_annotations, **spec_annotations}
+    # Merge metadata_annotations last to allow users to override progression annotations
+    return {**progression_annotations, **metadata_annotations}

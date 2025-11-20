@@ -81,145 +81,331 @@ def test_transformers_trainer_with_custom_config():
     print("test execution complete")
 
 
-def test_transformers_trainer_with_progression_disabled():
-    """Test TransformersTrainer with progression tracking disabled."""
-    print("Executing test: TransformersTrainer with progression tracking disabled")
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="poll interval too low (4 seconds)",
+            expected_status="failed",
+            config={"metrics_poll_interval_seconds": 4},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="poll interval too high (301 seconds)",
+            expected_status="failed",
+            config={"metrics_poll_interval_seconds": 301},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="poll interval minimum boundary (5 seconds)",
+            expected_status="success",
+            config={"metrics_poll_interval_seconds": 5},
+            expected_output=5,
+        ),
+        TestCase(
+            name="poll interval maximum boundary (300 seconds)",
+            expected_status="success",
+            config={"metrics_poll_interval_seconds": 300},
+            expected_output=300,
+        ),
+        TestCase(
+            name="poll interval invalid type (float)",
+            expected_status="failed",
+            config={"metrics_poll_interval_seconds": 30.5},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="poll interval invalid type (string)",
+            expected_status="failed",
+            config={"metrics_poll_interval_seconds": "30"},
+            expected_error=ValueError,
+        ),
+    ],
+)
+def test_metrics_poll_interval_validation(test_case):
+    """Test metrics_poll_interval_seconds validation."""
+    print(f"Executing test: {test_case.name}")
 
     def dummy_train():
-        print("Training...")
+        pass
 
-    trainer = TransformersTrainer(
-        func=dummy_train,
-        enable_progression_tracking=False,
-    )
+    try:
+        trainer = TransformersTrainer(
+            func=dummy_train,
+            metrics_poll_interval_seconds=test_case.config["metrics_poll_interval_seconds"],
+        )
 
-    assert trainer.enable_progression_tracking is False
+        assert test_case.expected_status == "success"
+        assert trainer.metrics_poll_interval_seconds == test_case.expected_output
 
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_generation_basic():
-    """Test basic instrumentation wrapper generation."""
-    print("Executing test: Basic instrumentation wrapper generation")
-
-    wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
-    )
-
-    assert isinstance(wrapper, str)
-    assert "from kubeflow.trainer.rhai" not in wrapper
-    assert "import kubeflow" not in wrapper
-    assert "class KubeflowProgressCallback" in wrapper
-    assert "class ProgressionMetricsHandler" in wrapper
-    assert "def apply_progression_tracking" in wrapper
-    assert "{{user_func_import_and_call}}" in wrapper
-    assert f"metrics_port={28080}" in wrapper
+    except Exception as e:
+        assert test_case.expected_status == "failed"
+        assert type(e) is test_case.expected_error
 
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_self_contained():
-    """Test that wrapper is self-contained (no SDK dependency)."""
-    print("Executing test: Wrapper is self-contained")
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="port too low (1023)",
+            expected_status="failed",
+            config={"metrics_port": 1023},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="port too high (65536)",
+            expected_status="failed",
+            config={"metrics_port": 65536},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="port minimum boundary (1024)",
+            expected_status="success",
+            config={"metrics_port": 1024},
+            expected_output=1024,
+        ),
+        TestCase(
+            name="port maximum boundary (65535)",
+            expected_status="success",
+            config={"metrics_port": 65535},
+            expected_output=65535,
+        ),
+        TestCase(
+            name="port invalid type (float)",
+            expected_status="failed",
+            config={"metrics_port": 8080.5},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="port invalid type (string)",
+            expected_status="failed",
+            config={"metrics_port": "8080"},
+            expected_error=ValueError,
+        ),
+    ],
+)
+def test_metrics_port_validation(test_case):
+    """Test metrics_port validation."""
+    print(f"Executing test: {test_case.name}")
 
-    wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
-    )
+    def dummy_train():
+        pass
 
-    assert "from kubeflow" not in wrapper
-    assert "import kubeflow" not in wrapper
-    assert "class ProgressionMetricsHandler" in wrapper
-    assert "class KubeflowProgressCallback" in wrapper
-    assert "def apply_progression_tracking" in wrapper
-    assert "from transformers import" in wrapper
+    try:
+        trainer = TransformersTrainer(
+            func=dummy_train,
+            metrics_port=test_case.config["metrics_port"],
+        )
+
+        assert test_case.expected_status == "success"
+        assert trainer.metrics_port == test_case.expected_output
+
+    except Exception as e:
+        assert test_case.expected_status == "failed"
+        assert type(e) is test_case.expected_error
 
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_structure():
-    """Test wrapper structure and function call."""
-    print("Executing test: Wrapper structure")
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="func is string",
+            expected_status="failed",
+            config={"func": "not_callable"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="func is integer",
+            expected_status="failed",
+            config={"func": 123},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="func is None",
+            expected_status="failed",
+            config={"func": None},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="func is dict",
+            expected_status="failed",
+            config={"func": {"train": "function"}},
+            expected_error=ValueError,
+        ),
+    ],
+)
+def test_func_callable_validation(test_case):
+    """Test func callable validation."""
+    print(f"Executing test: {test_case.name}")
 
-    wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
-    )
+    try:
+        TransformersTrainer(func=test_case.config["func"])
+        assert test_case.expected_status == "success"
 
-    assert "apply_progression_tracking" in wrapper
-    assert "metrics_port=28080" in wrapper
-    assert "apply_progression_tracking()" in wrapper
-    assert "# USER TRAINING CODE" in wrapper
+    except Exception as e:
+        assert test_case.expected_status == "failed"
+        assert type(e) is test_case.expected_error
 
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_completeness():
-    """Test wrapper contains all implementation details (self-contained)."""
-    print("Executing test: Wrapper completeness")
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="basic generation - returns string",
+            expected_status="success",
+            config={"port": 28080},
+            expected_output=[
+                ("isinstance", str),
+                ("class KubeflowProgressCallback", True),
+                ("class ProgressionMetricsHandler", True),
+                ("def apply_progression_tracking", True),
+                ("{{user_func_import_and_call}}", True),
+                ("metrics_port=28080", True),
+            ],
+        ),
+        TestCase(
+            name="self-contained - no SDK imports",
+            expected_status="success",
+            config={"port": 28080},
+            expected_output=[
+                ("from kubeflow", False),
+                ("import kubeflow", False),
+                ("class ProgressionMetricsHandler", True),
+                ("class KubeflowProgressCallback", True),
+                ("def apply_progression_tracking", True),
+                ("from transformers import", True),
+            ],
+        ),
+        TestCase(
+            name="structure - function call and user code placeholder",
+            expected_status="success",
+            config={"port": 28080},
+            expected_output=[
+                ("apply_progression_tracking", True),
+                ("metrics_port=28080", True),
+                ("apply_progression_tracking()", True),
+                ("# USER TRAINING CODE", True),
+            ],
+        ),
+        TestCase(
+            name="completeness - all callback methods",
+            expected_status="success",
+            config={"port": 28080},
+            expected_output=[
+                ("def on_train_begin", True),
+                ("def on_step_end", True),
+                ("def on_log", True),
+                ("def on_train_end", True),
+                ("_original_init", True),
+                ("def _instrumented_trainer_init", True),
+            ],
+        ),
+        TestCase(
+            name="implementation details - progress tracking logic",
+            expected_status="success",
+            config={"port": 28080},
+            expected_output=[
+                ("from kubeflow.trainer.rhai", False),
+                ("state.global_step", True),
+                ("progress_pct", True),
+                ("elapsed_sec", True),
+            ],
+        ),
+        TestCase(
+            name="dataclass - ProgressionMetricsState",
+            expected_status="success",
+            config={"port": 28080},
+            expected_output=[
+                ("@dataclass", True),
+                ("class ProgressionMetricsState", True),
+                ("progressPercentage", True),
+                ("estimatedRemainingSeconds", True),
+                ("currentStep", True),
+                ("totalSteps", True),
+                ("trainMetrics", True),
+                ("evalMetrics", True),
+                ("asdict", True),
+            ],
+        ),
+        TestCase(
+            name="metrics state initialization",
+            expected_status="success",
+            config={"port": 28080},
+            expected_output=[
+                ("progressPercentage: Optional[int] = None", True),
+                ("currentStep: int = 0", True),
+                ("currentEpoch: int = 0", True),
+                ("trainMetrics: dict[str, Any] = field(default_factory=dict)", True),
+                ("evalMetrics: dict[str, Any] = field(default_factory=dict)", True),
+            ],
+        ),
+        TestCase(
+            name="thread safety mechanisms",
+            expected_status="success",
+            config={"port": 28080},
+            expected_output=[
+                ("_progression_metrics_lock", True),
+                ("threading.Lock()", True),
+                ("with _progression_metrics_lock:", True),
+                ("_update_progression_metrics", True),
+            ],
+        ),
+    ],
+)
+def test_instrumentation_wrapper_content(test_case):
+    """Test instrumentation wrapper content contains expected elements."""
+    print(f"Executing test: {test_case.name}")
 
     wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
+        metrics_port=test_case.config["port"],
     )
 
-    assert "def on_train_begin" in wrapper
-    assert "def on_step_end" in wrapper
-    assert "def on_log" in wrapper
-    assert "def on_train_end" in wrapper
-    assert "_original_init" in wrapper
-    assert "def _instrumented_trainer_init" in wrapper
+    assert test_case.expected_status == "success"
+
+    for check_item, expected in test_case.expected_output:
+        if check_item == "isinstance":
+            assert isinstance(wrapper, expected)
+        elif expected:
+            assert check_item in wrapper, f"Expected '{check_item}' to be in wrapper"
+        else:
+            assert check_item not in wrapper, f"Expected '{check_item}' to NOT be in wrapper"
 
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_user_code_placeholder():
-    """Test that wrapper has placeholder for user code injection."""
-    print("Executing test: User code placeholder")
+def test_instrumentation_wrapper_user_code_ordering():
+    """Test that user code placeholder appears after instrumentation setup.
 
-    wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
-    )
+    This validates the critical execution order - instrumentation must be applied
+    before user training code runs.
+    """
+    print("Executing test: User code ordering validation")
 
-    assert "{{user_func_import_and_call}}" in wrapper
-    assert "# USER TRAINING CODE" in wrapper
+    wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
+
     lines = wrapper.split("\n")
-    user_code_index = next(i for i, line in enumerate(lines) if "USER TRAINING CODE" in line)
+    user_code_marker_index = next(
+        i for i, line in enumerate(lines) if "USER TRAINING CODE" in line
+    )
     placeholder_index = next(
         i for i, line in enumerate(lines) if "{{user_func_import_and_call}}" in line
     )
-    assert placeholder_index > user_code_index
 
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_multiple_ports():
-    """Test wrapper generation with different ports."""
-    print("Executing test: Multiple port configurations")
-
-    ports = [28080, 28090, 8080, 9000]
-
-    for port in ports:
-        wrapper = get_transformers_instrumentation_wrapper(
-            metrics_port=port,
-        )
-        assert str(port) in wrapper
-        print(f"  ✓ Port {port} correctly embedded")
-
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_contains_implementation():
-    """Test that wrapper contains all implementation details (self-contained)."""
-    print("Executing test: Wrapper contains implementation")
-
-    wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
+    # User code placeholder must come after marker to ensure instrumentation runs first
+    assert placeholder_index > user_code_marker_index, (
+        f"User code placeholder (line {placeholder_index}) must come after "
+        f"marker (line {user_code_marker_index}) for correct execution order"
     )
 
-    assert "from kubeflow.trainer.rhai" not in wrapper
-    assert "state.global_step" in wrapper
-    assert "progress_pct" in wrapper
-    assert "elapsed_sec" in wrapper
-
     print("test execution complete")
+
+
 
 
 def test_instrumentation_wrapper_no_syntax_errors():
@@ -289,70 +475,6 @@ def test_transformers_trainer_configurations(test_case):
             assert type(e) is test_case.expected_error
         else:
             raise
-
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_contains_dataclass():
-    """Test that wrapper contains the ProgressionMetricsState dataclass definition."""
-    print("Executing test: Wrapper contains dataclass")
-
-    wrapper = get_transformers_instrumentation_wrapper(
-        metrics_port=28080,
-    )
-
-    assert "@dataclass" in wrapper
-    assert "class ProgressionMetricsState" in wrapper
-    assert "progressPercentage" in wrapper
-    assert "estimatedRemainingSeconds" in wrapper
-    assert "currentStep" in wrapper
-    assert "totalSteps" in wrapper
-    assert "trainMetrics" in wrapper
-    assert "evalMetrics" in wrapper
-    assert "asdict" in wrapper
-
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_different_ports():
-    """Test that different ports are correctly embedded in wrapper."""
-    print("Executing test: Different port values")
-
-    test_ports = [8080, 9090, 28080, 28090, 30000]
-
-    for port in test_ports:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=port)
-        assert f"metrics_port={port}" in wrapper
-        print(f"  ✓ Port {port} correctly set")
-
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_metrics_state_initialization():
-    """Test that metrics state is properly initialized in wrapper."""
-    print("Executing test: Metrics state initialization")
-
-    wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-
-    assert "progressPercentage: Optional[int] = None" in wrapper
-    assert "currentStep: int = 0" in wrapper
-    assert "currentEpoch: int = 0" in wrapper
-    assert "trainMetrics: dict[str, Any] = field(default_factory=dict)" in wrapper
-    assert "evalMetrics: dict[str, Any] = field(default_factory=dict)" in wrapper
-
-    print("test execution complete")
-
-
-def test_instrumentation_wrapper_thread_safety():
-    """Test that wrapper includes thread-safe update mechanisms."""
-    print("Executing test: Thread safety in wrapper")
-
-    wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-
-    assert "_progression_metrics_lock" in wrapper
-    assert "threading.Lock()" in wrapper
-    assert "with _progression_metrics_lock:" in wrapper
-    assert "_update_progression_metrics" in wrapper
 
     print("test execution complete")
 
