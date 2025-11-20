@@ -205,10 +205,11 @@ def _create_progression_instrumentation(metrics_port: int):
                 estimated_total_time = elapsed_sec / (current_step / total_steps)
                 remaining_sec = max(0, int(estimated_total_time - elapsed_sec))
 
-            # Calculate current epoch: round instead of truncate to handle partial epochs (e.g., 1.98 → 2)
+            # Calculate current epoch (truncate during training, e.g., 1.98 → 1)
+            # Final rounding happens in on_train_end
             current_epoch = 0
             if hasattr(state, "epoch") and state.epoch:
-                current_epoch = round(state.epoch) if is_final else int(state.epoch)
+                current_epoch = int(state.epoch)
 
             _update_progression_metrics(
                 {
