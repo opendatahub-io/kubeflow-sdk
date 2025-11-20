@@ -687,5 +687,285 @@ def test_get_trainer_cr_custom_metrics_port():
     print("test execution complete")
 
 
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="callback timing bug - 371/375 steps during training end",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 371,
+                "state_max_steps": 375,
+                "state_epoch": 2.96,
+                "num_train_epochs": 3,
+                "overwrite_attempt_step": 100,
+            },
+            expected_output={
+                "currentStep": 375,
+                "totalSteps": 375,
+                "currentEpoch": 3,
+                "totalEpochs": 3,
+                "progressPercentage": 100,
+                "estimatedRemainingSeconds": 0,
+            },
+        ),
+        TestCase(
+            name="exact completion - 200/200 steps",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 200,
+                "state_max_steps": 200,
+                "state_epoch": 2.0,
+                "num_train_epochs": 2,
+                "overwrite_attempt_step": 50,
+            },
+            expected_output={
+                "currentStep": 200,
+                "totalSteps": 200,
+                "currentEpoch": 2,
+                "totalEpochs": 2,
+                "progressPercentage": 100,
+            },
+        ),
+        TestCase(
+            name="large gap - 500/1000 steps at completion",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 500,
+                "state_max_steps": 1000,
+                "state_epoch": 0.5,
+                "num_train_epochs": 1,
+                "overwrite_attempt_step": 200,
+            },
+            expected_output={
+                "currentStep": 1000,
+                "totalSteps": 1000,
+                "currentEpoch": 1,
+                "totalEpochs": 1,
+                "progressPercentage": 100,
+            },
+        ),
+    ],
+)
+def test_callback_completion_state_protection(test_case):
+    """Test that completion state is protected from overwrites after training ends.
+
+    This tests the fix for the bug where on_step_end was called after on_train_end
+    during evaluation, overwriting 375/375 back to 371/375.
+    """
+    print(f"Executing test: {test_case.name}")
+
+    import sys
+    from unittest.mock import Mock
+
+    # Mock transformers module for exec environment
+    mock_transformers = Mock()
+    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
+    mock_transformers.trainer = Mock()
+    sys.modules["transformers"] = mock_transformers
+
+    try:
+        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
+        namespace = {}
+        # Replace user code placeholder
+        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
+        # Skip the actual patching call (line after _create_progression_instrumentation)
+        lines = wrapper_code.split('\n')
+        modified_lines = []
+        for line in lines:
+            # Comment out the standalone apply_progression_tracking() call
+            if line.strip() == "apply_progression_tracking()":
+                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
+            else:
+                modified_lines.append(line)
+        wrapper_code = '\n'.join(modified_lines)
+        exec(wrapper_code, namespace)
+
+        (
+            _,
+            callback_class,
+            _,
+            get_metrics_json,
+            _,
+        ) = namespace["_create_progression_instrumentation"](28080)
+        callback = callback_class(metrics_port=28080)
+
+        import json
+
+        args = Mock()
+        args.num_train_epochs = test_case.config["num_train_epochs"]
+        state = Mock()
+        state.global_step = test_case.config["state_global_step"]
+        state.max_steps = test_case.config["state_max_steps"]
+        state.epoch = test_case.config["state_epoch"]
+        state.is_world_process_zero = False
+        control = Mock()
+
+        # Initialize and complete training
+        callback.on_train_begin(args, state, control)
+        callback.on_train_end(args, state, control)
+
+        # Verify completion state shows expected values
+        metrics = json.loads(get_metrics_json())
+        for key, expected_value in test_case.expected_output.items():
+            assert metrics[key] == expected_value, (
+                f"{key}: expected {expected_value}, got {metrics[key]}"
+            )
+
+        # Simulate on_step_end called after training_end (evaluation steps)
+        state.global_step = test_case.config["overwrite_attempt_step"]
+        callback.on_step_end(args, state, control)
+
+        # Verify completion state NOT overwritten (protected by training_finished flag)
+        metrics = json.loads(get_metrics_json())
+        assert metrics["currentStep"] == test_case.expected_output["currentStep"], (
+            "Completion state was overwritten!"
+        )
+        assert metrics["currentEpoch"] == test_case.expected_output["currentEpoch"], (
+            "Completion epoch was overwritten!"
+        )
+        assert metrics["progressPercentage"] == 100
+
+        print("test execution complete")
+    finally:
+        # Clean up mock
+        if "transformers" in sys.modules:
+            del sys.modules["transformers"]
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="train metrics only",
+            expected_status=SUCCESS,
+            config={
+                "logs": {"loss": 0.5, "learning_rate": 0.001, "grad_norm": 0.1},
+            },
+            expected_output={
+                "trainMetrics": {"loss": 0.5, "learning_rate": 0.001, "grad_norm": 0.1},
+                "evalMetrics": {},
+            },
+        ),
+        TestCase(
+            name="eval metrics only",
+            expected_status=SUCCESS,
+            config={
+                "logs": {"eval_loss": 0.4, "eval_accuracy": 0.95},
+            },
+            expected_output={
+                "trainMetrics": {},
+                "evalMetrics": {"eval_loss": 0.4, "eval_accuracy": 0.95},
+            },
+        ),
+        TestCase(
+            name="mixed train and eval metrics",
+            expected_status=SUCCESS,
+            config={
+                "logs": {
+                    "loss": 0.5,
+                    "learning_rate": 0.001,
+                    "grad_norm": 0.1,
+                    "eval_loss": 0.4,
+                    "eval_accuracy": 0.95,
+                    "train_samples_per_second": 10.0,
+                },
+            },
+            expected_output={
+                "trainMetrics": {
+                    "loss": 0.5,
+                    "learning_rate": 0.001,
+                    "grad_norm": 0.1,
+                    "throughput_samples_sec": 10.0,
+                },
+                "evalMetrics": {"eval_loss": 0.4, "eval_accuracy": 0.95},
+            },
+        ),
+        TestCase(
+            name="throughput metric renaming",
+            expected_status=SUCCESS,
+            config={
+                "logs": {"train_samples_per_second": 15.5},
+            },
+            expected_output={
+                "trainMetrics": {"throughput_samples_sec": 15.5},
+                "evalMetrics": {},
+            },
+        ),
+    ],
+)
+def test_callback_metrics_categorization(test_case):
+    """Test that train and eval metrics are properly categorized.
+
+    Verifies metrics with 'eval_' prefix go to evalMetrics, and training metrics
+    (loss, learning_rate, grad_norm) go to trainMetrics.
+    """
+    print(f"Executing test: {test_case.name}")
+
+    import sys
+    from unittest.mock import Mock
+
+    # Mock transformers module for exec environment
+    mock_transformers = Mock()
+    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
+    mock_transformers.trainer = Mock()
+    sys.modules["transformers"] = mock_transformers
+
+    try:
+        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
+        namespace = {}
+        # Replace user code placeholder
+        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
+        # Skip the actual patching call (line after _create_progression_instrumentation)
+        lines = wrapper_code.split('\n')
+        modified_lines = []
+        for line in lines:
+            # Comment out the standalone apply_progression_tracking() call
+            if line.strip() == "apply_progression_tracking()":
+                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
+            else:
+                modified_lines.append(line)
+        wrapper_code = '\n'.join(modified_lines)
+        exec(wrapper_code, namespace)
+
+        (
+            _,
+            callback_class,
+            _,
+            get_metrics_json,
+            _,
+        ) = namespace["_create_progression_instrumentation"](28080)
+        callback = callback_class(metrics_port=28080)
+
+        import json
+
+        args = Mock()
+        state = Mock()
+        control = Mock()
+
+        # Log metrics
+        callback.on_log(args, state, control, logs=test_case.config["logs"])
+
+        metrics = json.loads(get_metrics_json())
+
+        # Verify train metrics
+        for key, value in test_case.expected_output["trainMetrics"].items():
+            assert metrics["trainMetrics"].get(key) == value, (
+                f"trainMetrics[{key}]: expected {value}, got {metrics['trainMetrics'].get(key)}"
+            )
+
+        # Verify eval metrics
+        for key, value in test_case.expected_output["evalMetrics"].items():
+            assert metrics["evalMetrics"].get(key) == value, (
+                f"evalMetrics[{key}]: expected {value}, got {metrics['evalMetrics'].get(key)}"
+            )
+
+        print("test execution complete")
+    finally:
+        # Clean up mock
+        if "transformers" in sys.modules:
+            del sys.modules["transformers"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

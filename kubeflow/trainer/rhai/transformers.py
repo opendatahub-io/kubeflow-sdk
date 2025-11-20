@@ -187,23 +187,23 @@ def _create_progression_instrumentation(metrics_port: int):
             self.start_time: Optional[float] = None
             self.metrics_port = metrics_port
             self.server: Optional[http.server.HTTPServer] = None
+            self.training_finished: bool = False
 
-        def _update_progress_state(self, args, state, is_final: bool = False) -> None:
-            """Calculate and update progression state (shared logic for step_end and train_end)."""
+        def _update_progress_state(self, args, state) -> None:
+            """Calculate and update progression state during training."""
             current_step = state.global_step
             total_steps = state.max_steps
 
-            progress_pct = int(current_step / total_steps * 100) if total_steps > 0 else None
-            if is_final and progress_pct is None:
-                progress_pct = 100  # Default to 100% if total_steps unknown at end
+            # Calculate progress percentage (always rounds down, e.g., 374/375 = 99%)
+            progress_pct = int(current_step / total_steps * 100) if total_steps > 0 else 0
 
+            # Estimate remaining time based on elapsed time and progress
+            current_time = time.time()
+            elapsed_sec = current_time - self.start_time if self.start_time else 0
             remaining_sec = None
-            if not is_final:
-                current_time = time.time()
-                elapsed_sec = current_time - self.start_time if self.start_time else 0
-                if total_steps > 0 and current_step > 0 and elapsed_sec > 0:
-                    estimated_total_time = elapsed_sec / (current_step / total_steps)
-                    remaining_sec = int(estimated_total_time - elapsed_sec)
+            if total_steps > 0 and current_step > 0 and elapsed_sec > 0:
+                estimated_total_time = elapsed_sec / (current_step / total_steps)
+                remaining_sec = max(0, int(estimated_total_time - elapsed_sec))
 
             _update_progression_metrics(
                 {
@@ -213,7 +213,7 @@ def _create_progression_instrumentation(metrics_port: int):
                         int(state.epoch) if hasattr(state, "epoch") and state.epoch else 0
                     ),
                     "progressPercentage": progress_pct,
-                    "estimatedRemainingSeconds": 0 if is_final else remaining_sec,
+                    "estimatedRemainingSeconds": remaining_sec,
                 }
             )
 
@@ -246,6 +246,11 @@ def _create_progression_instrumentation(metrics_port: int):
                         flush=True,
                     )
 
+            # Calculate initial progress (handles checkpoint resume scenarios)
+            initial_progress = 0
+            if state.max_steps > 0 and state.global_step > 0:
+                initial_progress = int(state.global_step / state.max_steps * 100)
+
             _update_progression_metrics(
                 {
                     "currentStep": state.global_step,
@@ -256,13 +261,15 @@ def _create_progression_instrumentation(metrics_port: int):
                     "totalEpochs": (
                         int(args.num_train_epochs) if hasattr(args, "num_train_epochs") else None
                     ),
-                    "progressPercentage": 0,
+                    "progressPercentage": initial_progress,
                 }
             )
 
         def on_step_end(self, args, state, control, **kwargs) -> None:
             """Update progress after each training step."""
-            self._update_progress_state(args, state, is_final=False)
+            # Don't overwrite completion state if training has already ended
+            if not self.training_finished:
+                self._update_progress_state(args, state)
 
         def on_log(self, args, state, control, logs=None, **kwargs):
             """Categorize and track training/evaluation metrics."""
@@ -294,17 +301,40 @@ def _create_progression_instrumentation(metrics_port: int):
                     elif key == "train_samples_per_second":
                         train_metrics["throughput_samples_sec"] = metric_value
 
-                if train_metrics or eval_metrics:
-                    update_dict = {}
-                    if train_metrics:
-                        update_dict["trainMetrics"] = train_metrics
-                    if eval_metrics:
-                        update_dict["evalMetrics"] = eval_metrics
+                update_dict = {}
+                if train_metrics:
+                    update_dict["trainMetrics"] = train_metrics
+                if eval_metrics:
+                    update_dict["evalMetrics"] = eval_metrics
+
+                if update_dict:
                     _update_progression_metrics(update_dict)
 
         def on_train_end(self, args, state, control, **kwargs) -> None:
-            """Update final progression state based on actual training completion state."""
-            self._update_progress_state(args, state, is_final=True)
+            """Update final progression state to 100% completion.
+
+            Sets training_finished flag to prevent on_step_end from overwriting
+            completion state during post-training evaluation steps.
+            """
+            self.training_finished = True
+
+            total_steps = state.max_steps if state.max_steps > 0 else None
+            total_epochs = (
+                int(args.num_train_epochs) if hasattr(args, "num_train_epochs") else None
+            )
+
+            _update_progression_metrics(
+                {
+                    "currentStep": total_steps if total_steps else state.global_step,
+                    "totalSteps": total_steps,
+                    "currentEpoch": total_epochs if total_epochs else (
+                        int(state.epoch) if hasattr(state, "epoch") and state.epoch else 0
+                    ),
+                    "totalEpochs": total_epochs,
+                    "progressPercentage": 100,
+                    "estimatedRemainingSeconds": 0,
+                }
+            )
 
     def apply_progression_tracking():
         """Patch Trainer.__init__ to inject KubeflowProgressCallback."""
@@ -319,7 +349,14 @@ def _create_progression_instrumentation(metrics_port: int):
 
         trainer_module.Trainer.__init__ = _instrumented_trainer_init
 
-    return apply_progression_tracking, KubeflowProgressCallback, ProgressionMetricsHandler
+    # Return callback class and helper functions (helpers exposed for testing)
+    return (
+        apply_progression_tracking,
+        KubeflowProgressCallback,
+        ProgressionMetricsHandler,
+        _get_progression_metrics_json,
+        _update_progression_metrics,
+    )
 
 
 def get_transformers_instrumentation_wrapper(
@@ -355,7 +392,13 @@ print("[Kubeflow] Initializing progression tracking", flush=True)
 {progression_instrumentation_code}
 
 # Initialize and apply instrumentation
-apply_progression_tracking, _, _ = _create_progression_instrumentation(metrics_port={metrics_port})
+(
+    apply_progression_tracking,
+    _,
+    _,
+    _,
+    _,
+) = _create_progression_instrumentation(metrics_port={metrics_port})
 apply_progression_tracking()
 print("[Kubeflow] Progression tracking enabled", flush=True)
 
