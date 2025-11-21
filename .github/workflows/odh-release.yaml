@@ -1,0 +1,149 @@
+name: ODH Release
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Prepare release
+    if: ${{ github.repository == 'opendatahub-io/kubeflow-sdk' }}
+    runs-on: ubuntu-latest
+    outputs:
+      base-version: ${{ steps.vars.outputs.base-version }}
+      release-version: ${{ steps.vars.outputs.release-version }}
+      is-prerelease: ${{ steps.vars.outputs.is-prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release version
+        id: vars
+        run: |
+          BASE_VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' kubeflow/__init__.py)
+
+          # Determine release version with -odh suffix
+          # Start at -odh-1 and increment from there
+          RELEASE_VERSION_BASE="v${BASE_VERSION}-odh"
+
+          # Check if this version tag already exists, and find the next available increment
+          INCREMENT=1
+          FINAL_VERSION="${RELEASE_VERSION_BASE}-${INCREMENT}"
+          while git ls-remote --tags origin | grep -q "refs/tags/${FINAL_VERSION}$"; do
+            INCREMENT=$((INCREMENT + 1))
+            FINAL_VERSION="${RELEASE_VERSION_BASE}-${INCREMENT}"
+          done
+
+          echo "base-version=$BASE_VERSION" >> $GITHUB_OUTPUT
+          echo "release-version=$FINAL_VERSION" >> $GITHUB_OUTPUT
+
+          if [[ "$BASE_VERSION" =~ rc[0-9]+$ ]]; then
+            echo "is-prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is-prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Base version: $BASE_VERSION"
+          echo "Release version: $FINAL_VERSION"
+
+  build:
+    name: Build package
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup build environment
+        run: |
+          make verify
+
+      - name: Run unit tests
+        run: |
+          make test-python
+
+      - name: Build package
+        run: |
+          uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ needs.prepare.outputs.release-version }}
+          path: dist/
+
+  create-tag:
+    name: Create and push tag
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create tag
+        run: |
+          RELEASE_VERSION="${{ needs.prepare.outputs.release-version }}"
+          echo "Creating tag: $RELEASE_VERSION"
+
+          if git ls-remote --tags origin | grep -q "refs/tags/${RELEASE_VERSION}$"; then
+            echo "Tag $RELEASE_VERSION already exists. Skipping"; exit 0; fi
+          git tag "$RELEASE_VERSION"
+          git push origin "$RELEASE_VERSION"
+
+  github-release:
+    name: Create GitHub Release
+    needs: [prepare, build, create-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ needs.prepare.outputs.release-version }}
+          path: dist/
+      - name: Extract changelog
+        if: needs.prepare.outputs.is-prerelease != 'true'
+        id: changelog
+        run: |
+          BASE_VERSION="${{ needs.prepare.outputs.base-version }}"
+          MAJOR_MINOR=$(echo "$BASE_VERSION" | cut -d. -f1,2)
+          CHANGELOG_FILE="CHANGELOG/CHANGELOG-${MAJOR_MINOR}.md"
+          set -euo pipefail
+          [[ -f "$CHANGELOG_FILE" ]] || { echo "ERROR: $CHANGELOG_FILE not found" >&2; exit 1; }
+          HEADER_REGEX="^# \\[${BASE_VERSION//./\\.}\\]"
+          SECTION=$(sed -n "/$HEADER_REGEX/,\$p" "$CHANGELOG_FILE" | tail -n +2)
+          [[ -n "$SECTION" ]] || { echo "ERROR: No changelog section for $BASE_VERSION in $CHANGELOG_FILE" >&2; exit 1; }
+          NEXT_VERSION=$(echo "$SECTION" | grep -m1 "^# \\[[0-9]" || true)
+          if [[ -n "$NEXT_VERSION" ]]; then
+            CHANGELOG=$(echo "$SECTION" | sed -n "1,/^# \\[[0-9]/p" | sed '1d;$d')
+          else
+            CHANGELOG=$(echo "$SECTION" | sed '1d')
+          fi
+          [[ -n "$CHANGELOG" ]] || { echo "ERROR: Empty changelog body for $BASE_VERSION in $CHANGELOG_FILE" >&2; exit 1; }
+          {
+            echo "changelog<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release-version }}
+          name: ${{ needs.prepare.outputs.release-version }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: ${{ needs.prepare.outputs.is-prerelease == 'true' }}
+          generate_release_notes: false
+          files: |
+            dist/*
