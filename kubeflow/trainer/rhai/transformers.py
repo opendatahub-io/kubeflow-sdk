@@ -29,7 +29,8 @@ class TransformersTrainer:
 
     Args:
         func: The function that encapsulates the entire model training process.
-        func_args: The arguments to pass to the function.
+              Must use transformers.Trainer or trl.SFTTrainer internally.
+        func_args: The arguments to pass to the function as kwargs.
         packages_to_install: A list of Python packages to install before running the function.
         pip_index_urls: The PyPI URLs from which to install Python packages.
                        The first URL will be the index-url, and remaining ones are extra-index-urls.
@@ -111,7 +112,7 @@ class TransformersTrainer:
             )
 
 
-def _create_progression_instrumentation(metrics_port: int):
+def _create_progression_instrumentation(metrics_port: int) -> tuple:
     """Instrumentation code injected into training pods (extracted via inspect.getsource).
 
     This function is NOT called directly in the SDK - it's extracted as source code
@@ -142,7 +143,7 @@ def _create_progression_instrumentation(metrics_port: int):
         estimatedRemainingSeconds: Optional[int] = None  # noqa: N815
         currentStep: int = 0  # noqa: N815
         totalSteps: Optional[int] = None  # noqa: N815
-        currentEpoch: int = 0  # noqa: N815
+        currentEpoch: float = 0.0  # noqa: N815  # Changed to float for precision (1.98 not 1)
         totalEpochs: Optional[int] = None  # noqa: N815
         trainMetrics: dict[str, Any] = field(default_factory=dict)  # noqa: N815
         evalMetrics: dict[str, Any] = field(default_factory=dict)  # noqa: N815
@@ -197,7 +198,7 @@ def _create_progression_instrumentation(metrics_port: int):
 
         def _update_progress_state(self, args, state) -> None:
             """Calculate and update progression state during training."""
-            current_step = state.global_step
+            current_step = state.global_step if state.global_step is not None else 0
             total_steps = state.max_steps
 
             # Calculate progress percentage (always rounds down, e.g., 374/375 = 99%)
@@ -208,14 +209,17 @@ def _create_progression_instrumentation(metrics_port: int):
             elapsed_sec = current_time - self.start_time if self.start_time else 0
             remaining_sec = None
             if total_steps > 0 and current_step > 0 and elapsed_sec > 0:
-                estimated_total_time = elapsed_sec / (current_step / total_steps)
-                remaining_sec = max(0, int(estimated_total_time - elapsed_sec))
+                # If training reached completion, set remaining time to 0
+                if current_step >= total_steps:
+                    remaining_sec = 0
+                else:
+                    estimated_total_time = elapsed_sec / (current_step / total_steps)
+                    remaining_sec = max(0, int(estimated_total_time - elapsed_sec))
 
-            # Calculate current epoch (truncate during training, e.g., 1.98 → 1)
-            # Final rounding happens in on_train_end
-            current_epoch = 0
+            # Calculate current epoch (keep float precision, e.g., 1.98)
+            current_epoch = 0.0
             if hasattr(state, "epoch") and state.epoch:
-                current_epoch = int(state.epoch)
+                current_epoch = float(state.epoch)
 
             _update_progression_metrics(
                 {
@@ -258,15 +262,16 @@ def _create_progression_instrumentation(metrics_port: int):
 
             # Calculate initial progress (handles checkpoint resume scenarios)
             initial_progress = 0
-            if state.max_steps > 0 and state.global_step > 0:
-                initial_progress = int(state.global_step / state.max_steps * 100)
+            current_step = state.global_step if state.global_step is not None else 0
+            if state.max_steps > 0 and current_step > 0:
+                initial_progress = int(current_step / state.max_steps * 100)
 
             _update_progression_metrics(
                 {
-                    "currentStep": state.global_step,
+                    "currentStep": current_step,
                     "totalSteps": state.max_steps if state.max_steps > 0 else None,
                     "currentEpoch": (
-                        int(state.epoch) if hasattr(state, "epoch") and state.epoch else 0
+                        float(state.epoch) if hasattr(state, "epoch") and state.epoch else 0.0
                     ),
                     "totalEpochs": (
                         int(args.num_train_epochs) if hasattr(args, "num_train_epochs") else None
@@ -321,7 +326,7 @@ def _create_progression_instrumentation(metrics_port: int):
                     _update_progression_metrics(update_dict)
 
         def on_train_end(self, args, state, control, **kwargs) -> None:
-            """Update final progression state to 100% completion.
+            """Update final progression state with actual completion values.
 
             Sets training_finished flag to prevent on_step_end from overwriting
             completion state during post-training evaluation steps.
@@ -331,15 +336,23 @@ def _create_progression_instrumentation(metrics_port: int):
             total_steps = state.max_steps if state.max_steps > 0 else None
             total_epochs = int(args.num_train_epochs) if hasattr(args, "num_train_epochs") else None
 
+            # Calculate actual progress percentage (with safety checks)
+            current_step = state.global_step if state.global_step is not None else 0
+            progress_pct = (
+                int(current_step / total_steps * 100)
+                if total_steps and total_steps > 0 and current_step >= 0
+                else 100
+            )
+
             _update_progression_metrics(
                 {
-                    "currentStep": total_steps if total_steps else state.global_step,
+                    "currentStep": current_step,
                     "totalSteps": total_steps,
-                    "currentEpoch": total_epochs
-                    if total_epochs
-                    else (int(state.epoch) if hasattr(state, "epoch") and state.epoch else 0),
+                    "currentEpoch": (
+                        float(state.epoch) if hasattr(state, "epoch") and state.epoch else 0.0
+                    ),
                     "totalEpochs": total_epochs,
-                    "progressPercentage": 100,
+                    "progressPercentage": progress_pct,
                     "estimatedRemainingSeconds": 0,
                 }
             )
@@ -472,12 +485,12 @@ def get_trainer_cr_from_transformers_trainer(
     func_code = inspect.getsource(trainer.func)
     func_code = textwrap.dedent(func_code)
 
-    # Generate function call
-    func_call = f"{trainer.func.__name__}("
-    if trainer.func_args:
-        for key, value in trainer.func_args.items():
-            func_call += f"{key}={value},"
-    func_call += ")"
+    # Generate function call (use **kwargs unpacking like utils.get_command_using_train_func)
+    if trainer.func_args is None:
+        func_call = f"{trainer.func.__name__}()"
+    else:
+        # Always unpack kwargs for training function calls
+        func_call = f"{trainer.func.__name__}(**{trainer.func_args})"
 
     func_code = f"{func_code}\n{func_call}\n"
 

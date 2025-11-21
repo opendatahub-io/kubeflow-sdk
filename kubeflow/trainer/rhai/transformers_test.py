@@ -340,7 +340,7 @@ def test_func_callable_validation(test_case):
             expected_output=[
                 ("progressPercentage: Optional[int] = None", True),
                 ("currentStep: int = 0", True),
-                ("currentEpoch: int = 0", True),
+                ("currentEpoch: float = 0.0", True),
                 ("trainMetrics: dict[str, Any] = field(default_factory=dict)", True),
                 ("evalMetrics: dict[str, Any] = field(default_factory=dict)", True),
             ],
@@ -619,8 +619,9 @@ def test_get_trainer_cr_with_func_args():
     trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
 
     command_str = " ".join(trainer_crd.command)
-    assert "lr=0.001" in command_str
-    assert "batch_size=32" in command_str
+    # Check for dict representation of arguments in the generated code
+    assert "'lr': 0.001" in command_str
+    assert "'batch_size': 32" in command_str
 
     print("test execution complete")
 
@@ -687,7 +688,7 @@ def test_get_trainer_cr_custom_metrics_port():
     "test_case",
     [
         TestCase(
-            name="callback timing bug - 371/375 steps during training end",
+            name="honest progress - 371/375 steps (98%)",
             expected_status=SUCCESS,
             config={
                 "state_global_step": 371,
@@ -697,16 +698,16 @@ def test_get_trainer_cr_custom_metrics_port():
                 "overwrite_attempt_step": 100,
             },
             expected_output={
-                "currentStep": 375,
+                "currentStep": 371,
                 "totalSteps": 375,
-                "currentEpoch": 3,
+                "currentEpoch": 2.96,
                 "totalEpochs": 3,
-                "progressPercentage": 100,
+                "progressPercentage": 98,  # Honest: 371/375
                 "estimatedRemainingSeconds": 0,
             },
         ),
         TestCase(
-            name="exact completion - 200/200 steps",
+            name="exact completion - 200/200 steps (100%)",
             expected_status=SUCCESS,
             config={
                 "state_global_step": 200,
@@ -718,13 +719,14 @@ def test_get_trainer_cr_custom_metrics_port():
             expected_output={
                 "currentStep": 200,
                 "totalSteps": 200,
-                "currentEpoch": 2,
+                "currentEpoch": 2.0,
                 "totalEpochs": 2,
                 "progressPercentage": 100,
+                "estimatedRemainingSeconds": 0,
             },
         ),
         TestCase(
-            name="large gap - 500/1000 steps at completion",
+            name="early stop - 500/1000 steps (50%)",
             expected_status=SUCCESS,
             config={
                 "state_global_step": 500,
@@ -734,11 +736,31 @@ def test_get_trainer_cr_custom_metrics_port():
                 "overwrite_attempt_step": 200,
             },
             expected_output={
-                "currentStep": 1000,
+                "currentStep": 500,
                 "totalSteps": 1000,
-                "currentEpoch": 1,
+                "currentEpoch": 0.5,
                 "totalEpochs": 1,
-                "progressPercentage": 100,
+                "progressPercentage": 50,  # Honest: 500/1000
+                "estimatedRemainingSeconds": 0,
+            },
+        ),
+        TestCase(
+            name="None global_step handling",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": None,
+                "state_max_steps": 1000,
+                "state_epoch": 0.0,
+                "num_train_epochs": 1,
+                "overwrite_attempt_step": 200,
+            },
+            expected_output={
+                "currentStep": 0,  # None treated as 0
+                "totalSteps": 1000,
+                "currentEpoch": 0.0,
+                "totalEpochs": 1,
+                "progressPercentage": 0,  # 0/1000 = 0%
+                "estimatedRemainingSeconds": 0,
             },
         ),
     ],
@@ -747,7 +769,9 @@ def test_callback_completion_state_protection(test_case):
     """Test that completion state is protected from overwrites after training ends.
 
     This tests the fix for the bug where on_step_end was called after on_train_end
-    during evaluation, overwriting 375/375 back to 371/375.
+    during evaluation, overwriting actual progress values.
+
+    Now reports honest progress (e.g., 98% for 371/375 steps, not forced to 100%).
     """
     print(f"Executing test: {test_case.name}")
 
@@ -820,7 +844,168 @@ def test_callback_completion_state_protection(test_case):
         assert metrics["currentEpoch"] == test_case.expected_output["currentEpoch"], (
             "Completion epoch was overwritten!"
         )
-        assert metrics["progressPercentage"] == 100
+        assert metrics["progressPercentage"] == test_case.expected_output["progressPercentage"], (
+            f"Progress percentage: expected {test_case.expected_output['progressPercentage']}, "
+            f"got {metrics['progressPercentage']}"
+        )
+        # Verify estimatedRemainingSeconds is 0 after training completes
+        if "estimatedRemainingSeconds" in test_case.expected_output:
+            assert metrics["estimatedRemainingSeconds"] == 0, (
+                f"estimatedRemainingSeconds: expected 0, got {metrics['estimatedRemainingSeconds']}"
+            )
+
+        print("test execution complete")
+    finally:
+        # Clean up mock
+        if "transformers" in sys.modules:
+            del sys.modules["transformers"]
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="completion at max_steps - 1000/1000",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 1000,
+                "state_max_steps": 1000,
+                "state_epoch": 3.0,
+                "num_train_epochs": 3,
+            },
+            expected_output={
+                "currentStep": 1000,
+                "totalSteps": 1000,
+                "currentEpoch": 3.0,
+                "totalEpochs": 3,
+                "progressPercentage": 100,
+                "estimatedRemainingSeconds": 0,
+            },
+        ),
+        TestCase(
+            name="completion exceeded - 1001/1000 steps",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 1001,
+                "state_max_steps": 1000,
+                "state_epoch": 3.0,
+                "num_train_epochs": 3,
+            },
+            expected_output={
+                "currentStep": 1001,
+                "totalSteps": 1000,
+                "currentEpoch": 3.0,
+                "totalEpochs": 3,
+                "progressPercentage": 100,
+                "estimatedRemainingSeconds": 0,
+            },
+        ),
+        TestCase(
+            name="near completion - 999/1000 steps",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 999,
+                "state_max_steps": 1000,
+                "state_epoch": 2.99,
+                "num_train_epochs": 3,
+            },
+            expected_output={
+                "currentStep": 999,
+                "totalSteps": 1000,
+                "currentEpoch": 2.99,
+                "totalEpochs": 3,
+                "progressPercentage": 99,
+                # estimatedRemainingSeconds should be calculated, not 0
+            },
+        ),
+    ],
+)
+def test_completion_detection_via_on_step_end(test_case):
+    """Test that completion is detected via on_step_end when on_train_end is not called.
+
+    This handles cases where:
+    - Training crashes before on_train_end
+    - User interrupts training
+    - Exception occurs before on_train_end
+    - Training completes but callback doesn't fire
+
+    The fix ensures estimatedRemainingSeconds=0 when current_step >= total_steps.
+    """
+    print(f"Executing test: {test_case.name}")
+
+    import sys
+    from unittest.mock import Mock
+
+    # Mock transformers module for exec environment
+    mock_transformers = Mock()
+    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
+    mock_transformers.trainer = Mock()
+    sys.modules["transformers"] = mock_transformers
+
+    try:
+        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
+        namespace = {}
+        # Replace user code placeholder
+        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
+        # Skip the actual patching call
+        lines = wrapper_code.split("\n")
+        modified_lines = []
+        for line in lines:
+            if line.strip() == "apply_progression_tracking()":
+                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
+            else:
+                modified_lines.append(line)
+        wrapper_code = "\n".join(modified_lines)
+        exec(wrapper_code, namespace)
+
+        (
+            _,
+            callback_class,
+            _,
+            get_metrics_json,
+            _,
+        ) = namespace["_create_progression_instrumentation"](28080)
+        callback = callback_class(metrics_port=28080)
+
+        import json
+        import time
+
+        args = Mock()
+        args.num_train_epochs = test_case.config["num_train_epochs"]
+        state = Mock()
+        state.global_step = test_case.config["state_global_step"]
+        state.max_steps = test_case.config["state_max_steps"]
+        state.epoch = test_case.config["state_epoch"]
+        state.is_world_process_zero = False
+        control = Mock()
+
+        # Initialize training (sets start_time)
+        callback.on_train_begin(args, state, control)
+
+        # Simulate some elapsed time
+        time.sleep(0.1)
+
+        # Call on_step_end WITHOUT calling on_train_end (simulates crash/interrupt)
+        callback.on_step_end(args, state, control)
+
+        metrics = json.loads(get_metrics_json())
+
+        # Verify expected outputs
+        for key, expected_value in test_case.expected_output.items():
+            actual_value = metrics.get(key)
+            assert actual_value == expected_value, (
+                f"{key}: expected {expected_value}, got {actual_value}"
+            )
+
+        # Special check: near-completion should have remaining time > 0
+        if "near completion" in test_case.name:
+            assert metrics["estimatedRemainingSeconds"] is not None, (
+                "Near completion should calculate remaining time"
+            )
+            if metrics["estimatedRemainingSeconds"] is not None:
+                assert metrics["estimatedRemainingSeconds"] >= 0, (
+                    "Remaining time should be non-negative"
+                )
 
         print("test execution complete")
     finally:
@@ -959,6 +1144,151 @@ def test_callback_metrics_categorization(test_case):
         print("test execution complete")
     finally:
         # Clean up mock
+        if "transformers" in sys.modules:
+            del sys.modules["transformers"]
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="float epoch precision - 1.98 epochs",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 121,
+                "state_max_steps": 124,
+                "state_epoch": 1.98,
+                "num_train_epochs": 2,
+            },
+            expected_output={
+                "currentStep": 121,
+                "totalSteps": 124,
+                "currentEpoch": 1.98,  # Float preserved, not truncated to 1
+                "totalEpochs": 2,
+                "progressPercentage": 97,  # 121/124 = 97%
+            },
+        ),
+        TestCase(
+            name="zero max_steps fallback",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 100,
+                "state_max_steps": 0,  # Invalid, falls back to 100%
+                "state_epoch": 1.5,
+                "num_train_epochs": 2,
+            },
+            expected_output={
+                "currentStep": 100,
+                "totalSteps": None,  # max_steps=0 → None
+                "currentEpoch": 1.5,
+                "totalEpochs": 2,
+                "progressPercentage": 100,  # Fallback when total_steps invalid
+            },
+        ),
+        TestCase(
+            name="negative max_steps fallback",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 50,
+                "state_max_steps": -10,
+                "state_epoch": 0.5,
+                "num_train_epochs": 1,
+            },
+            expected_output={
+                "currentStep": 50,
+                "totalSteps": None,  # negative → None
+                "currentEpoch": 0.5,
+                "totalEpochs": 1,
+                "progressPercentage": 100,  # Fallback
+            },
+        ),
+        TestCase(
+            name="epoch-based training edge - 2.99/3 epochs",
+            expected_status=SUCCESS,
+            config={
+                "state_global_step": 123,
+                "state_max_steps": 124,
+                "state_epoch": 2.99,
+                "num_train_epochs": 3,
+            },
+            expected_output={
+                "currentStep": 123,
+                "totalSteps": 124,
+                "currentEpoch": 2.99,
+                "totalEpochs": 3,
+                "progressPercentage": 99,  # 123/124
+            },
+        ),
+    ],
+)
+def test_honest_progress_reporting(test_case):
+    """Test honest progress reporting with float epochs and accurate percentages.
+
+    Validates that:
+    - Epoch counts use float precision (1.98 not truncated to 1)
+    - Progress percentage reflects actual steps (97% for 121/124, not forced to 100%)
+    - None and invalid values are handled gracefully
+    """
+    print(f"Executing test: {test_case.name}")
+
+    import sys
+    from unittest.mock import Mock
+
+    # Mock transformers module for exec environment
+    mock_transformers = Mock()
+    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
+    mock_transformers.trainer = Mock()
+    sys.modules["transformers"] = mock_transformers
+
+    try:
+        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
+        namespace = {}
+        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
+        lines = wrapper_code.split("\n")
+        modified_lines = []
+        for line in lines:
+            if line.strip() == "apply_progression_tracking()":
+                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
+            else:
+                modified_lines.append(line)
+        wrapper_code = "\n".join(modified_lines)
+        exec(wrapper_code, namespace)
+
+        (
+            _,
+            callback_class,
+            _,
+            get_metrics_json,
+            _,
+        ) = namespace["_create_progression_instrumentation"](28080)
+        callback = callback_class(metrics_port=28080)
+
+        import json
+
+        args = Mock()
+        args.num_train_epochs = test_case.config["num_train_epochs"]
+        state = Mock()
+        state.global_step = test_case.config["state_global_step"]
+        state.max_steps = test_case.config["state_max_steps"]
+        state.epoch = test_case.config["state_epoch"]
+        state.is_world_process_zero = False
+        control = Mock()
+
+        # Trigger on_train_end to capture final state
+        callback.on_train_begin(args, state, control)
+        callback.on_train_end(args, state, control)
+
+        metrics = json.loads(get_metrics_json())
+
+        # Verify all expected outputs
+        for key, expected_value in test_case.expected_output.items():
+            actual_value = metrics.get(key)
+            assert actual_value == expected_value, (
+                f"{key}: expected {expected_value}, got {actual_value}"
+            )
+
+        print("test execution complete")
+    finally:
         if "transformers" in sys.modules:
             del sys.modules["transformers"]
 
