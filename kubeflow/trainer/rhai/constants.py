@@ -19,5 +19,4 @@
 ANNOTATION_PROGRESSION_TRACKING = "trainer.opendatahub.io/progression-tracking"
 ANNOTATION_METRICS_PORT = "trainer.opendatahub.io/metrics-port"
 ANNOTATION_METRICS_POLL_INTERVAL = "trainer.opendatahub.io/metrics-poll-interval"
-ANNOTATION_FRAMEWORK = "trainer.opendatahub.io/framework"
 ANNOTATION_TRAINER_STATUS = "trainer.opendatahub.io/trainerStatus"

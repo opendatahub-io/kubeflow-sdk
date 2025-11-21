@@ -59,24 +59,15 @@ def merge_progression_annotations(
         return metadata_annotations
 
     from kubeflow.trainer.rhai.constants import (
-        ANNOTATION_FRAMEWORK,
         ANNOTATION_METRICS_POLL_INTERVAL,
         ANNOTATION_METRICS_PORT,
         ANNOTATION_PROGRESSION_TRACKING,
     )
 
-    if isinstance(trainer, transformers.TransformersTrainer):
-        framework = "transformers"
-    elif isinstance(trainer, traininghub.TrainingHubTrainer):
-        framework = "traininghub"
-    else:
-        framework = "unknown"
-
     progression_annotations = {
         ANNOTATION_PROGRESSION_TRACKING: "true",
         ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
         ANNOTATION_METRICS_POLL_INTERVAL: str(trainer.metrics_poll_interval_seconds),
-        ANNOTATION_FRAMEWORK: framework,
     }
 
     if metadata_annotations is None:
