@@ -175,10 +175,16 @@ def _create_progression_instrumentation(metrics_port: int):
 
         def do_GET(self):
             """Handle GET requests to expose metrics as JSON."""
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(_get_progression_metrics_json().encode("utf-8"))
+            try:
+                payload = _get_progression_metrics_json()
+            except Exception as e:
+                print(f"[Kubeflow] Failed to create progress metrics payload: {e}")
+                self.send_error(500)
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(payload.encode("utf-8"))
 
     class KubeflowProgressCallback(TrainerCallback):
         """Tracks training progress and updates metrics server."""
