@@ -16,11 +16,43 @@
 
 from dataclasses import dataclass, field
 from typing import Callable, Optional
-
+import inspect
+import textwrap
+import os
 from kubeflow_trainer_api import models
 
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai.constants import PVC_URI_SCHEME
 from kubeflow.trainer.types import types
+
+
+@dataclass
+class PeriodicCheckpointConfig:
+    """Configuration for periodic checkpointing in Transformers trainers.
+
+    Args:
+        save_strategy: Strategy for saving checkpoints ("steps", "epoch", or "no")
+        save_steps: Number of steps between checkpoints (required if save_strategy="steps")
+        save_total_limit: Maximum number of checkpoints to keep (older ones are deleted)
+    """
+
+    save_strategy: str = "epoch"
+    save_steps: Optional[int] = None
+    save_total_limit: Optional[int] = 3
+
+    def __post_init__(self):
+        """Validate configuration."""
+        valid_strategies = {"steps", "epoch", "no"}
+        if self.save_strategy not in valid_strategies:
+            raise ValueError(
+                f"save_strategy must be one of {valid_strategies}, got '{self.save_strategy}'"
+            )
+
+        if self.save_strategy == "steps" and self.save_steps is None:
+            raise ValueError("save_steps must be specified when save_strategy='steps'")
+
+        if self.save_total_limit is not None and self.save_total_limit < 1:
+            raise ValueError(f"save_total_limit must be >= 1, got {self.save_total_limit}")
 
 
 @dataclass
@@ -69,6 +101,11 @@ class TransformersTrainer:
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
 
+    # Checkpoint configuration
+    enable_jit_checkpoint: bool = False
+    output_dir: Optional[str] = None
+    periodic_checkpoint_config: Optional[PeriodicCheckpointConfig] = None
+
     def __post_init__(self):
         """Validate configuration after initialization.
 
@@ -109,6 +146,17 @@ class TransformersTrainer:
             raise ValueError(
                 f"metrics_poll_interval_seconds must be in range 5-300, "
                 f"got {self.metrics_poll_interval_seconds}"
+            )
+        # Only allow pvc:// or paths without URI schemes
+        if (
+                self.output_dir
+                and "://" in self.output_dir
+                and not self.output_dir.startswith(PVC_URI_SCHEME)
+        ):
+            raise ValueError(
+                f"Unsupported storage URI scheme. "
+                f"Currently only '{PVC_URI_SCHEME}' URIs are supported for automatic mounting. "
+                f"Supported formats: '{PVC_URI_SCHEME}<pvc-name>/<path>' or local filesystem paths."
             )
 
 
@@ -447,10 +495,6 @@ def get_trainer_cr_from_transformers_trainer(
     Returns:
         Trainer CRD with wrapped training function and annotations
     """
-    import inspect
-    import os
-    import textwrap
-
     from kubeflow.trainer.backends.kubernetes import utils
     from kubeflow.trainer.constants import constants
 
@@ -501,6 +545,11 @@ def get_trainer_cr_from_transformers_trainer(
         )
         func_code = wrapper_code.replace("{{user_func_import_and_call}}", func_code)
 
+    # Inject checkpoint code if enabled
+    checkpoint_code = _build_checkpoint_code(trainer)
+    if checkpoint_code:
+        func_code = f"{checkpoint_code}\n\n{func_code}"
+
     # Build the command directly with the wrapped function code
     func_file = os.path.basename(inspect.getfile(trainer.func))
 
@@ -531,3 +580,105 @@ def get_trainer_cr_from_transformers_trainer(
     trainer_crd.command = command
 
     return trainer_crd
+
+
+def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
+    """Generate checkpoint injection code for the trainer."""
+
+    # Only inject if JIT or periodic checkpoint is enabled
+    if not trainer.enable_jit_checkpoint and not trainer.periodic_checkpoint_config:
+        return ""
+
+    # Create default periodic config if JIT is enabled but no config provided
+    periodic_config = trainer.periodic_checkpoint_config
+    if trainer.enable_jit_checkpoint and periodic_config is None:
+        periodic_config = PeriodicCheckpointConfig()
+
+    # Convert PeriodicCheckpointConfig to dict for injection
+    periodic_config_dict = None
+    if periodic_config:
+        periodic_config_dict = {
+            "save_strategy": periodic_config.save_strategy,
+            "save_steps": periodic_config.save_steps,
+            "save_total_limit": periodic_config.save_total_limit,
+        }
+
+    # Generate checkpoint injection code
+    return get_jit_checkpoint_injection_code(
+        output_dir=trainer.output_dir,
+        periodic_checkpoint_config=periodic_config_dict,
+        enable_jit_checkpoint=trainer.enable_jit_checkpoint,
+    )
+
+
+def get_jit_checkpoint_injection_code(
+    output_dir: Optional[str] = None,
+    periodic_checkpoint_config: Optional[dict] = None,
+    enable_jit_checkpoint: bool = False,
+) -> str:
+    """
+    Generate the complete JIT checkpoint code to inject into training scripts.
+    """
+    from kubeflow.trainer.rhai import jit_checkpoint_code
+
+    monkey_patch_src = inspect.getsource(jit_checkpoint_code.setup_jit_checkpoint_monkey_patch)
+
+    # Only extract JIT checkpoint classes if JIT is enabled
+    checkpoint_manager_src = ""
+    if enable_jit_checkpoint:
+        checkpoint_manager_src = inspect.getsource(jit_checkpoint_code.CheckpointManager)
+
+    # Build checkpoint config dict
+    config_dict = {"enable_jit": enable_jit_checkpoint}
+
+    if output_dir:
+        config_dict["output_dir"] = output_dir
+
+    if periodic_checkpoint_config:
+        if "save_strategy" in periodic_checkpoint_config:
+            config_dict["save_strategy"] = periodic_checkpoint_config["save_strategy"]
+        if "save_steps" in periodic_checkpoint_config:
+            config_dict["save_steps"] = periodic_checkpoint_config["save_steps"]
+        if "save_total_limit" in periodic_checkpoint_config:
+            config_dict["save_total_limit"] = periodic_checkpoint_config["save_total_limit"]
+
+    # Serialize config dict as Python code
+    import pprint
+
+    config_dict_str = pprint.pformat(config_dict, indent=4, width=100, sort_dicts=False)
+    config_code = (
+        "# ============================================================================\n"
+        "# Kubeflow Checkpoint Configuration (Auto-injected)\n"
+        "# ============================================================================\n"
+        f"_KUBEFLOW_CHECKPOINT_CONFIG = {config_dict_str}"
+    )
+
+    # Invoke monkey-patch at module level
+    monkey_patch_invocation = textwrap.dedent(
+        """
+
+        # ============================================================================
+        # Setup Monkey-Patch
+        # ============================================================================
+
+        try:
+            setup_jit_checkpoint_monkey_patch()
+        except Exception as e:
+            print(f"[Kubeflow] Error: Failed to enable JIT checkpoint: {e}", flush=True)
+
+        # ============================================================================
+        # End of JIT Checkpoint Code
+        # ============================================================================
+        """
+    ).strip()
+
+    # Combine all parts
+    parts = [config_code]
+    if enable_jit_checkpoint:
+        parts.append(checkpoint_manager_src)
+    parts.append(monkey_patch_src)
+    parts.append(monkey_patch_invocation)
+
+    complete_code = "\n\n\n".join(parts) + "\n\n\n"
+
+    return complete_code

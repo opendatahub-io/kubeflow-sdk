@@ -220,6 +220,12 @@ class KubernetesBackend(RuntimeBackend):
 
         if isinstance(trainer, get_args(RHAITrainer)):
             annotations = rhai_utils.merge_progression_annotations(trainer, annotations)
+            if hasattr(trainer, "output_dir") and trainer.output_dir:
+                trainer.output_dir, pod_template_overrides = (
+                    rhai_utils.apply_output_dir_uri_to_pod_overrides(
+                        trainer.output_dir, pod_template_overrides
+                    )
+                )
 
         train_job_name = name or (
             random.choice(string.ascii_lowercase)
