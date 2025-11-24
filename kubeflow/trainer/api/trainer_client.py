@@ -127,14 +127,13 @@ class TrainerClient:
           TransformersTrainer).
 
         Args:
-            runtime: Optional reference to one of the existing runtimes. Defaults to the
-                torch-distributed runtime if not provided.
-            initializer: Optional configuration for the dataset and model initializers.
-            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer,
-                BuiltinTrainer, or RHAITrainer. If not specified, the TrainJob
-                uses the runtime's default values.
-            options: Optional list of configuration options to apply to the TrainJob.
-                Options can be imported from kubeflow.trainer.options.
+            runtime: Reference to one of existing Runtimes. By default the
+                torch-distributed Runtime is used.
+            initializer:
+                Configuration for the dataset and model initializers.
+            trainer:
+                Configuration for Custom Training Task, Config-driven Task with Builtin Trainer,
+                or Training Hub Task.
 
         Returns:
             The unique name of the TrainJob that has been generated.
@@ -144,11 +143,81 @@ class TrainerClient:
             TimeoutError: Timeout to create TrainJobs.
             RuntimeError: Failed to create TrainJobs.
         """
-        return self.backend.train(
-            runtime=runtime,
-            initializer=initializer,
-            trainer=trainer,
-            options=options,
+
+        if runtime is None:
+            runtime = self.get_runtime(constants.TORCH_RUNTIME)
+
+        # Generate unique name for the TrainJob.
+        # TODO (andreyvelich): Discuss this TrainJob name generation.
+        train_job_name = random.choice(string.ascii_lowercase) + uuid.uuid4().hex[:11]
+
+        # Build the Trainer.
+        trainer_crd = models.TrainerV1alpha1Trainer()
+        metadata_annotations = {}
+
+        if trainer:
+            # If users choose to use a custom training function.
+            if isinstance(trainer, types.CustomTrainer):
+                if runtime.trainer.trainer_type != types.TrainerType.CUSTOM_TRAINER:
+                    raise ValueError(
+                        f"CustomTrainer can't be used with {runtime} runtime"
+                    )
+                trainer_crd = utils.get_trainer_crd_from_custom_trainer(
+                    runtime, trainer
+                )
+
+            # If users choose to use a builtin trainer for post-training.
+            elif isinstance(trainer, types.BuiltinTrainer):
+                if runtime.trainer.trainer_type != types.TrainerType.BUILTIN_TRAINER:
+                    raise ValueError(
+                        f"BuiltinTrainer can't be used with {runtime} runtime"
+                    )
+                trainer_crd = utils.get_trainer_crd_from_builtin_trainer(
+                    runtime, trainer, initializer
+                )
+
+            # If users choose to use Training Hub trainer (RHAI).
+            elif trainer.__class__.__name__ == "TrainingHubTrainer":
+                # Import here to avoid circular dependency
+                from kubeflow.trainer.rhai.traininghub import (
+                    get_trainer_crd_from_training_hub_trainer,
+                    get_progress_tracking_annotations,
+                )
+                trainer_crd = get_trainer_crd_from_training_hub_trainer(
+                    runtime, trainer
+                )
+                # Get progress tracking annotations (returns {} if disabled)
+                metadata_annotations = get_progress_tracking_annotations(trainer)
+
+            else:
+                raise ValueError(
+                    f"The trainer type {type(trainer)} is not supported. "
+                    "Please use CustomTrainer, BuiltinTrainer, or TrainingHubTrainer."
+                )
+
+        train_job = models.TrainerV1alpha1TrainJob(
+            apiVersion=constants.API_VERSION,
+            kind=constants.TRAINJOB_KIND,
+            metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
+                name=train_job_name,
+                annotations=metadata_annotations if metadata_annotations else None,
+            ),
+            spec=models.TrainerV1alpha1TrainJobSpec(
+                runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),
+                trainer=(
+                    trainer_crd
+                    if trainer_crd != models.TrainerV1alpha1Trainer()
+                    else None
+                ),
+                initializer=(
+                    models.TrainerV1alpha1Initializer(
+                        dataset=utils.get_dataset_initializer(initializer.dataset),
+                        model=utils.get_model_initializer(initializer.model),
+                    )
+                    if isinstance(initializer, types.Initializer)
+                    else None
+                ),
+            ),
         )
 
     def list_jobs(self, runtime: Optional[types.Runtime] = None) -> list[types.TrainJob]:

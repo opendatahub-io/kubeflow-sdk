@@ -24,8 +24,21 @@ class TrainingHubAlgorithms(Enum):
 class TrainingHubTrainer:
     """TrainingHub RHAI trainer configuration.
 
+    Args:
+        func: Optional user-defined training function. If None, uses algorithm wrapper mode.
+        func_args: Arguments to pass to the training function or algorithm.
+        packages_to_install: Python packages to install before training.
+        pip_index_urls: PyPI index URLs for package installation.
+        env: Environment variables to set in training pods.
+        algorithm: Training Hub algorithm (SFT or OSFT). Required when func is None.
+        enable_progress_tracking: Enable file-based progress tracking with HTTP server.
+        metrics_port: HTTP server port for metrics endpoint.
+        metrics_poll_interval_seconds: How often controller polls metrics endpoint.
+        metrics_cache_duration_seconds: Cache duration for metrics to reduce file I/O.
+
     Notes:
         - volumes and volume_mounts are intentionally not supported per requirements.
+        - Distributed training configuration (num_nodes, resources) is set via TrainJob spec.mlPolicy
     """
 
     func: Optional[Callable] = None
@@ -41,42 +54,24 @@ class TrainingHubTrainer:
     enable_progress_tracking: bool = True
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
-
-
-def _derive_topology_from_func_args(func_args: Optional[dict]) -> tuple[int, int]:
-    """Return (nnodes, nproc_per_node) based on provided func_args with safe defaults."""
-    nnodes = 1
-    nproc_per_node = 1
-    if isinstance(func_args, dict):
-        if isinstance(func_args.get("nnodes"), int):
-            nnodes = func_args["nnodes"]
-        if isinstance(func_args.get("nproc_per_node"), int):
-            nproc_per_node = func_args["nproc_per_node"]
-    return nnodes, nproc_per_node
+    metrics_cache_duration_seconds: int = 10  # Cache metrics to reduce file I/O
 
 
 def _build_install_snippet(
-    runtime: types.Runtime,
     packages_to_install: Optional[list[str]],
     pip_index_urls: list[str],
 ) -> str:
-    """Build the shell snippet to install Python packages if requested."""
-    # Check if runtime has trainer and command attribute
-    is_mpi = False
-    if runtime and runtime.trainer:
-        try:
-            is_mpi = len(runtime.trainer.command) > 0 and runtime.trainer.command[0] == "mpirun"
-        except (AttributeError, TypeError):
-            # If command attribute doesn't exist or isn't accessible, assume not MPI
-            is_mpi = False
+    """Build shell snippet to install Python packages if requested.
+    Note: Training Hub uses PyTorch torchrun for distributed training.
+    """
+    if not packages_to_install:
+        return ""
     
-    if packages_to_install:
-        return k8s_utils.get_script_for_python_packages(
-            packages_to_install,
-            pip_index_urls[0] if pip_index_urls else "https://pypi.org/simple",
-            is_mpi,
-        )
-    return ""
+    return k8s_utils.get_script_for_python_packages(
+        packages_to_install,
+        pip_index_urls[0] if pip_index_urls else "https://pypi.org/simple",
+        is_mpi=False,  # Training Hub uses torchrun, not MPI
+    )
 
 
 def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) -> str:
@@ -156,13 +151,15 @@ def _get_training_hub_progress_instrumentation(
     algorithm: str,
     ckpt_output_dir: str,
     port: int = 28080,
+    cache_duration: int = 10,
 ) -> str:
     """Generate HTTP server code for file-based progress tracking.
     
     This function generates Python code that:
     1. Reads JSONL metrics files written by Training Hub backends (Mini-Trainer or InstructLab Training)
-    2. Transforms the metrics to a rich schema compatible with the UI Backend
+    2. Transforms the metrics to a rich schema compatible with the controller
     3. Serves the metrics via HTTP on the specified port
+    4. Caches metrics to reduce file I/O overhead
     
     The generated code runs in the training pod and doesn't require any modifications
     to the Training Hub library itself.
@@ -171,6 +168,7 @@ def _get_training_hub_progress_instrumentation(
         algorithm: The Training Hub algorithm ("sft" or "osft")
         ckpt_output_dir: Directory where metrics JSONL files are written
         port: HTTP server port (default: 28080)
+        cache_duration: Metrics cache duration in seconds (default: 10)
     
     Returns:
         Python code string to be injected into the training script
@@ -180,17 +178,23 @@ def _get_training_hub_progress_instrumentation(
 # Kubeflow Training Hub Progress Tracking - File-Based HTTP Server
 # ==============================================================================
 
+
 import http.server
 import json
 import glob
 import os
 import threading
+import time
 
 class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
-    """HTTP handler that reads JSONL metrics from Training Hub backends."""
+    """HTTP handler that reads JSONL metrics from Training Hub backends with caching."""
     
     algorithm = "{algorithm}"
     ckpt_output_dir = "{ckpt_output_dir}"
+    
+    # Class-level cache to reduce file I/O
+    _cache = {{"metrics": {{}}, "timestamp": 0}}
+    _cache_duration = {cache_duration}  # seconds
     
     def do_GET(self):
         if self.path == "/health":
@@ -201,9 +205,9 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             
         elif self.path in ("/", "/metrics"):
             try:
-                # Read latest metrics from JSONL file
-                metrics = self._read_latest_metrics()
-                # Transform to rich UI Backend schema
+                # Read latest metrics (with caching)
+                metrics = self._read_latest_metrics_cached()
+                # Transform to controller-compatible schema
                 transformed = self._transform_schema(metrics)
                 # Serve JSON
                 self.send_response(200)
@@ -219,6 +223,23 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+    
+    def _read_latest_metrics_cached(self):
+        """Read metrics with caching to reduce file I/O."""
+        current_time = time.time()
+        
+        # Return cached metrics if still fresh
+        if current_time - self._cache["timestamp"] < self._cache_duration:
+            return self._cache["metrics"]
+        
+        # Read fresh metrics from file
+        metrics = self._read_latest_metrics()
+        
+        # Update cache
+        TrainingHubMetricsHandler._cache["metrics"] = metrics
+        TrainingHubMetricsHandler._cache["timestamp"] = current_time
+        
+        return metrics
     
     def _read_latest_metrics(self):
         """Read last line of JSONL file (most recent metrics from rank 0)."""
@@ -238,7 +259,7 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             rank_0_files = [f for f in files if 'global0.jsonl' in f]
             metrics_file = rank_0_files[0] if rank_0_files else files[0]
         
-        # Read configuration from first line and metrics from last line
+        # Read configuration from first line (SFT) or training_params.json (OSFT) and metrics from last line
         try:
             if not os.path.exists(metrics_file):
                 return {{}}
@@ -246,11 +267,22 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             config = {{}}
             last_line = None
             
+            # For OSFT (Mini-Trainer), read config from training_params.json
+            if self.algorithm == "osft":
+                config_file = f"{{self.ckpt_output_dir}}/training_params.json"
+                if os.path.exists(config_file):
+                    try:
+                        with open(config_file, 'r') as f:
+                            config = json.load(f)
+                    except:
+                        pass
+            
+            # Read metrics from JSONL
             with open(metrics_file, 'r') as f:
                 for i, line in enumerate(f):
                     if line.strip():
-                        if i == 0:
-                            # First line contains training configuration
+                        # For SFT (InstructLab), first line contains training configuration
+                        if self.algorithm == "sft" and i == 0:
                             try:
                                 config = json.loads(line)
                             except:
@@ -259,7 +291,7 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             
             if last_line:
                 metrics = json.loads(last_line)
-                # Merge config into metrics for access to num_epochs
+                # Merge config into metrics for access to num_epochs/max_epochs
                 if config:
                     metrics['_config'] = config
                 return metrics
@@ -303,8 +335,17 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         epoch = metrics.get("epoch", 0)
         steps_per_epoch = metrics.get("steps_per_epoch", 0)
         
+        # Extract real max_epochs from config (first line of JSONL)
+        config = metrics.get("_config", {{}})
+        configured_max_epochs = config.get("max_epochs")
+        
         # Calculate total steps across all epochs
-        total_epochs = metrics.get("total_epochs", 1)
+        # Use configured max_epochs if available, otherwise fall back to metrics
+        if configured_max_epochs:
+            total_epochs = configured_max_epochs
+        else:
+            total_epochs = metrics.get("total_epochs", 1)
+        
         step_total = steps_per_epoch * total_epochs if steps_per_epoch > 0 else step
         current_step_absolute = (epoch * steps_per_epoch) + step if steps_per_epoch > 0 else step
         
@@ -472,17 +513,24 @@ def get_trainer_crd_from_training_hub_trainer(
     trainer: TrainingHubTrainer,
     initializer: Optional[types.Initializer] = None,
 ) -> models.TrainerV1alpha1Trainer:
-    """Build Trainer CRD for TrainingHub trainer."""
+    """Build Trainer CRD for TrainingHub trainer.
+    
+    Args:
+        runtime: Runtime configuration
+        trainer: TrainingHubTrainer configuration
+        initializer: Optional initializer configuration
+        
+    Returns:
+        Trainer CRD spec
+        
+    Note:
+        Distributed training settings (num_nodes, resources) should be configured
+        via TrainJob spec.mlPolicy, not in the trainer configuration.
+    """
     trainer_crd = models.TrainerV1alpha1Trainer()
 
-    # Derive numNodes and resourcesPerNode from func_args (defaults: 1)
-    nnodes, nproc_per_node = _derive_topology_from_func_args(trainer.func_args)
-
-    trainer_crd.num_nodes = nnodes
-    trainer_crd.resources_per_node = k8s_utils.get_resources_per_node({"gpu": str(nproc_per_node)})
-
     install_snippet = _build_install_snippet(
-        runtime, trainer.packages_to_install, trainer.pip_index_urls
+        trainer.packages_to_install, trainer.pip_index_urls
     )
 
     # Primary case: no user function; generate wrapper that imports and calls algorithm(**func_args)
@@ -499,6 +547,7 @@ def get_trainer_crd_from_training_hub_trainer(
                 algorithm=algorithm_name,
                 ckpt_output_dir=trainer.func_args["ckpt_output_dir"],
                 port=trainer.metrics_port,
+                cache_duration=trainer.metrics_cache_duration_seconds,
             )
             raw_code = progress_code + "\n" + raw_code
         
@@ -514,9 +563,9 @@ def get_trainer_crd_from_training_hub_trainer(
         # Inject progress tracking code if enabled (for custom functions)
         # Try to extract ckpt_output_dir from the function code or use default
         if trainer.enable_progress_tracking and trainer.algorithm:
-            # For custom functions, we inject progress tracking with a default checkpoint dir
+            # For custom functions, use a default metrics directory
             # User should ensure their function writes to this directory
-            ckpt_dir = "/tmp/checkpoints"
+            ckpt_dir = "/tmp/training_metrics"
             if trainer.func_args and "ckpt_output_dir" in trainer.func_args:
                 ckpt_dir = trainer.func_args["ckpt_output_dir"]
             
@@ -524,6 +573,7 @@ def get_trainer_crd_from_training_hub_trainer(
                 algorithm=trainer.algorithm.value,
                 ckpt_output_dir=ckpt_dir,
                 port=trainer.metrics_port,
+                cache_duration=trainer.metrics_cache_duration_seconds,
             )
             func_code = progress_code + "\n" + func_code
         
