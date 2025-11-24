@@ -123,7 +123,7 @@ def apply_output_dir_uri_to_pod_overrides(
 
     # If no PVC mounting needed return none
     if volume_mount_specs is None:
-        return resolved_output_dir, pod_template_overrides
+        return resolved_output_dir, pod_template_overrides or []
 
     # Initialize pod_template_overrides as list if needed
     if pod_template_overrides is None:
@@ -148,10 +148,14 @@ def apply_output_dir_uri_to_pod_overrides(
 
     spec_dict = node_override["spec"]
 
-    # Add volume to spec
+    # Add volume to spec (only if not already present)
     if "volumes" not in spec_dict:
         spec_dict["volumes"] = []
-    spec_dict["volumes"].append(volume_mount_specs["volume"])
+
+    # Check if volume with the same name already exists
+    volume_name = volume_mount_specs["volume"]["name"]
+    if not any(vol.get("name") == volume_name for vol in spec_dict["volumes"]):
+        spec_dict["volumes"].append(volume_mount_specs["volume"])
 
     # Add volumeMount to the trainer container
     if "containers" not in spec_dict:
@@ -169,9 +173,15 @@ def apply_output_dir_uri_to_pod_overrides(
         trainer_container_dict = {"name": constants.NODE, "volumeMounts": []}
         spec_dict["containers"].append(trainer_container_dict)
 
-    # Add volumeMount to trainer container
+    # Add volumeMount to trainer container (only if not already present)
     if "volumeMounts" not in trainer_container_dict:
         trainer_container_dict["volumeMounts"] = []
-    trainer_container_dict["volumeMounts"].append(volume_mount_specs["volumeMount"])
+
+    # Check if volumeMount with the same name already exists
+    volume_mount_name = volume_mount_specs["volumeMount"]["name"]
+    if not any(
+        vm.get("name") == volume_mount_name for vm in trainer_container_dict["volumeMounts"]
+    ):
+        trainer_container_dict["volumeMounts"].append(volume_mount_specs["volumeMount"])
 
     return resolved_output_dir, pod_template_overrides
