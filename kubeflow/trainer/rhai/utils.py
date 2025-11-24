@@ -1,4 +1,5 @@
-from typing import NoReturn, Optional
+import logging
+from typing import Optional
 
 from kubeflow_trainer_api import models
 
@@ -8,6 +9,8 @@ from kubeflow.trainer.rhai import (
     transformers,
 )
 from kubeflow.trainer.types import types
+
+logger = logging.getLogger(__name__)
 
 
 def get_trainer_cr_from_rhai_trainer(
@@ -30,8 +33,44 @@ def get_trainer_cr_from_rhai_trainer(
         )
 
     else:
-        _raise_unknown_rhai_trainer(trainer)
+        raise ValueError(f"Unknown trainer {trainer}.")
 
 
-def _raise_unknown_rhai_trainer(trainer: object) -> NoReturn:
-    raise ValueError(f"Unknown trainer {trainer}.")
+def merge_progression_annotations(
+    trainer: RHAITrainer,
+    metadata_annotations: Optional[dict[str, str]] = None,
+) -> Optional[dict[str, str]]:
+    """Merge progression tracking annotations for RHAI trainers with existing metadata annotations.
+
+    Args:
+        trainer: RHAI trainer instance (TransformersTrainer or TrainingHubTrainer).
+        metadata_annotations: Existing metadata annotations dict to merge with, if any.
+
+    Returns:
+        Merged annotations dict with progression tracking added (if enabled),
+        or original metadata_annotations if progression tracking is disabled.
+    """
+    if (
+        not hasattr(trainer, "enable_progression_tracking")
+        or not trainer.enable_progression_tracking
+        or not hasattr(trainer, "metrics_port")
+        or not hasattr(trainer, "metrics_poll_interval_seconds")
+    ):
+        return metadata_annotations
+
+    from kubeflow.trainer.rhai.constants import (
+        ANNOTATION_METRICS_POLL_INTERVAL,
+        ANNOTATION_METRICS_PORT,
+        ANNOTATION_PROGRESSION_TRACKING,
+    )
+
+    progression_annotations = {
+        ANNOTATION_PROGRESSION_TRACKING: "true",
+        ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
+        ANNOTATION_METRICS_POLL_INTERVAL: str(trainer.metrics_poll_interval_seconds),
+    }
+
+    if metadata_annotations is None:
+        return progression_annotations
+    # Merge metadata_annotations last to allow users to override progression annotations
+    return {**progression_annotations, **metadata_annotations}
