@@ -79,11 +79,19 @@ class TransformersTrainer:
         metrics_poll_interval_seconds: How often controller should poll metrics (seconds).
                                        Default: 30. Range: 5-300 (5s to 5min).
                                        Fast jobs: use 5-10s. Long jobs: use 60-120s.
+        enable_jit_checkpoint: Enable just-in-time checkpointing on SIGTERM. Default: False.
+                              Automatically enabled when output_dir is provided.
+        output_dir: Directory for saving checkpoints. Supports PVC URIs (pvc://<name>/<path>)
+                   for automatic volume mounting. When provided, automatically enables JIT
+                   checkpointing.
+        periodic_checkpoint_config: Optional configuration for periodic checkpointing.
+                                   See PeriodicCheckpointConfig for available options.
 
     Raises:
         ValueError: If metrics_port is not in range 1024-65535.
         ValueError: If metrics_poll_interval_seconds is not in range 5-300.
         ValueError: If func is not callable.
+        ValueError: If output_dir uses unsupported URI scheme (only pvc:// is supported).
     """
 
     # Core training function (same as CustomTrainer)
@@ -159,6 +167,10 @@ class TransformersTrainer:
                 f"Currently only '{PVC_URI_SCHEME}' URIs are supported for automatic mounting. "
                 f"Supported formats: '{PVC_URI_SCHEME}<pvc-name>/<path>' or local filesystem paths."
             )
+
+        # Auto-enable JIT checkpoint if output_dir is provided
+        if self.output_dir and not self.enable_jit_checkpoint:
+            self.enable_jit_checkpoint = True
 
 
 def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
@@ -260,52 +272,52 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             """Check if a checkpoint is in progress."""
             return self.checkpoint_requested
 
-        class JITCheckpointCallback(TrainerCallback):
-            """Transformers callback that integrates JIT checkpointing with trainer lifecycle."""
+    class JITCheckpointCallback(TrainerCallback):
+        """Transformers callback that integrates JIT checkpointing with trainer lifecycle."""
 
-            def __init__(self):
-                self.jit_manager = None
-                self._trainer_ref = None
+        def __init__(self):
+            self.jit_manager = None
+            self._trainer_ref = None
 
-            def on_train_begin(self, args, state, control, **kwargs):
-                if self._trainer_ref is not None and self.jit_manager is None:
-                    self.jit_manager = CheckpointManager(trainer=self._trainer_ref)
-                    self.jit_manager.setup_signal_handler()
-                    print("[Kubeflow] JIT checkpointing enabled", flush=True)
-                elif self._trainer_ref is None:
-                    print(
-                        "[Kubeflow] Warning: Trainer reference not set for JIT checkpoint callback",
-                        flush=True,
-                    )
+        def on_train_begin(self, args, state, control, **kwargs):
+            if self._trainer_ref is not None and self.jit_manager is None:
+                self.jit_manager = CheckpointManager(trainer=self._trainer_ref)
+                self.jit_manager.setup_signal_handler()
+                print("[Kubeflow] JIT checkpointing enabled", flush=True)
+            elif self._trainer_ref is None:
+                print(
+                    "[Kubeflow] Warning: Trainer reference not set for JIT checkpoint callback",
+                    flush=True,
+                )
 
-            def on_pre_optimizer_step(self, args, state, control, **kwargs):
-                if self.jit_manager:
-                    # Mark that we're entering optimizer step (unsafe for checkpoint)
-                    self.jit_manager._in_optimizer_step = True
+        def on_pre_optimizer_step(self, args, state, control, **kwargs):
+            if self.jit_manager:
+                # Mark that we're entering optimizer step (unsafe for checkpoint)
+                self.jit_manager._in_optimizer_step = True
 
-                    if self.jit_manager.checkpoint_in_progress():
-                        control.should_training_stop = True
-
-            def on_optimizer_step(self, args, state, control, **kwargs):
-                if self.jit_manager:
-                    # Mark that optimizer step completed (safe for checkpoint again)
-                    self.jit_manager._in_optimizer_step = False
-
-            def on_step_end(self, args, state, control, **kwargs):
-                if self.jit_manager and self.jit_manager.checkpoint_in_progress():
-                    control.should_save = False
+                if self.jit_manager.checkpoint_in_progress():
                     control.should_training_stop = True
 
-            def on_epoch_end(self, args, state, control, **kwargs):
-                if self.jit_manager and self.jit_manager.checkpoint_in_progress():
-                    control.should_save = False
-                    control.should_training_stop = True
+        def on_optimizer_step(self, args, state, control, **kwargs):
+            if self.jit_manager:
+                # Mark that optimizer step completed (safe for checkpoint again)
+                self.jit_manager._in_optimizer_step = False
+
+        def on_step_end(self, args, state, control, **kwargs):
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_save = False
+                control.should_training_stop = True
+
+        def on_epoch_end(self, args, state, control, **kwargs):
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_save = False
+                control.should_training_stop = True
 
     def apply_checkpointing():
         """Setup monkey patch for Trainer to auto inject JIT checkpoint callback."""
         from transformers import Trainer as _TransformersTrainer
 
-        _jit_checkpoint_callback = CheckpointManager.JITCheckpointCallback()
+        _jit_checkpoint_callback = JITCheckpointCallback()
 
         # Store original __init__ method
         _original_trainer_init = _TransformersTrainer.__init__
@@ -359,9 +371,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 callbacks = kwargs.get("callbacks") or []
                 if not isinstance(callbacks, list):
                     callbacks = list(callbacks)
-                if not any(
-                    isinstance(cb, CheckpointManager.JITCheckpointCallback) for cb in callbacks
-                ):
+                if not any(isinstance(cb, JITCheckpointCallback) for cb in callbacks):
                     callbacks.append(_jit_checkpoint_callback)
                     print("[Kubeflow] Auto-injected JIT checkpoint callback", flush=True)
                 kwargs["callbacks"] = callbacks
@@ -378,7 +388,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         print("[Kubeflow] Trainer auto-instrumentation enabled", flush=True)
 
     enable_jit = checkpoint_config.get("enable_jit", False)
-    return CheckpointManager if enable_jit else None, apply_checkpointing
+    return (
+        CheckpointManager if enable_jit else None,
+        JITCheckpointCallback if enable_jit else None,
+        apply_checkpointing,
+    )
 
 
 def _create_progression_instrumentation(metrics_port: int) -> tuple:
@@ -874,7 +888,7 @@ print("[Kubeflow] Initializing checkpoint instrumentation", flush=True)
 
 # Initialize and apply instrumentation
 checkpoint_config = {config_dict_str}
-_, apply_checkpointing = _create_checkpoint_instrumentation(checkpoint_config)
+_, _, apply_checkpointing = _create_checkpoint_instrumentation(checkpoint_config)
 apply_checkpointing()
 print("[Kubeflow] Checkpoint instrumentation enabled", flush=True)
 """

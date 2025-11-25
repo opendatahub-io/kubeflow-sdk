@@ -218,15 +218,6 @@ class KubernetesBackend(RuntimeBackend):
             trainer_overrides = spec_section.get("trainer", {})
             pod_template_overrides = spec_section.get("podTemplateOverrides")
 
-        if isinstance(trainer, get_args(RHAITrainer)):
-            annotations = rhai_utils.merge_progression_annotations(trainer, annotations)
-            if hasattr(trainer, "output_dir") and trainer.output_dir:
-                trainer.output_dir, pod_template_overrides = (
-                    rhai_utils.apply_output_dir_uri_to_pod_overrides(
-                        trainer.output_dir, pod_template_overrides
-                    )
-                )
-
         train_job_name = name or (
             random.choice(string.ascii_lowercase)
             + uuid.uuid4().hex[: constants.JOB_NAME_UUID_LENGTH]
@@ -242,6 +233,10 @@ class KubernetesBackend(RuntimeBackend):
             spec_annotations=spec_annotations,
             pod_template_overrides=pod_template_overrides,
         )
+
+        # If users choose to use an RHAI trainer.
+        if isinstance(trainer, get_args(RHAITrainer)):
+            rhai_utils.apply_rhai_trainer_overrides(trainer, trainjob_spec)
 
         # Build the TrainJob.
         train_job = models.TrainerV1alpha1TrainJob(
