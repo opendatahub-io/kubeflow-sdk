@@ -330,6 +330,9 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
 
             Sets training_finished flag to prevent on_step_end from overwriting
             completion state during post-training evaluation steps.
+            
+            Waits briefly after updating final metrics to allow controller to poll
+            the final state before the process exits and the daemon metrics server terminates.
             """
             self.training_finished = True
 
@@ -356,6 +359,18 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
                     "estimatedRemainingSeconds": 0,
                 }
             )
+            
+            # Keep metrics server alive for controller to poll final status
+            # Wait 45s to cover most poll intervals (default 30s + buffer for network/processing)
+            # This ensures at least one controller poll succeeds before daemon thread terminates
+            if state.is_world_process_zero and self.server is not None:
+                wait_time = 45
+                print(
+                    f"[Kubeflow] Training complete. Waiting {wait_time}s for final metrics capture...",
+                    flush=True,
+                )
+                time.sleep(wait_time)
+                print("[Kubeflow] Final metrics window closed.", flush=True)
 
     def apply_progression_tracking():
         """Patch Trainer.__init__ to inject KubeflowProgressCallback."""
