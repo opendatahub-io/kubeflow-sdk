@@ -37,10 +37,6 @@ class TrainingHubTrainer:
         metrics_port: HTTP server port for metrics endpoint.
         metrics_poll_interval_seconds: How often controller polls metrics endpoint.
         metrics_cache_duration_seconds: Cache duration for metrics to reduce file I/O.
-
-    Notes:
-        - volumes and volume_mounts are intentionally not supported per requirements.
-        - Distributed training configuration (num_nodes, resources) is set via TrainJob spec.mlPolicy
     """
 
     func: Optional[Callable] = None
@@ -69,11 +65,11 @@ def _build_install_snippet(
     if not packages_to_install:
         return ""
 
-    return k8s_utils.get_script_for_python_packages(
-        packages_to_install,
+        return k8s_utils.get_script_for_python_packages(
+            packages_to_install,
         pip_index_urls[0] if pip_index_urls else "https://pypi.org/simple",
         is_mpi=False,  # Training Hub uses torchrun, not MPI
-    )
+        )
 
 
 def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) -> str:
@@ -156,22 +152,23 @@ def _get_training_hub_progress_instrumentation(
     cache_duration: int = 10,
 ) -> str:
     """Generate HTTP server code for file-based progress tracking.
-    
+
     This function generates Python code that:
-    1. Reads JSONL metrics files written by Training Hub backends (Mini-Trainer or InstructLab Training)
+    1. Reads JSONL metrics files written by Training Hub backends
+       (Mini-Trainer or InstructLab Training)
     2. Transforms the metrics to a rich schema compatible with the controller
     3. Serves the metrics via HTTP on the specified port
     4. Caches metrics to reduce file I/O overhead
-    
+
     The generated code runs in the training pod and doesn't require any modifications
     to the Training Hub library itself.
-    
+
     Args:
         algorithm: The Training Hub algorithm ("sft" or "osft")
         ckpt_output_dir: Directory where metrics JSONL files are written
         port: HTTP server port (default: 28080)
         cache_duration: Metrics cache duration in seconds (default: 10)
-    
+
     Returns:
         Python code string to be injected into the training script
     """
@@ -196,21 +193,21 @@ import time
 
 class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
     """HTTP handler that reads JSONL metrics from Training Hub backends with caching."""
-    
+
     algorithm = "{algorithm}"
     ckpt_output_dir = "{ckpt_output_dir}"
-    
+
     # Class-level cache to reduce file I/O
     _cache = {{"metrics": {{}}, "timestamp": 0}}
     _cache_duration = {cache_duration}  # seconds
-    
+
     def do_GET(self):
         if self.path == "/health":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(b"OK")
-            
+
         elif self.path in ("/", "/metrics"):
             try:
                 # Read latest metrics (with caching)
@@ -231,24 +228,24 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
-    
+
     def _read_latest_metrics_cached(self):
         """Read metrics with caching to reduce file I/O."""
         current_time = time.time()
-        
+
         # Return cached metrics if still fresh
         if current_time - self._cache["timestamp"] < self._cache_duration:
             return self._cache["metrics"]
-        
+
         # Read fresh metrics from file
         metrics = self._read_latest_metrics()
-        
+
         # Update cache
         TrainingHubMetricsHandler._cache["metrics"] = metrics
         TrainingHubMetricsHandler._cache["timestamp"] = current_time
-        
+
         return metrics
-    
+
     def _read_latest_metrics(self):
         """Read last line of JSONL file (most recent metrics from rank 0)."""
         # Determine file pattern based on algorithm
@@ -259,22 +256,23 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             # InstructLab: Find rank 0 file (global0.jsonl)
             pattern = f"{{self.ckpt_output_dir}}/{sft_metrics_pattern}"
             files = glob.glob(pattern)
-            
+
             if not files:
                 return {{}}
-            
+
             # Prefer rank 0 file
             rank_0_files = [f for f in files if '{sft_metrics_file}' in f]
             metrics_file = rank_0_files[0] if rank_0_files else files[0]
-        
-        # Read configuration from first line (SFT) or training_params.json (OSFT) and metrics from last line
+
+        # Read configuration from first line (SFT) or training_params.json (OSFT)
+        # and metrics from last line
         try:
             if not os.path.exists(metrics_file):
                 return {{}}
-            
+
             config = {{}}
             last_line = None
-            
+
             # For OSFT (Mini-Trainer), read config from training_params.json
             if self.algorithm == "osft":
                 config_file = f"{{self.ckpt_output_dir}}/{osft_config_file}"
@@ -284,7 +282,7 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
                             config = json.load(f)
                     except:
                         pass
-            
+
             # Read metrics from JSONL
             with open(metrics_file, 'r') as f:
                 for i, line in enumerate(f):
@@ -296,7 +294,7 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
                             except:
                                 pass
                         last_line = line
-            
+
             if last_line:
                 metrics = json.loads(last_line)
                 # Merge config into metrics for access to num_epochs/max_epochs
@@ -307,9 +305,9 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             return {{}}
         except json.JSONDecodeError:
             return {{}}
-        
+
         return {{}}
-    
+
     def _transform_schema(self, metrics):
         """Transform backend schema → Controller-compatible progress format."""
         if not metrics:
@@ -328,7 +326,7 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
                 "evalMetrics": {{}},
                 "elapsedSeconds": None,
             }}
-        
+
         # Detect backend based on metrics keys
         if "tokens_per_second" in metrics or "samples_per_second" in metrics:
             # Mini-Trainer (OSFT)
@@ -336,24 +334,24 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         else:
             # InstructLab Training (SFT)
             return self._transform_instructlab(metrics)
-    
+
     def _transform_mini_trainer(self, metrics):
-        """Transform Mini-Trainer (OSFT) schema to rich progress format with controller compatibility."""
+        """Transform Mini-Trainer (OSFT) schema to controller-compatible format."""
         step = metrics.get("step", 0)
         epoch = metrics.get("epoch", 0)
         steps_per_epoch = metrics.get("steps_per_epoch", 0)
-        
+
         # Extract real max_epochs from config (first line of JSONL)
         config = metrics.get("_config", {{}})
         configured_max_epochs = config.get("max_epochs")
-        
+
         # Calculate total steps across all epochs
         # Use configured max_epochs if available, otherwise fall back to metrics
         if configured_max_epochs:
             total_epochs = configured_max_epochs
         else:
             total_epochs = metrics.get("total_epochs", 1)
-        
+
         # Calculate total steps across all epochs
         # Wait until we have steps_per_epoch from metrics before calculating total
         if steps_per_epoch > 0:
@@ -362,32 +360,34 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             # Don't guess - wait for real data
             # Using 0 means progressPercentage will be 0 until we have real metrics
             step_total = 0
-        
+
         # Mini-Trainer's 'step' is already the absolute global step across all epochs
         # (not the step within the current epoch), so we use it directly
         current_step_absolute = step
-        
+
         # Calculate progress percentage (cap at 100%)
         percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
-        
+
         # Estimate remaining time
         time_per_batch = metrics.get("time_per_batch", 0)
         remaining_steps = step_total - current_step_absolute
-        
+
         # If training is complete (100%), set remaining time to 0
         if percent >= 100 or remaining_steps <= 0:
             estimated_remaining_sec = 0
         else:
-            estimated_remaining_sec = int(remaining_steps * time_per_batch) if time_per_batch > 0 else None
-        
+            estimated_remaining_sec = (
+                int(remaining_steps * time_per_batch) if time_per_batch > 0 else None
+            )
+
         loss_val = metrics.get("loss", 0)
         lr_val = metrics.get("lr")
         grad_norm_val = metrics.get("grad_norm", 0)
         throughput_val = metrics.get("samples_per_second", 0)
         val_loss_val = metrics.get("val_loss")
-        
+
         return {{
-            # Controller-compatible format  
+            # Controller-compatible format
             "progressPercentage": int(round(percent)),
             "estimatedRemainingSeconds": estimated_remaining_sec,
             "currentStep": current_step_absolute,
@@ -404,7 +404,7 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             }},
             "elapsedSeconds": None,
         }}
-    
+
     def _transform_instructlab(self, metrics):
         """Transform InstructLab Training (SFT) schema to controller-compatible format."""
         step = metrics.get("step", 0)
@@ -412,21 +412,21 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         # Support both 'num_epoch_steps' and 'num_batches' (InstructLab uses both)
         num_epoch_steps = metrics.get("num_epoch_steps") or metrics.get("num_batches", 0)
         total_samples = metrics.get("total_samples", 0)
-        
+
         # Extract real num_epochs from config (first line of JSONL)
         config = metrics.get("_config", {{}})
         configured_num_epochs = config.get("num_epochs")
         # Also check config for num_batches if not in metrics
         if not num_epoch_steps:
             num_epoch_steps = config.get("num_batches", 0)
-        
+
         # Calculate total steps
         current_epoch = epoch + 1  # Current epoch number (0-indexed, so +1)
         current_step_absolute = step  # Current step (already properly indexed)
-        
+
         # Use samples_seen to detect when we've moved to a new epoch
         samples_seen = metrics.get("samples_seen", 0)
-        
+
         # Determine total epochs
         if configured_num_epochs:
             # Use the real configured value from training config!
@@ -446,34 +446,40 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
                 estimated_total_epochs = current_epoch
         else:
             # Final fallback
-            estimated_total_epochs = max(2, current_epoch) if current_step_absolute > 0 else current_epoch
-        
+            estimated_total_epochs = (
+                max(2, current_epoch) if current_step_absolute > 0 else current_epoch
+            )
+
         # Calculate total expected steps based on current knowledge
         if num_epoch_steps > 0:
             step_total = num_epoch_steps * estimated_total_epochs
         else:
             # Fallback: use current step + some buffer
             step_total = max(step, step + 10)
-        
+
         # Calculate progress percentage (cap at 100%)
         percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
-        
+
         # Estimate remaining time based on throughput
         throughput = metrics.get("overall_throughput", 0)  # samples/second
         remaining_steps = step_total - current_step_absolute
-        
+
         # If training is complete (100%), set remaining time to 0
         if percent >= 100 or remaining_steps <= 0:
             estimated_remaining_sec = 0
         else:
-            estimated_remaining_sec = int(remaining_steps / throughput) if throughput > 0 and remaining_steps > 0 else None
-        
+            estimated_remaining_sec = (
+                int(remaining_steps / throughput)
+                if throughput > 0 and remaining_steps > 0
+                else None
+            )
+
         # Extract training metrics from JSONL
         loss_val = metrics.get("avg_loss", 0)
         lr_val = metrics.get("lr")
         grad_norm_val = metrics.get("gradnorm")
         throughput_val = metrics.get("overall_throughput")
-        
+
         return {{
             # Controller-compatible format
             "progressPercentage": int(round(percent)),
@@ -491,7 +497,7 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
             "evalMetrics": {{}},
             "elapsedSeconds": None,
         }}
-    
+
     def log_message(self, format, *args):
         """Suppress default HTTP server logging."""
         pass
@@ -499,17 +505,21 @@ class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
 def start_metrics_server(port={port}):
     """Start HTTP metrics server in background thread."""
     import socket
-    
+
     # Enable SO_REUSEADDR to allow port reuse
     server = http.server.HTTPServer(("", port), TrainingHubMetricsHandler)
     server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    print(f"[Kubeflow] Metrics server started on port {{port}} for {{TrainingHubMetricsHandler.algorithm}}", flush=True)
-    
+
+    print(
+        f"[Kubeflow] Metrics server started on port {{port}} "
+        f"for {{TrainingHubMetricsHandler.algorithm}}",
+        flush=True,
+    )
+
     # Run server in background thread
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    
+
     return server
 
 # Start metrics server with error handling
@@ -518,7 +528,11 @@ try:
     print("[Kubeflow] Progress tracking initialized for Training Hub", flush=True)
 except OSError as e:
     if e.errno == 98:  # Address already in use
-        print(f"[Kubeflow] Warning: Port {port} already in use, progress tracking may not work correctly", flush=True)
+        print(
+            f"[Kubeflow] Warning: Port {port} already in use, "
+            f"progress tracking may not work correctly",
+            flush=True,
+        )
         _metrics_server = None
     else:
         raise
@@ -536,15 +550,15 @@ def get_trainer_cr_from_training_hub_trainer(
     initializer: Optional[types.Initializer] = None,
 ) -> models.TrainerV1alpha1Trainer:
     """Build Trainer CRD for TrainingHub trainer.
-    
+
     Args:
         runtime: Runtime configuration
         trainer: TrainingHubTrainer configuration
         initializer: Optional initializer configuration
-        
+
     Returns:
         Trainer CRD spec
-        
+
     Note:
         Distributed training settings (num_nodes, resources) should be configured
         via TrainJob spec.mlPolicy, not in the trainer configuration.
@@ -564,7 +578,11 @@ def get_trainer_cr_from_training_hub_trainer(
         raw_code = _render_algorithm_wrapper(algorithm_name, trainer.func_args)
 
         # Inject progress tracking code if enabled
-        if trainer.enable_progression_tracking and trainer.func_args and "ckpt_output_dir" in trainer.func_args:
+        if (
+            trainer.enable_progression_tracking
+            and trainer.func_args
+            and "ckpt_output_dir" in trainer.func_args
+        ):
             progress_code = _get_training_hub_progress_instrumentation(
                 algorithm=algorithm_name,
                 ckpt_output_dir=trainer.func_args["ckpt_output_dir"],
@@ -617,13 +635,13 @@ def get_trainer_cr_from_training_hub_trainer(
 
 def get_progress_tracking_annotations(trainer: TrainingHubTrainer) -> dict[str, str]:
     """Generate progress tracking annotations for TrainJob metadata.
-    
+
     These annotations enable the trainer controller to poll the HTTP metrics endpoint
     and update the TrainJob status with real-time progress.
-    
+
     Args:
         trainer: TrainingHubTrainer instance with progress tracking configuration
-        
+
     Returns:
         Dictionary of annotations to add to TrainJob metadata
     """
@@ -638,7 +656,9 @@ def get_progress_tracking_annotations(trainer: TrainingHubTrainer) -> dict[str, 
         rhai_constants.ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
 
         # Set metrics poll interval (how often controller polls)
-        rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL: f"{trainer.metrics_poll_interval_seconds}s",
+        rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL: (
+            f"{trainer.metrics_poll_interval_seconds}s"
+        ),
 
         # Set framework annotation
         rhai_constants.ANNOTATION_FRAMEWORK: "traininghub",
