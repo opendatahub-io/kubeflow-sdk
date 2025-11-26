@@ -65,11 +65,11 @@ def _build_install_snippet(
     if not packages_to_install:
         return ""
 
-        return k8s_utils.get_script_for_python_packages(
-            packages_to_install,
+    return k8s_utils.get_script_for_python_packages(
+        packages_to_install,
         pip_index_urls[0] if pip_index_urls else "https://pypi.org/simple",
         is_mpi=False,  # Training Hub uses torchrun, not MPI
-        )
+    )
 
 
 def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) -> str:
@@ -565,9 +565,7 @@ def get_trainer_cr_from_training_hub_trainer(
     """
     trainer_crd = models.TrainerV1alpha1Trainer()
 
-    install_snippet = _build_install_snippet(
-        trainer.packages_to_install, trainer.pip_index_urls
-    )
+    install_snippet = _build_install_snippet(trainer.packages_to_install, trainer.pip_index_urls)
 
     # Primary case: no user function; generate wrapper that imports and calls algorithm(**func_args)
     if trainer.func is None:
@@ -651,15 +649,12 @@ def get_progress_tracking_annotations(trainer: TrainingHubTrainer) -> dict[str, 
     return {
         # Enable progression tracking (controller will poll HTTP endpoint)
         rhai_constants.ANNOTATION_PROGRESSION_TRACKING: "true",
-
         # Set metrics port (where HTTP server listens)
         rhai_constants.ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
-
         # Set metrics poll interval (how often controller polls)
         rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL: (
             f"{trainer.metrics_poll_interval_seconds}s"
         ),
-
         # Set framework annotation
         rhai_constants.ANNOTATION_FRAMEWORK: "traininghub",
     }
