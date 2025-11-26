@@ -18,6 +18,7 @@ class TrainingHubAlgorithms(Enum):
 
     SFT = "sft"
     OSFT = "osft"
+    LORA_SFT = "lora_sft"
 
 
 @dataclass
