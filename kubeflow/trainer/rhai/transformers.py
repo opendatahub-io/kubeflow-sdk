@@ -178,6 +178,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     Checkpoint instrumentation code injected into training pods.
     """
     import os
+    import re
+    import shutil
     import signal
     import threading
     import time
@@ -185,6 +187,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     import torch
     from transformers import TrainerCallback
     from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
 
     class CheckpointManager:
         """Manages async just-in-time checkpointing on SIGTERM signal using CUDA streams."""
@@ -248,7 +252,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 os.makedirs(checkpoint_path, exist_ok=True)
 
                 # Create sentinel file to mark incomplete checkpoint (only rank 0)
-                sentinel_file = os.path.join(checkpoint_path, "checkpoint-is-incomplete.txt")
+                sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
                 if rank == 0:
                     with open(sentinel_file, "w") as f:
                         f.write(f"Checkpoint started at step {current_step}")
@@ -332,6 +336,38 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         _jit_checkpoint_callback = JITCheckpointCallback()
 
+        def _find_latest_checkpoint(output_dir):
+            """Find the latest checkpoint, deleting incomplete ones."""
+            if not output_dir or not os.path.exists(output_dir):
+                return None
+
+            checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
+            checkpoints = []
+
+            for name in os.listdir(output_dir):
+                match = checkpoint_pattern.match(name)
+                if not match or not os.path.isdir(os.path.join(output_dir, name)):
+                    continue
+
+                checkpoint_path = os.path.join(output_dir, name)
+                incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
+
+                # Delete incomplete checkpoints
+                if os.path.exists(incomplete_marker):
+                    print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
+                    shutil.rmtree(checkpoint_path)
+                    continue
+
+                checkpoints.append((int(match.group(1)), checkpoint_path))
+
+            if checkpoints:
+                checkpoints.sort(reverse=True)
+                latest = checkpoints[0][1]
+                print(f"[Kubeflow] Found latest checkpoint: {latest}")
+                return latest
+
+            return None
+
         # Store original __init__ method
         _original_trainer_init = _TransformersTrainer.__init__
 
@@ -395,6 +431,23 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             # Store trainer reference in callback
             if enable_jit:
                 _jit_checkpoint_callback._trainer_ref = self
+
+            _original_train = self.train
+
+            def _patched_train(resume_from_checkpoint=None, **train_kwargs):
+                """Patched train() that auto-resumes from latest checkpoint if available."""
+
+                # Only auto-resume if user didn't explicitly set it
+                if resume_from_checkpoint is None and training_args:
+                    latest_checkpoint = _find_latest_checkpoint(training_args.output_dir)
+                    if latest_checkpoint:
+                        resume_from_checkpoint = latest_checkpoint
+                        print(f"[Kubeflow] Auto-resuming from: {latest_checkpoint}")
+                return _original_train(
+                    resume_from_checkpoint=resume_from_checkpoint, **train_kwargs
+                )
+
+            self.train = _patched_train
 
         # Apply monkey-patch
         _TransformersTrainer.__init__ = _patched_trainer_init
