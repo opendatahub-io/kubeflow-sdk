@@ -171,15 +171,15 @@ def _create_training_hub_progression_instrumentation(
 
         def _read_osft_metrics(self):
             """Read OSFT metrics from training_metrics_0.jsonl."""
-            metrics_file = "{ckpt_output_dir}/{OSFT_METRICS_FILE_RANK0}"
+            metrics_file = f"{ckpt_output_dir}/{OSFT_METRICS_FILE_RANK0}"
 
             try:
                 if not os.path.exists(metrics_file):
-                    return {{}}
+                    return {}
 
                 # Read config from training_params.json
-                config = {{}}
-                config_file = "{ckpt_output_dir}/{OSFT_CONFIG_FILE}"
+                config = {}
+                config_file = f"{ckpt_output_dir}/{OSFT_CONFIG_FILE}"
                 if os.path.exists(config_file):
                     try:
                         with open(config_file) as f:
@@ -200,7 +200,7 @@ def _create_training_hub_progression_instrumentation(
                     )
                     last_line = result.stdout.strip()
                 except subprocess.CalledProcessError:
-                    return {{}}
+                    return {}
 
                 if last_line:
                     metrics = json.loads(last_line)
@@ -209,24 +209,24 @@ def _create_training_hub_progression_instrumentation(
                     return metrics
 
             except FileNotFoundError:
-                return {{}}
+                return {}
             except json.JSONDecodeError:
                 print("[Kubeflow] Warning: Failed to parse OSFT metrics JSON", flush=True)
-                return {{}}
+                return {}
             except Exception:
                 print("[Kubeflow] Error reading OSFT metrics", flush=True)
-                return {{}}
+                return {}
 
-            return {{}}
+            return {}
 
         def _read_sft_metrics(self):
             """Read SFT metrics from training_params_and_metrics_global*.jsonl."""
             # Find rank 0 metrics file
-            pattern = "{ckpt_output_dir}/{SFT_METRICS_FILE_PATTERN}"
+            pattern = f"{ckpt_output_dir}/{SFT_METRICS_FILE_PATTERN}"
             files = glob.glob(pattern)
 
             if not files:
-                return {{}}
+                return {}
 
             # Prefer rank 0 file
             rank_0_files = [f for f in files if SFT_METRICS_FILE_RANK0 in f]
@@ -234,10 +234,10 @@ def _create_training_hub_progression_instrumentation(
 
             try:
                 if not os.path.exists(metrics_file):
-                    return {{}}
+                    return {}
 
                 # Read first line for config
-                config = {{}}
+                config = {}
                 try:
                     with open(metrics_file) as f:
                         first_line = f.readline().strip()
@@ -259,7 +259,7 @@ def _create_training_hub_progression_instrumentation(
                     )
                     last_line = result.stdout.strip()
                 except subprocess.CalledProcessError:
-                    return {{}}
+                    return {}
 
                 if last_line:
                     metrics = json.loads(last_line)
@@ -268,13 +268,13 @@ def _create_training_hub_progression_instrumentation(
                     return metrics
 
             except FileNotFoundError:
-                return {{}}
+                return {}
             except json.JSONDecodeError:
                 print("[Kubeflow] Warning: Failed to parse SFT metrics JSON", flush=True)
-                return {{}}
+                return {}
             except Exception:
                 print("[Kubeflow] Error reading SFT metrics", flush=True)
-                return {{}}
+                return {}
 
             return {{}}
 
@@ -342,14 +342,14 @@ def _create_training_hub_progression_instrumentation(
                     "totalEpochs": total_epochs,
                     "trainMetrics": {
                         {
-                            "loss": "{loss_val:.4f}" if loss_val else None,
-                            "learning_rate": "{lr_val:.6f}" if lr_val else None,
-                            "grad_norm": "{grad_norm_val:.4f}" if grad_norm_val else None,
+                            "loss": f"{loss_val:.4f}" if loss_val else None,
+                            "learning_rate": f"{lr_val:.6f}" if lr_val else None,
+                            "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val else None,
                         }
                     },
                     "evalMetrics": {
                         {
-                            "eval_loss": "{val_loss_val:.4f}" if val_loss_val else None,
+                            "eval_loss": f"{val_loss_val:.4f}" if val_loss_val else None,
                         }
                     },
                 }
@@ -423,14 +423,14 @@ def _create_training_hub_progression_instrumentation(
                     "totalEpochs": estimated_total_epochs,
                     "trainMetrics": {
                         {
-                            "loss": "{loss_val:.4f}" if loss_val else None,
-                            "learning_rate": "{lr_val:.6f}"
+                            "loss": f"{loss_val:.4f}" if loss_val else None,
+                            "learning_rate": f"{lr_val:.6f}"
                             if lr_val is not None and lr_val > 0
                             else None,
-                            "grad_norm": "{grad_norm_val:.4f}"
+                            "grad_norm": f"{grad_norm_val:.4f}"
                             if grad_norm_val is not None
                             else None,
-                            "throughput": "{throughput_val:.2f}" if throughput_val else None,
+                            "throughput": f"{throughput_val:.2f}" if throughput_val else None,
                         }
                     },
                     "evalMetrics": {{}},
@@ -447,7 +447,7 @@ def _create_training_hub_progression_instrumentation(
         server = http.server.HTTPServer(("", metrics_port), TrainingHubMetricsHandler)
 
         print(
-            "[Kubeflow] Metrics server started on port {metrics_port} for {algorithm}",
+            f"[Kubeflow] Metrics server started on port {metrics_port} for {algorithm}",
             flush=True,
         )
 
