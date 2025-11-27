@@ -27,11 +27,3 @@ PVC_URI_SCHEME = "pvc://"
 CHECKPOINT_MOUNT_PATH = "/mnt/kubeflow-checkpoints"
 CHECKPOINT_VOLUME_NAME = "checkpoint-storage"
 CHECKPOINT_INCOMPLETE_MARKER = "checkpoint-is-incomplete.txt"
-
-# Training Hub specific file names and patterns
-# These are the JSONL metrics files written by Training Hub backends
-TRAININGHUB_SFT_METRICS_FILE_PATTERN = "training_params_and_metrics_global*.jsonl"
-TRAININGHUB_SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"
-TRAININGHUB_OSFT_METRICS_FILE_PATTERN = "training_metrics_*.jsonl"
-TRAININGHUB_OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"
-TRAININGHUB_OSFT_CONFIG_FILE = "training_params.json"

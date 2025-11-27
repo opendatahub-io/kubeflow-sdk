@@ -13,6 +13,14 @@ from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import constants as rhai_constants
 from kubeflow.trainer.types import types
 
+# Training Hub specific file names and patterns
+# These are the JSONL metrics files written by Training Hub backends
+TRAININGHUB_SFT_METRICS_FILE_PATTERN = "training_params_and_metrics_global*.jsonl"
+TRAININGHUB_SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"
+TRAININGHUB_OSFT_METRICS_FILE_PATTERN = "training_metrics_*.jsonl"
+TRAININGHUB_OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"
+TRAININGHUB_OSFT_CONFIG_FILE = "training_params.json"
+
 
 class TrainingHubAlgorithms(Enum):
     """Algorithm for TrainingHub Trainer."""
@@ -36,7 +44,6 @@ class TrainingHubTrainer:
         enable_progression_tracking: Enable file-based progress tracking with HTTP server.
         metrics_port: HTTP server port for metrics endpoint.
         metrics_poll_interval_seconds: How often controller polls metrics endpoint.
-        metrics_cache_duration_seconds: Cache duration for metrics to reduce file I/O.
     """
 
     func: Optional[Callable] = None
@@ -52,7 +59,30 @@ class TrainingHubTrainer:
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
-    metrics_cache_duration_seconds: int = 10  # Cache metrics to reduce file I/O
+
+    def __post_init__(self):
+        """Validate configuration after initialization."""
+        # Validate metrics_port
+        if not isinstance(self.metrics_port, int):
+            raise ValueError(
+                f"metrics_port must be an integer, got {type(self.metrics_port).__name__}"
+            )
+
+        if self.metrics_port < 1024 or self.metrics_port > 65535:
+            raise ValueError(f"metrics_port must be in range 1024-65535, got {self.metrics_port}")
+
+        # Validate metrics_poll_interval_seconds
+        if not isinstance(self.metrics_poll_interval_seconds, int):
+            raise ValueError(
+                f"metrics_poll_interval_seconds must be an integer, "
+                f"got {type(self.metrics_poll_interval_seconds).__name__}"
+            )
+
+        if self.metrics_poll_interval_seconds < 5 or self.metrics_poll_interval_seconds > 300:
+            raise ValueError(
+                f"metrics_poll_interval_seconds must be in range 5-300 seconds, "
+                f"got {self.metrics_poll_interval_seconds}"
+            )
 
 
 def _build_install_snippet(
@@ -72,6 +102,364 @@ def _build_install_snippet(
     )
 
 
+def _create_training_hub_progression_instrumentation(
+    algorithm: str,
+    ckpt_output_dir: str,
+    metrics_port: int,
+) -> tuple:
+    """Instrumentation code injected into training pods (extracted via inspect.getsource).
+
+    This function is NOT called directly in the SDK - it's extracted as source code
+    via inspect.getsource() and injected into training scripts. This approach
+    provides syntax highlighting, testability, and type checking while avoiding
+    string templates.
+
+    The constants are embedded directly in the function to make it self-contained
+    when extracted via inspect.getsource().
+
+    Args:
+        algorithm: Training Hub algorithm ("sft" or "osft")
+        ckpt_output_dir: Directory where metrics files are written
+        metrics_port: Port for HTTP metrics server
+
+    Returns:
+        Tuple of (apply_fn, handler_class) for testing purposes
+    """
+    import glob
+    import http.server
+    import json
+    import os
+    import subprocess
+    import threading
+
+    # Training Hub file constants (embedded for self-contained extraction)
+    # fmt: off
+    SFT_METRICS_FILE_PATTERN = "training_params_and_metrics_global*.jsonl"  # noqa: N806, F841
+    SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"  # noqa: N806
+    OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"  # noqa: N806, F841
+    OSFT_CONFIG_FILE = "training_params.json"  # noqa: N806, F841
+    # fmt: on
+
+    class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
+        """HTTP handler that reads JSONL metrics from Training Hub backends."""
+
+        def do_GET(self):
+            """Handle GET requests to expose metrics as JSON."""
+            try:
+                # Read latest metrics
+                metrics = self._read_latest_metrics()
+                # Transform to controller-compatible schema
+                transformed = self._transform_schema(metrics)
+                # Serve JSON
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(transformed, indent=2).encode())
+            except Exception as e:
+                print(
+                    f"[Kubeflow] Failed to create progress metrics payload: {e}",
+                    flush=True,
+                )
+                self.send_error(500)
+
+        def _read_latest_metrics(self):
+            """Read last line of JSONL file (most recent metrics from rank 0)."""
+            if algorithm == "osft":
+                return self._read_osft_metrics()
+            else:  # sft
+                return self._read_sft_metrics()
+
+        def _read_osft_metrics(self):
+            """Read OSFT metrics from training_metrics_0.jsonl."""
+            metrics_file = "{ckpt_output_dir}/{OSFT_METRICS_FILE_RANK0}"
+
+            try:
+                if not os.path.exists(metrics_file):
+                    return {{}}
+
+                # Read config from training_params.json
+                config = {{}}
+                config_file = "{ckpt_output_dir}/{OSFT_CONFIG_FILE}"
+                if os.path.exists(config_file):
+                    try:
+                        with open(config_file) as f:
+                            config = json.load(f)
+                    except Exception:
+                        print(
+                            "[Kubeflow] Warning: Failed to read OSFT config",
+                            flush=True,
+                        )
+
+                # Read last line of metrics using tail
+                try:
+                    result = subprocess.run(
+                        ["tail", "-n", "1", metrics_file],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    last_line = result.stdout.strip()
+                except subprocess.CalledProcessError:
+                    return {{}}
+
+                if last_line:
+                    metrics = json.loads(last_line)
+                    if config:
+                        metrics["_config"] = config
+                    return metrics
+
+            except FileNotFoundError:
+                return {{}}
+            except json.JSONDecodeError:
+                print("[Kubeflow] Warning: Failed to parse OSFT metrics JSON", flush=True)
+                return {{}}
+            except Exception:
+                print("[Kubeflow] Error reading OSFT metrics", flush=True)
+                return {{}}
+
+            return {{}}
+
+        def _read_sft_metrics(self):
+            """Read SFT metrics from training_params_and_metrics_global*.jsonl."""
+            # Find rank 0 metrics file
+            pattern = "{ckpt_output_dir}/{SFT_METRICS_FILE_PATTERN}"
+            files = glob.glob(pattern)
+
+            if not files:
+                return {{}}
+
+            # Prefer rank 0 file
+            rank_0_files = [f for f in files if SFT_METRICS_FILE_RANK0 in f]
+            metrics_file = rank_0_files[0] if rank_0_files else files[0]
+
+            try:
+                if not os.path.exists(metrics_file):
+                    return {{}}
+
+                # Read first line for config
+                config = {{}}
+                try:
+                    with open(metrics_file) as f:
+                        first_line = f.readline().strip()
+                        if first_line:
+                            config = json.loads(first_line)
+                except Exception:
+                    print(
+                        "[Kubeflow] Warning: Failed to read SFT config",
+                        flush=True,
+                    )
+
+                # Read last line for latest metrics using tail
+                try:
+                    result = subprocess.run(
+                        ["tail", "-n", "1", metrics_file],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    last_line = result.stdout.strip()
+                except subprocess.CalledProcessError:
+                    return {{}}
+
+                if last_line:
+                    metrics = json.loads(last_line)
+                    if config:
+                        metrics["_config"] = config
+                    return metrics
+
+            except FileNotFoundError:
+                return {{}}
+            except json.JSONDecodeError:
+                print("[Kubeflow] Warning: Failed to parse SFT metrics JSON", flush=True)
+                return {{}}
+            except Exception:
+                print("[Kubeflow] Error reading SFT metrics", flush=True)
+                return {{}}
+
+            return {{}}
+
+        def _transform_schema(self, metrics):
+            """Transform backend schema to controller-compatible progress format."""
+            if not metrics:
+                return {
+                    {
+                        "progressPercentage": None,
+                        "estimatedRemainingSeconds": None,
+                        "currentStep": None,
+                        "totalSteps": None,
+                        "currentEpoch": None,
+                        "totalEpochs": None,
+                        "trainMetrics": None,
+                        "evalMetrics": None,
+                    }
+                }
+
+            # Use algorithm parameter to determine transformation
+            if algorithm == "osft":
+                return self._transform_osft(metrics)
+            else:  # sft
+                return self._transform_sft(metrics)
+
+        def _transform_osft(self, metrics):
+            """Transform OSFT schema to controller-compatible format."""
+            step = metrics.get("step", 0)
+            epoch = metrics.get("epoch", 0)
+            steps_per_epoch = metrics.get("steps_per_epoch", 0)
+
+            config = metrics.get("_config", {{}})
+            configured_max_epochs = config.get("max_epochs")
+
+            total_epochs = configured_max_epochs or metrics.get("total_epochs", 1)
+
+            step_total = steps_per_epoch * total_epochs if steps_per_epoch > 0 else 0
+
+            current_step_absolute = step
+            percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
+
+            time_per_batch = metrics.get("time_per_batch", 0)
+            remaining_steps = step_total - current_step_absolute
+
+            if percent >= 100 or remaining_steps <= 0:
+                estimated_remaining_sec = 0
+            else:
+                estimated_remaining_sec = (
+                    int(remaining_steps * time_per_batch) if time_per_batch > 0 else None
+                )
+
+            loss_val = metrics.get("loss", 0)
+            lr_val = metrics.get("lr")
+            grad_norm_val = metrics.get("grad_norm", 0)
+            metrics.get("samples_per_second", 0)
+            val_loss_val = metrics.get("val_loss")
+
+            return {
+                {
+                    "progressPercentage": int(round(percent)),
+                    "estimatedRemainingSeconds": estimated_remaining_sec,
+                    "currentStep": current_step_absolute,
+                    "totalSteps": step_total,
+                    "currentEpoch": epoch + 1,
+                    "totalEpochs": total_epochs,
+                    "trainMetrics": {
+                        {
+                            "loss": "{loss_val:.4f}" if loss_val else None,
+                            "learning_rate": "{lr_val:.6f}" if lr_val else None,
+                            "grad_norm": "{grad_norm_val:.4f}" if grad_norm_val else None,
+                        }
+                    },
+                    "evalMetrics": {
+                        {
+                            "eval_loss": "{val_loss_val:.4f}" if val_loss_val else None,
+                        }
+                    },
+                }
+            }
+
+        def _transform_sft(self, metrics):
+            """Transform SFT schema to controller-compatible format."""
+            step = metrics.get("step", 0)
+            epoch = metrics.get("epoch", 0)
+            num_epoch_steps = metrics.get("num_epoch_steps") or metrics.get("num_batches", 0)
+            total_samples = metrics.get("total_samples", 0)
+
+            config = metrics.get("_config", {{}})
+            configured_num_epochs = config.get("num_epochs")
+
+            if not num_epoch_steps:
+                num_epoch_steps = config.get("num_batches", 0)
+
+            current_epoch = epoch + 1
+            current_step_absolute = step
+            samples_seen = metrics.get("samples_seen", 0)
+
+            if configured_num_epochs:
+                estimated_total_epochs = configured_num_epochs
+            elif num_epoch_steps > 0 and samples_seen > 0:
+                estimated_progress_through_epochs = (
+                    samples_seen / (num_epoch_steps * total_samples / num_epoch_steps)
+                    if total_samples > 0
+                    else 0
+                )
+                if estimated_progress_through_epochs > current_epoch:
+                    estimated_total_epochs = max(2, int(estimated_progress_through_epochs) + 1)
+                else:
+                    estimated_total_epochs = current_epoch
+            else:
+                estimated_total_epochs = (
+                    max(2, current_epoch) if current_step_absolute > 0 else current_epoch
+                )
+
+            if num_epoch_steps > 0:
+                step_total = num_epoch_steps * estimated_total_epochs
+            else:
+                step_total = max(step, step + 10)
+
+            percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
+
+            throughput = metrics.get("overall_throughput", 0)
+            remaining_steps = step_total - current_step_absolute
+
+            if percent >= 100 or remaining_steps <= 0:
+                estimated_remaining_sec = 0
+            else:
+                estimated_remaining_sec = (
+                    int(remaining_steps / throughput)
+                    if throughput > 0 and remaining_steps > 0
+                    else None
+                )
+
+            loss_val = metrics.get("avg_loss", 0)
+            lr_val = metrics.get("lr")
+            grad_norm_val = metrics.get("gradnorm")
+            throughput_val = metrics.get("overall_throughput")
+
+            return {
+                {
+                    "progressPercentage": int(round(percent)),
+                    "estimatedRemainingSeconds": estimated_remaining_sec,
+                    "currentStep": current_step_absolute,
+                    "totalSteps": step_total,
+                    "currentEpoch": current_epoch,
+                    "totalEpochs": estimated_total_epochs,
+                    "trainMetrics": {
+                        {
+                            "loss": "{loss_val:.4f}" if loss_val else None,
+                            "learning_rate": "{lr_val:.6f}"
+                            if lr_val is not None and lr_val > 0
+                            else None,
+                            "grad_norm": "{grad_norm_val:.4f}"
+                            if grad_norm_val is not None
+                            else None,
+                            "throughput": "{throughput_val:.2f}" if throughput_val else None,
+                        }
+                    },
+                    "evalMetrics": {{}},
+                }
+            }
+
+        def log_message(self, format, *args):
+            """Suppress default HTTP server logging."""
+            pass
+
+    def apply_progression_tracking():
+        """Start HTTP server for metrics in background thread."""
+
+        server = http.server.HTTPServer(("", metrics_port), TrainingHubMetricsHandler)
+
+        print(
+            "[Kubeflow] Metrics server started on port {metrics_port} for {algorithm}",
+            flush=True,
+        )
+
+        # Run server in background thread
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+
+        return server
+
+    return (apply_progression_tracking, TrainingHubMetricsHandler)
+
+
 def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) -> str:
     """Render a small Python script that calls training_hub.<algorithm>(**func_args)."""
     base_script = textwrap.dedent("""
@@ -81,20 +469,20 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
 
         _dp = (func_args or {{}}).get('data_path')
         if _dp:
-            print("[PY] Data file found: {{}}".format(_dp))
+            print("[PY] Data file found: {{}}".format(_dp), flush=True)
         else:
-            print("[PY] Data file NOT found: {{}}".format(_dp))
+            print("[PY] Data file NOT found: {{}}".format(_dp), flush=True)
 
         args = dict(func_args or {{}})
-        print("[PY] Launching {algo_upper} training...")
+        print("[PY] Launching {algo_upper} training...", flush=True)
         try:
             result = {algo}(**args)
-            print("[PY] {algo_upper} training complete. Result=", result)
+            print("[PY] {algo_upper} training complete. Result=", result, flush=True)
         except ValueError as e:
-            print("Configuration error:", e)
+            print("Configuration error:", e, flush=True)
         except Exception as e:
             import traceback
-            print("[PY] Training failed with error:", e)
+            print("[PY] Training failed with error:", e, flush=True)
             traceback.print_exc()
 
     """).format(algo=algorithm_name, algo_upper=algorithm_name.upper())
@@ -145,403 +533,61 @@ def _compose_exec_script(func_code: str, func_file: str) -> str:
     )
 
 
-def _get_training_hub_progress_instrumentation(
+def get_training_hub_instrumentation_wrapper(
     algorithm: str,
     ckpt_output_dir: str,
-    port: int = 28080,
-    cache_duration: int = 10,
+    metrics_port: int = 28080,
 ) -> str:
-    """Generate HTTP server code for file-based progress tracking.
+    """Generate self-contained instrumentation wrapper via inspect.getsource.
 
-    This function generates Python code that:
-    1. Reads JSONL metrics files written by Training Hub backends
-       (Mini-Trainer or InstructLab Training)
-    2. Transforms the metrics to a rich schema compatible with the controller
-    3. Serves the metrics via HTTP on the specified port
-    4. Caches metrics to reduce file I/O overhead
-
-    The generated code runs in the training pod and doesn't require any modifications
-    to the Training Hub library itself.
+    Extracts _create_training_hub_progression_instrumentation as source code and injects
+    a call with the provided parameters.
 
     Args:
-        algorithm: The Training Hub algorithm ("sft" or "osft")
-        ckpt_output_dir: Directory where metrics JSONL files are written
-        port: HTTP server port (default: 28080)
-        cache_duration: Metrics cache duration in seconds (default: 10)
+        algorithm: Training Hub algorithm ("sft" or "osft")
+        ckpt_output_dir: Directory where metrics files are written
+        metrics_port: Port for HTTP metrics server
 
     Returns:
-        Python code string to be injected into the training script
+        Python code as string to be injected before training code
     """
-    # Get file name constants
-    sft_metrics_file = rhai_constants.TRAININGHUB_SFT_METRICS_FILE_RANK0
-    sft_metrics_pattern = rhai_constants.TRAININGHUB_SFT_METRICS_FILE_PATTERN
-    osft_metrics_file = rhai_constants.TRAININGHUB_OSFT_METRICS_FILE_RANK0
-    osft_config_file = rhai_constants.TRAININGHUB_OSFT_CONFIG_FILE
+    import inspect
+    import textwrap
 
-    return f'''
-# ==============================================================================
-# Kubeflow Training Hub Progress Tracking - File-Based HTTP Server
-# ==============================================================================
+    # Extract the entire function source
+    instrumentation_code = inspect.getsource(_create_training_hub_progression_instrumentation)
+    instrumentation_code = textwrap.dedent(instrumentation_code)
 
+    # Build the wrapper with function call
+    wrapper = f"""# =============================================================================
+# Kubeflow SDK - Training Hub Progression Tracking Instrumentation
+# Generated by kubeflow.trainer.rhai.traininghub
+# =============================================================================
 
-import http.server
-import json
-import glob
-import os
-import threading
-import time
+print("[Kubeflow] Initializing Training Hub progression tracking", flush=True)
 
-class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
-    """HTTP handler that reads JSONL metrics from Training Hub backends with caching."""
+# Instrumentation function definition
+{instrumentation_code}
 
-    algorithm = "{algorithm}"
-    ckpt_output_dir = "{ckpt_output_dir}"
+# Initialize and apply instrumentation
+(
+    apply_progression_tracking,
+    _,
+) = _create_training_hub_progression_instrumentation(
+    algorithm="{algorithm}",
+    ckpt_output_dir="{ckpt_output_dir}",
+    metrics_port={metrics_port}
+)
+apply_progression_tracking()
+print("[Kubeflow] Training Hub progression tracking enabled", flush=True)
 
-    # Class-level cache to reduce file I/O
-    _cache = {{"metrics": {{}}, "timestamp": 0}}
-    _cache_duration = {cache_duration}  # seconds
+# =============================================================================
+# USER TRAINING CODE STARTS BELOW
+# =============================================================================
 
-    def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
+"""
 
-        elif self.path in ("/", "/metrics"):
-            try:
-                # Read latest metrics (with caching)
-                metrics = self._read_latest_metrics_cached()
-                # Transform to controller-compatible schema
-                transformed = self._transform_schema(metrics)
-                # Serve JSON
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps(transformed, indent=2).encode())
-            except Exception as e:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                error_response = {{"error": str(e), "status": "error"}}
-                self.wfile.write(json.dumps(error_response).encode())
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def _read_latest_metrics_cached(self):
-        """Read metrics with caching to reduce file I/O."""
-        current_time = time.time()
-
-        # Return cached metrics if still fresh
-        if current_time - self._cache["timestamp"] < self._cache_duration:
-            return self._cache["metrics"]
-
-        # Read fresh metrics from file
-        metrics = self._read_latest_metrics()
-
-        # Update cache
-        TrainingHubMetricsHandler._cache["metrics"] = metrics
-        TrainingHubMetricsHandler._cache["timestamp"] = current_time
-
-        return metrics
-
-    def _read_latest_metrics(self):
-        """Read last line of JSONL file (most recent metrics from rank 0)."""
-        # Determine file pattern based on algorithm
-        if self.algorithm == "osft":
-            # Mini-Trainer: Read from rank 0 file explicitly
-            metrics_file = f"{{self.ckpt_output_dir}}/{osft_metrics_file}"
-        else:  # sft
-            # InstructLab: Find rank 0 file (global0.jsonl)
-            pattern = f"{{self.ckpt_output_dir}}/{sft_metrics_pattern}"
-            files = glob.glob(pattern)
-
-            if not files:
-                return {{}}
-
-            # Prefer rank 0 file
-            rank_0_files = [f for f in files if '{sft_metrics_file}' in f]
-            metrics_file = rank_0_files[0] if rank_0_files else files[0]
-
-        # Read configuration from first line (SFT) or training_params.json (OSFT)
-        # and metrics from last line
-        try:
-            if not os.path.exists(metrics_file):
-                return {{}}
-
-            config = {{}}
-            last_line = None
-
-            # For OSFT (Mini-Trainer), read config from training_params.json
-            if self.algorithm == "osft":
-                config_file = f"{{self.ckpt_output_dir}}/{osft_config_file}"
-                if os.path.exists(config_file):
-                    try:
-                        with open(config_file, 'r') as f:
-                            config = json.load(f)
-                    except:
-                        pass
-
-            # Read metrics from JSONL
-            with open(metrics_file, 'r') as f:
-                for i, line in enumerate(f):
-                    if line.strip():
-                        # For SFT (InstructLab), first line contains training configuration
-                        if self.algorithm == "sft" and i == 0:
-                            try:
-                                config = json.loads(line)
-                            except:
-                                pass
-                        last_line = line
-
-            if last_line:
-                metrics = json.loads(last_line)
-                # Merge config into metrics for access to num_epochs/max_epochs
-                if config:
-                    metrics['_config'] = config
-                return metrics
-        except FileNotFoundError:
-            return {{}}
-        except json.JSONDecodeError:
-            return {{}}
-
-        return {{}}
-
-    def _transform_schema(self, metrics):
-        """Transform backend schema → Controller-compatible progress format."""
-        if not metrics:
-            return {{
-                "progressPercentage": 0,
-                "estimatedRemainingSeconds": None,
-                "currentStep": 0,
-                "totalSteps": 0,
-                "currentEpoch": 1,
-                "totalEpochs": 1,
-                "trainMetrics": {{
-                    "loss": None,
-                    "learning_rate": None,
-                    "grad_norm": None,
-                }},
-                "evalMetrics": {{}},
-                "elapsedSeconds": None,
-            }}
-
-        # Detect backend based on metrics keys
-        if "tokens_per_second" in metrics or "samples_per_second" in metrics:
-            # Mini-Trainer (OSFT)
-            return self._transform_mini_trainer(metrics)
-        else:
-            # InstructLab Training (SFT)
-            return self._transform_instructlab(metrics)
-
-    def _transform_mini_trainer(self, metrics):
-        """Transform Mini-Trainer (OSFT) schema to controller-compatible format."""
-        step = metrics.get("step", 0)
-        epoch = metrics.get("epoch", 0)
-        steps_per_epoch = metrics.get("steps_per_epoch", 0)
-
-        # Extract real max_epochs from config (first line of JSONL)
-        config = metrics.get("_config", {{}})
-        configured_max_epochs = config.get("max_epochs")
-
-        # Calculate total steps across all epochs
-        # Use configured max_epochs if available, otherwise fall back to metrics
-        if configured_max_epochs:
-            total_epochs = configured_max_epochs
-        else:
-            total_epochs = metrics.get("total_epochs", 1)
-
-        # Calculate total steps across all epochs
-        # Wait until we have steps_per_epoch from metrics before calculating total
-        if steps_per_epoch > 0:
-            step_total = steps_per_epoch * total_epochs
-        else:
-            # Don't guess - wait for real data
-            # Using 0 means progressPercentage will be 0 until we have real metrics
-            step_total = 0
-
-        # Mini-Trainer's 'step' is already the absolute global step across all epochs
-        # (not the step within the current epoch), so we use it directly
-        current_step_absolute = step
-
-        # Calculate progress percentage (cap at 100%)
-        percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
-
-        # Estimate remaining time
-        time_per_batch = metrics.get("time_per_batch", 0)
-        remaining_steps = step_total - current_step_absolute
-
-        # If training is complete (100%), set remaining time to 0
-        if percent >= 100 or remaining_steps <= 0:
-            estimated_remaining_sec = 0
-        else:
-            estimated_remaining_sec = (
-                int(remaining_steps * time_per_batch) if time_per_batch > 0 else None
-            )
-
-        loss_val = metrics.get("loss", 0)
-        lr_val = metrics.get("lr")
-        grad_norm_val = metrics.get("grad_norm", 0)
-        throughput_val = metrics.get("samples_per_second", 0)
-        val_loss_val = metrics.get("val_loss")
-
-        return {{
-            # Controller-compatible format
-            "progressPercentage": int(round(percent)),
-            "estimatedRemainingSeconds": estimated_remaining_sec,
-            "currentStep": current_step_absolute,
-            "totalSteps": step_total,
-            "currentEpoch": epoch + 1,
-            "totalEpochs": total_epochs,
-            "trainMetrics": {{
-                "loss": f"{{loss_val:.4f}}" if loss_val else None,
-                "learning_rate": f"{{lr_val:.6f}}" if lr_val else None,
-                "grad_norm": f"{{grad_norm_val:.4f}}" if grad_norm_val else None,
-            }},
-            "evalMetrics": {{
-                "eval_loss": f"{{val_loss_val:.4f}}" if val_loss_val else None,
-            }},
-            "elapsedSeconds": None,
-        }}
-
-    def _transform_instructlab(self, metrics):
-        """Transform InstructLab Training (SFT) schema to controller-compatible format."""
-        step = metrics.get("step", 0)
-        epoch = metrics.get("epoch", 0)
-        # Support both 'num_epoch_steps' and 'num_batches' (InstructLab uses both)
-        num_epoch_steps = metrics.get("num_epoch_steps") or metrics.get("num_batches", 0)
-        total_samples = metrics.get("total_samples", 0)
-
-        # Extract real num_epochs from config (first line of JSONL)
-        config = metrics.get("_config", {{}})
-        configured_num_epochs = config.get("num_epochs")
-        # Also check config for num_batches if not in metrics
-        if not num_epoch_steps:
-            num_epoch_steps = config.get("num_batches", 0)
-
-        # Calculate total steps
-        current_epoch = epoch + 1  # Current epoch number (0-indexed, so +1)
-        current_step_absolute = step  # Current step (already properly indexed)
-
-        # Use samples_seen to detect when we've moved to a new epoch
-        samples_seen = metrics.get("samples_seen", 0)
-
-        # Determine total epochs
-        if configured_num_epochs:
-            # Use the real configured value from training config!
-            estimated_total_epochs = configured_num_epochs
-        elif total_samples > 0 and samples_seen > 0:
-            # Fallback: estimate based on samples_seen if config not available
-            epochs_ratio = samples_seen / total_samples
-            if epochs_ratio > 1.0:
-                import math
-                estimated_total_epochs = max(math.ceil(epochs_ratio), current_epoch)
-            elif current_step_absolute > 0 and num_epoch_steps > 0:
-                if current_step_absolute < num_epoch_steps * 0.9:
-                    estimated_total_epochs = max(2, current_epoch)
-                else:
-                    estimated_total_epochs = current_epoch
-            else:
-                estimated_total_epochs = current_epoch
-        else:
-            # Final fallback
-            estimated_total_epochs = (
-                max(2, current_epoch) if current_step_absolute > 0 else current_epoch
-            )
-
-        # Calculate total expected steps based on current knowledge
-        if num_epoch_steps > 0:
-            step_total = num_epoch_steps * estimated_total_epochs
-        else:
-            # Fallback: use current step + some buffer
-            step_total = max(step, step + 10)
-
-        # Calculate progress percentage (cap at 100%)
-        percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
-
-        # Estimate remaining time based on throughput
-        throughput = metrics.get("overall_throughput", 0)  # samples/second
-        remaining_steps = step_total - current_step_absolute
-
-        # If training is complete (100%), set remaining time to 0
-        if percent >= 100 or remaining_steps <= 0:
-            estimated_remaining_sec = 0
-        else:
-            estimated_remaining_sec = (
-                int(remaining_steps / throughput)
-                if throughput > 0 and remaining_steps > 0
-                else None
-            )
-
-        # Extract training metrics from JSONL
-        loss_val = metrics.get("avg_loss", 0)
-        lr_val = metrics.get("lr")
-        grad_norm_val = metrics.get("gradnorm")
-        throughput_val = metrics.get("overall_throughput")
-
-        return {{
-            # Controller-compatible format
-            "progressPercentage": int(round(percent)),
-            "estimatedRemainingSeconds": estimated_remaining_sec,
-            "currentStep": current_step_absolute,
-            "totalSteps": step_total,
-            "currentEpoch": current_epoch,
-            "totalEpochs": estimated_total_epochs,
-            "trainMetrics": {{
-                "loss": f"{{loss_val:.4f}}" if loss_val else None,
-                "learning_rate": f"{{lr_val:.6f}}" if lr_val is not None and lr_val > 0 else None,
-                "grad_norm": f"{{grad_norm_val:.4f}}" if grad_norm_val is not None else None,
-                "throughput": f"{{throughput_val:.2f}}" if throughput_val else None,
-            }},
-            "evalMetrics": {{}},
-            "elapsedSeconds": None,
-        }}
-
-    def log_message(self, format, *args):
-        """Suppress default HTTP server logging."""
-        pass
-
-def start_metrics_server(port={port}):
-    """Start HTTP metrics server in background thread."""
-    import socket
-
-    # Enable SO_REUSEADDR to allow port reuse
-    server = http.server.HTTPServer(("", port), TrainingHubMetricsHandler)
-    server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-    print(
-        f"[Kubeflow] Metrics server started on port {{port}} "
-        f"for {{TrainingHubMetricsHandler.algorithm}}",
-        flush=True,
-    )
-
-    # Run server in background thread
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-
-    return server
-
-# Start metrics server with error handling
-try:
-    _metrics_server = start_metrics_server()
-    print("[Kubeflow] Progress tracking initialized for Training Hub", flush=True)
-except OSError as e:
-    if e.errno == 98:  # Address already in use
-        print(
-            f"[Kubeflow] Warning: Port {port} already in use, "
-            f"progress tracking may not work correctly",
-            flush=True,
-        )
-        _metrics_server = None
-    else:
-        raise
-
-# ==============================================================================
-# End of Progress Tracking Code
-# ==============================================================================
-
-'''
+    return wrapper
 
 
 def get_trainer_cr_from_training_hub_trainer(
@@ -581,11 +627,10 @@ def get_trainer_cr_from_training_hub_trainer(
             and trainer.func_args
             and "ckpt_output_dir" in trainer.func_args
         ):
-            progress_code = _get_training_hub_progress_instrumentation(
+            progress_code = get_training_hub_instrumentation_wrapper(
                 algorithm=algorithm_name,
                 ckpt_output_dir=trainer.func_args["ckpt_output_dir"],
-                port=trainer.metrics_port,
-                cache_duration=trainer.metrics_cache_duration_seconds,
+                metrics_port=trainer.metrics_port,
             )
             raw_code = progress_code + "\n" + raw_code
 
@@ -607,11 +652,10 @@ def get_trainer_cr_from_training_hub_trainer(
             if trainer.func_args and "ckpt_output_dir" in trainer.func_args:
                 ckpt_dir = trainer.func_args["ckpt_output_dir"]
 
-            progress_code = _get_training_hub_progress_instrumentation(
+            progress_code = get_training_hub_instrumentation_wrapper(
                 algorithm=trainer.algorithm.value,
                 ckpt_output_dir=ckpt_dir,
-                port=trainer.metrics_port,
-                cache_duration=trainer.metrics_cache_duration_seconds,
+                metrics_port=trainer.metrics_port,
             )
             func_code = progress_code + "\n" + func_code
 
