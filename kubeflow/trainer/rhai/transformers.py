@@ -236,19 +236,32 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 current_step = self.trainer.state.global_step
                 print(f"[Kubeflow] Starting JIT checkpoint at step {current_step}", flush=True)
 
+                # Get rank for distributed training
+                rank = 0
+                if torch.distributed.is_available() and torch.distributed.is_initialized():
+                    rank = torch.distributed.get_rank()
+
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
                     output_dir, f"{PREFIX_CHECKPOINT_DIR}-{current_step}"
                 )
                 os.makedirs(checkpoint_path, exist_ok=True)
 
-                # Create sentinel file to mark incomplete checkpoint
+                # Create sentinel file to mark incomplete checkpoint (only rank 0)
                 sentinel_file = os.path.join(checkpoint_path, "checkpoint-is-incomplete.txt")
-                with open(sentinel_file, "w") as f:
-                    f.write(f"Checkpoint started at step {current_step}")
+                if rank == 0:
+                    with open(sentinel_file, "w") as f:
+                        f.write(f"Checkpoint started at step {current_step}")
 
                 # Checkpoint using dedicated CUDA stream
                 if self.checkpoint_stream is not None:
+                    # Wait for default stream to complete all pending operations
+                    self.checkpoint_stream.wait_stream(torch.cuda.default_stream())
+
+                    # Record all model parameters on checkpoint stream to prevent deallocation
+                    for param in self.trainer.model.parameters():
+                        param.record_stream(self.checkpoint_stream)
+
                     with torch.cuda.stream(self.checkpoint_stream):
                         self.trainer._save_checkpoint(self.trainer.model, trial=None)
                     self.checkpoint_stream.synchronize()
@@ -256,8 +269,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Fallback if no CUDA stream
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
-                # Remove sentinel on success
-                if os.path.exists(sentinel_file):
+                # Remove sentinel on success (only rank 0)
+                if rank == 0 and os.path.exists(sentinel_file):
                     os.remove(sentinel_file)
 
                 print(f"[Kubeflow] JIT checkpoint completed at step {current_step}", flush=True)
