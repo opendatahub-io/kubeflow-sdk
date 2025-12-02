@@ -337,7 +337,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         _jit_checkpoint_callback = JITCheckpointCallback()
 
         def _find_latest_checkpoint(output_dir):
-            """Find the latest checkpoint, deleting incomplete ones."""
+            """Find the latest checkpoint and deleting incomplete ones."""
             if not output_dir or not os.path.exists(output_dir):
                 return None
 
@@ -918,6 +918,8 @@ def get_jit_checkpoint_injection_code(
     enable_jit_checkpoint: bool = False,
 ) -> str:
     """Generate the complete JIT checkpoint code to inject into training scripts."""
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
+
     # Build checkpoint config dict
     config_dict = {"enable_jit": enable_jit_checkpoint}
 
@@ -936,6 +938,12 @@ def get_jit_checkpoint_injection_code(
     checkpoint_instrumentation_code = inspect.getsource(_create_checkpoint_instrumentation)
     checkpoint_instrumentation_code = textwrap.dedent(checkpoint_instrumentation_code)
 
+    # Remove the import that won't be available in training pods (we'll define it globally instead)
+    checkpoint_instrumentation_code = checkpoint_instrumentation_code.replace(
+        "from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER",
+        "# CHECKPOINT_INCOMPLETE_MARKER defined globally above",
+    )
+
     # Serialize config dict as Python code
     import pprint
 
@@ -948,6 +956,9 @@ def get_jit_checkpoint_injection_code(
 # =============================================================================
 
 print("[Kubeflow] Initializing checkpoint instrumentation", flush=True)
+
+# Constants (inline to avoid import dependencies in training pods)
+CHECKPOINT_INCOMPLETE_MARKER = {repr(CHECKPOINT_INCOMPLETE_MARKER)}
 
 # Instrumentation function definition
 {checkpoint_instrumentation_code}

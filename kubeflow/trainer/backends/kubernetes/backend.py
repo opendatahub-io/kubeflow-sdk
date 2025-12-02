@@ -234,10 +234,6 @@ class KubernetesBackend(RuntimeBackend):
             pod_template_overrides=pod_template_overrides,
         )
 
-        # If users choose to use an RHAI trainer.
-        if isinstance(trainer, get_args(RHAITrainer)):
-            rhai_utils.apply_rhai_trainer_overrides(trainer, trainjob_spec)
-
         # Build the TrainJob.
         train_job = models.TrainerV1alpha1TrainJob(
             apiVersion=constants.API_VERSION,
@@ -621,6 +617,17 @@ class KubernetesBackend(RuntimeBackend):
         if runtime is None:
             runtime = self.get_runtime(constants.TORCH_RUNTIME)
 
+        # Check if trainer is RHAI trainer
+        is_rhai_trainer = trainer and isinstance(trainer, get_args(RHAITrainer))
+
+        # Parse RHAI trainer output_dir before building trainer CRD
+        if is_rhai_trainer and hasattr(trainer, "output_dir") and trainer.output_dir:
+            trainer.output_dir, pod_template_overrides = (
+                rhai_utils.apply_output_dir_uri_to_pod_overrides(
+                    trainer.output_dir, pod_template_overrides
+                )
+            )
+
         # Build the Trainer.
         trainer_cr = models.TrainerV1alpha1Trainer()
 
@@ -640,7 +647,7 @@ class KubernetesBackend(RuntimeBackend):
                 )
 
             # If users choose to use an RHAI trainer.
-            elif isinstance(trainer, get_args(RHAITrainer)):
+            elif is_rhai_trainer:
                 trainer_cr = rhai_utils.get_trainer_cr_from_rhai_trainer(
                     runtime, trainer, initializer
                 )
@@ -674,6 +681,12 @@ class KubernetesBackend(RuntimeBackend):
                 if initializer.dataset
                 else None,
                 model=utils.get_model_initializer(initializer.model) if initializer.model else None,
+            )
+
+        # Apply RHAI trainer progression tracking annotations
+        if is_rhai_trainer:
+            trainjob_spec.annotations = rhai_utils.merge_progression_annotations(
+                trainer, trainjob_spec.annotations
             )
 
         return trainjob_spec

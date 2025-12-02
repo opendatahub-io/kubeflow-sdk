@@ -197,24 +197,3 @@ def apply_output_dir_uri_to_pod_overrides(
     trainer_container_dict["volumeMounts"].append(volume_mount_specs["volumeMount"])
 
     return resolved_output_dir, pod_template_overrides
-
-
-def apply_rhai_trainer_overrides(
-    trainer: RHAITrainer,
-    trainjob_spec: models.TrainerV1alpha1TrainJobSpec,
-) -> None:
-    """
-    Apply RHAI trainer-specific overrides to TrainJob spec.
-    This consolidates all RHAI trainer logic (progression tracking, output_dir URI processing)
-    into a single location. Modifies trainjob_spec in place.
-    """
-    # Apply progression tracking annotations
-    trainjob_spec.annotations = merge_progression_annotations(trainer, trainjob_spec.annotations)
-
-    # Apply output_dir URI processing and pod template overrides
-    if hasattr(trainer, "output_dir") and trainer.output_dir:
-        trainer.output_dir, trainjob_spec.pod_template_overrides = (
-            apply_output_dir_uri_to_pod_overrides(
-                trainer.output_dir, trainjob_spec.pod_template_overrides
-            )
-        )
