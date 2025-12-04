@@ -904,9 +904,14 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
             "save_total_limit": periodic_config.save_total_limit,
         }
 
+    # Parse output_dir URI to get resolved path for checkpoint code
+    from kubeflow.trainer.rhai.utils import parse_output_dir_uri
+
+    resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
+
     # Generate checkpoint injection code
     return get_jit_checkpoint_injection_code(
-        output_dir=trainer.output_dir,
+        output_dir=resolved_output_dir,
         periodic_checkpoint_config=periodic_config_dict,
         enable_jit_checkpoint=trainer.enable_jit_checkpoint,
     )

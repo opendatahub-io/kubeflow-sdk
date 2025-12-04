@@ -620,12 +620,10 @@ class KubernetesBackend(RuntimeBackend):
         # Check if trainer is RHAI trainer
         is_rhai_trainer = trainer and isinstance(trainer, get_args(RHAITrainer))
 
-        # Parse RHAI trainer output_dir before building trainer CRD
+        # Parse RHAI trainer output_dir to setup pod template overrides (volume mounts)
         if is_rhai_trainer and hasattr(trainer, "output_dir") and trainer.output_dir:
-            trainer.output_dir, pod_template_overrides = (
-                rhai_utils.apply_output_dir_uri_to_pod_overrides(
-                    trainer.output_dir, pod_template_overrides
-                )
+            _, pod_template_overrides = rhai_utils.apply_output_dir_uri_to_pod_overrides(
+                trainer.output_dir, pod_template_overrides
             )
 
         # Build the Trainer.
