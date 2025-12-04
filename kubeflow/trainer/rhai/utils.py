@@ -94,6 +94,12 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
         uri_path = output_dir[len(PVC_URI_SCHEME) :]
         parts = uri_path.split("/", 1)
         pvc_name = parts[0]
+
+        if not pvc_name:
+            raise ValueError(
+                f"Invalid PVC URI: '{output_dir}'. "
+                f"PVC name cannot be empty. Expected format: '{PVC_URI_SCHEME}<pvc-name>/<path>'"
+            )
         checkpoint_path = parts[1] if len(parts) > 1 else ""
 
         # SDK mounts PVC at a standard location
