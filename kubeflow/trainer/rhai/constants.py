@@ -20,3 +20,9 @@ ANNOTATION_PROGRESSION_TRACKING = "trainer.opendatahub.io/progression-tracking"
 ANNOTATION_METRICS_PORT = "trainer.opendatahub.io/metrics-port"
 ANNOTATION_METRICS_POLL_INTERVAL = "trainer.opendatahub.io/metrics-poll-interval"
 ANNOTATION_TRAINER_STATUS = "trainer.opendatahub.io/trainerStatus"
+
+# Checkpointing storage constants
+PVC_URI_SCHEME = "pvc://"
+CHECKPOINT_MOUNT_PATH = "/mnt/kubeflow-checkpoints"
+CHECKPOINT_VOLUME_NAME = "checkpoint-storage"
+CHECKPOINT_INCOMPLETE_MARKER = "checkpoint-is-incomplete.txt"

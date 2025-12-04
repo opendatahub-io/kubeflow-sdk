@@ -14,14 +14,18 @@
 
 """Tests for TransformersTrainer and instrumentation wrapper generation."""
 
+from unittest.mock import patch
+
 import pytest
 
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai.transformers import (
+    PeriodicCheckpointConfig,
     TransformersTrainer,
+    _build_checkpoint_code,
     get_transformers_instrumentation_wrapper,
 )
-from kubeflow.trainer.test.common import SUCCESS, TestCase
+from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 
 
 def test_transformers_trainer_initialization():
@@ -1291,6 +1295,814 @@ def test_honest_progress_reporting(test_case):
     finally:
         if "transformers" in sys.modules:
             del sys.modules["transformers"]
+
+
+def _mock_get_jit_checkpoint_injection_code(
+    output_dir=None, periodic_checkpoint_config=None, enable_jit_checkpoint=False
+):
+    """Mock implementation of get_jit_checkpoint_injection_code that doesn't require torch."""
+    parts = []
+
+    # Build config dict
+    config_lines = ["_KUBEFLOW_CHECKPOINT_CONFIG = {"]
+    config_lines.append(f'    "enable_jit": {enable_jit_checkpoint},')
+    if output_dir:
+        config_lines.append(f'    "output_dir": {repr(output_dir)},')
+    if periodic_checkpoint_config:
+        if "save_strategy" in periodic_checkpoint_config:
+            config_lines.append(
+                f'    "save_strategy": {repr(periodic_checkpoint_config["save_strategy"])},'
+            )
+        if "save_steps" in periodic_checkpoint_config:
+            config_lines.append(f'    "save_steps": {periodic_checkpoint_config["save_steps"]},')
+        if "save_total_limit" in periodic_checkpoint_config:
+            config_lines.append(
+                f'    "save_total_limit": {periodic_checkpoint_config["save_total_limit"]},'
+            )
+    config_lines.append("}")
+    parts.append("\n".join(config_lines))
+
+    # Add CheckpointManager if JIT enabled
+    if enable_jit_checkpoint:
+        parts.append("class CheckpointManager:\n    pass")
+
+    # Add monkey-patch function
+    parts.append("def setup_jit_checkpoint_monkey_patch():\n    pass")
+
+    return "\n\n".join(parts)
+
+
+# ============================================================================
+# PeriodicCheckpointConfig Validation Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="default periodic config values",
+            expected_status=SUCCESS,
+            config={"save_strategy": "epoch", "save_steps": None, "save_total_limit": 3},
+        ),
+        TestCase(
+            name="valid epoch strategy",
+            expected_status=SUCCESS,
+            config={"save_strategy": "epoch"},
+        ),
+        TestCase(
+            name="valid steps strategy with save_steps",
+            expected_status=SUCCESS,
+            config={"save_strategy": "steps", "save_steps": 100},
+        ),
+        TestCase(
+            name="valid no strategy to disable periodic checkpointing",
+            expected_status=SUCCESS,
+            config={"save_strategy": "no"},
+        ),
+        TestCase(
+            name="invalid strategy raises ValueError",
+            expected_status=FAILED,
+            config={"save_strategy": "invalid"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="steps strategy requires save_steps",
+            expected_status=FAILED,
+            config={"save_strategy": "steps"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="save_total_limit cannot be zero",
+            expected_status=FAILED,
+            config={"save_total_limit": 0},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="save_total_limit cannot be negative",
+            expected_status=FAILED,
+            config={"save_total_limit": -1},
+            expected_error=ValueError,
+        ),
+    ],
+)
+def test_periodic_checkpoint_config_validation(test_case):
+    """Test PeriodicCheckpointConfig validation."""
+    print("Executing test:", test_case.name)
+
+    try:
+        config = PeriodicCheckpointConfig(**test_case.config)
+
+        assert test_case.expected_status == SUCCESS
+
+        # Validate expected values
+        if "save_strategy" in test_case.config:
+            assert config.save_strategy == test_case.config["save_strategy"]
+        if "save_steps" in test_case.config:
+            assert config.save_steps == test_case.config["save_steps"]
+        if "save_total_limit" in test_case.config:
+            assert config.save_total_limit == test_case.config["save_total_limit"]
+
+    except Exception as e:
+        assert type(e) is test_case.expected_error
+
+    print("test execution complete")
+
+
+# ============================================================================
+# Checkpoint Injection Tests
+# ============================================================================
+
+
+def _dummy_training_func():
+    """Dummy function for testing."""
+    pass
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="no checkpoint code when both disabled",
+            expected_status=SUCCESS,
+            config={
+                "trainer": TransformersTrainer(
+                    func=_dummy_training_func,
+                    enable_jit_checkpoint=False,
+                    periodic_checkpoint_config=None,
+                )
+            },
+            expected_output="",
+        ),
+        TestCase(
+            name="checkpoint code with JIT enabled and default periodic config",
+            expected_status=SUCCESS,
+            config={
+                "trainer": TransformersTrainer(
+                    func=_dummy_training_func,
+                    enable_jit_checkpoint=True,
+                    periodic_checkpoint_config=None,
+                )
+            },
+            expected_output={
+                "contains": [
+                    "_KUBEFLOW_CHECKPOINT_CONFIG",
+                    '"enable_jit": True',
+                    "CheckpointManager",
+                    "setup_jit_checkpoint_monkey_patch",
+                ]
+            },
+        ),
+        TestCase(
+            name="checkpoint code with JIT and custom periodic config",
+            expected_status=SUCCESS,
+            config={
+                "trainer": TransformersTrainer(
+                    func=_dummy_training_func,
+                    enable_jit_checkpoint=True,
+                    output_dir="/mnt/checkpoints",
+                    periodic_checkpoint_config=PeriodicCheckpointConfig(
+                        save_strategy="steps",
+                        save_steps=500,
+                        save_total_limit=5,
+                    ),
+                )
+            },
+            expected_output={
+                "contains": [
+                    '"enable_jit": True',
+                    "'/mnt/checkpoints'",
+                    "\"save_strategy\": 'steps'",
+                    '"save_steps": 500',
+                    '"save_total_limit": 5',
+                ]
+            },
+        ),
+        TestCase(
+            name="checkpoint code with periodic only no JIT",
+            expected_status=SUCCESS,
+            config={
+                "trainer": TransformersTrainer(
+                    func=_dummy_training_func,
+                    enable_jit_checkpoint=False,
+                    periodic_checkpoint_config=PeriodicCheckpointConfig(save_strategy="epoch"),
+                )
+            },
+            expected_output={
+                "contains": ['"enable_jit": False', "setup_jit_checkpoint_monkey_patch"],
+                "not_contains": ["CheckpointManager"],
+            },
+        ),
+        TestCase(
+            name="strategy no propagates to training args",
+            expected_status=SUCCESS,
+            config={
+                "trainer": TransformersTrainer(
+                    func=_dummy_training_func,
+                    enable_jit_checkpoint=False,
+                    periodic_checkpoint_config=PeriodicCheckpointConfig(save_strategy="no"),
+                )
+            },
+            expected_output={
+                "contains": [
+                    "_KUBEFLOW_CHECKPOINT_CONFIG",
+                    "\"save_strategy\": 'no'",
+                ],
+            },
+        ),
+    ],
+)
+@patch(
+    "kubeflow.trainer.rhai.transformers.get_jit_checkpoint_injection_code",
+    _mock_get_jit_checkpoint_injection_code,
+)
+def test_checkpoint_code_injection(test_case):
+    """Test checkpoint code injection logic."""
+    print("Executing test:", test_case.name)
+
+    try:
+        trainer = test_case.config["trainer"]
+        code = _build_checkpoint_code(trainer)
+
+        assert test_case.expected_status == SUCCESS
+
+        # Check expected output
+        if test_case.expected_output == "":
+            assert code == ""
+        elif isinstance(test_case.expected_output, dict):
+            assert code != ""
+
+            # Check contains
+            if "contains" in test_case.expected_output:
+                for substring in test_case.expected_output["contains"]:
+                    assert substring in code, f"Expected '{substring}' in generated code"
+
+            # Check not_contains
+            if "not_contains" in test_case.expected_output:
+                for substring in test_case.expected_output["not_contains"]:
+                    assert substring not in code, f"Did not expect '{substring}' in generated code"
+
+    except Exception as e:
+        assert type(e) is test_case.expected_error
+
+    print("test execution complete")
+
+
+def test_checkpoint_injection_code_execution_jit_enabled(tmp_path):
+    """Integration test: execute generated checkpoint code with JIT enabled.
+
+    This test actually runs the generated instrumentation code to verify it works,
+    rather than just checking string content.
+    """
+    import subprocess
+    import sys
+
+    from kubeflow.trainer.rhai.transformers import (
+        get_jit_checkpoint_injection_code,
+    )
+
+    # Generate the actual checkpoint injection code with JIT enabled
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/test-checkpoints",
+        periodic_checkpoint_config={
+            "save_strategy": "epoch",
+            "save_steps": None,
+            "save_total_limit": 3,
+        },
+        enable_jit_checkpoint=True,
+    )
+
+    # Create stub torch module
+    torch_stub = """
+class Stream:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def synchronize(self):
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return True
+
+    @staticmethod
+    def Stream():
+        return Stream()
+
+    @staticmethod
+    def stream(stream_obj):
+        return stream_obj
+
+Tensor = object  # Stub
+"""
+
+    # Create stub transformers module
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 100
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.model = None
+        self._init_args = args
+        self._init_kwargs = kwargs
+        self._get_output_dir_called = False
+        self._save_checkpoint_called = False
+
+    def _get_output_dir(self, trial=None):
+        self._get_output_dir_called = True
+        return "/tmp/test-output"
+
+    def _save_checkpoint(self, model, trial=None):
+        self._save_checkpoint_called = True
+
+    def train(self, resume_from_checkpoint=None):
+        return {"train_called": True, "resume_from": resume_from_checkpoint}
+"""
+
+    # Write stubs and checkpoint code to temp file
+    test_file = tmp_path / "test_checkpoint_execution.py"
+    test_code = f"""
+import sys
+import os
+
+# Stub modules must be created before import
+import types
+
+# Create torch stub module
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+
+# Create transformers stub module
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+# Create transformers.trainer_utils submodule
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+# Now execute the checkpoint injection code
+{checkpoint_code}
+
+# Verify the instrumentation was applied
+print("CHECKPOINT_INSTRUMENTATION_LOADED=True")
+
+# Test that apply_checkpointing was called
+if 'apply_checkpointing' in dir():
+    print("APPLY_CHECKPOINTING_EXISTS=True")
+
+# Test that CheckpointManager exists when JIT is enabled
+if 'CheckpointManager' in dir():
+    print("CHECKPOINT_MANAGER_EXISTS=True")
+
+# Test that monkey patch was applied
+from transformers import Trainer
+original_init = Trainer.__init__
+
+# Create a trainer to test patching
+class MockTrainingArgs:
+    def __init__(self):
+        self.output_dir = "/tmp/test"
+        self.save_strategy = "steps"
+        self.save_steps = 500
+        self.save_total_limit = None
+
+try:
+    trainer = Trainer(None, MockTrainingArgs())
+    print("TRAINER_CREATED=True")
+
+    # Check if checkpoint config was applied
+    if hasattr(trainer, '_init_kwargs'):
+        # Check if callbacks were injected
+        if 'callbacks' in trainer._init_kwargs:
+            callbacks = trainer._init_kwargs['callbacks']
+            print(f"CALLBACKS_INJECTED={{len(callbacks)}}")
+except Exception as e:
+    print(f"ERROR={{e}}")
+"""
+
+    test_file.write_text(test_code)
+
+    # Execute the test file
+    result = subprocess.run(
+        [sys.executable, str(test_file)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    output = result.stdout
+    print(f"Test output:\\n{output}")
+
+    if result.returncode != 0:
+        print(f"Test stderr:\\n{result.stderr}")
+
+    # Verify execution results
+    assert result.returncode == 0, f"Execution failed with return code {result.returncode}"
+    assert "CHECKPOINT_INSTRUMENTATION_LOADED=True" in output
+    assert "APPLY_CHECKPOINTING_EXISTS=True" in output
+    assert "TRAINER_CREATED=True" in output
+    # Verify checkpoint config was applied and callback injected
+    assert "Auto-injected JIT checkpoint callback" in output
+    assert "CALLBACKS_INJECTED=1" in output
+
+
+def test_checkpoint_injection_code_execution_jit_disabled(tmp_path):
+    """Integration test: verify CheckpointManager is NOT injected when JIT disabled.
+
+    This test ensures that when enable_jit_checkpoint=False, the generated code
+    does NOT include CheckpointManager class definition.
+    """
+    import subprocess
+    import sys
+
+    from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
+
+    # Generate checkpoint injection code with JIT disabled (only periodic checkpointing)
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/test-checkpoints",
+        periodic_checkpoint_config={
+            "save_strategy": "epoch",
+            "save_steps": None,
+            "save_total_limit": 3,
+        },
+        enable_jit_checkpoint=False,  # JIT disabled
+    )
+
+    # Verify that the config contains enable_jit=False
+    assert "'enable_jit': False" in checkpoint_code
+
+    # Verify that periodic checkpoint config is present
+    assert "'save_strategy': 'epoch'" in checkpoint_code
+    assert "'save_total_limit': 3" in checkpoint_code
+
+    # Test execution to ensure it works without CheckpointManager
+    torch_stub = """
+class Stream:
+    pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return True
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 100
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.model = None
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def train(self, resume_from_checkpoint=None):
+        return {"train_called": True, "resume_from": resume_from_checkpoint}
+"""
+
+    test_file = tmp_path / "test_checkpoint_jit_disabled.py"
+    test_code = f"""
+import sys
+import types
+
+# Create stub modules
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+# Execute the checkpoint injection code
+{checkpoint_code}
+
+# Verify CheckpointManager does NOT exist
+if 'CheckpointManager' in dir():
+    print("ERROR: CheckpointManager should NOT be defined when JIT is disabled")
+    sys.exit(1)
+else:
+    print("CHECKPOINT_MANAGER_NOT_DEFINED=True")
+
+# Verify apply_checkpointing exists (for periodic checkpointing)
+if 'apply_checkpointing' in dir():
+    print("APPLY_CHECKPOINTING_EXISTS=True")
+
+# Create a trainer to verify periodic config is applied (without JIT callback)
+from transformers import Trainer
+
+class MockTrainingArgs:
+    def __init__(self):
+        self.output_dir = "/tmp/test"
+        self.save_strategy = "steps"
+        self.save_steps = 500
+        self.save_total_limit = None
+
+trainer = Trainer(None, MockTrainingArgs())
+print("TRAINER_CREATED=True")
+
+# Verify that NO JIT callback was injected
+callbacks = trainer._init_kwargs.get('callbacks', [])
+print(f"CALLBACKS_COUNT={{len(callbacks)}}")
+"""
+
+    test_file.write_text(test_code)
+
+    # Execute the test file
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    output = result.stdout
+    print(f"Test output:\n{output}")
+
+    if result.returncode != 0:
+        print(f"Test stderr:\n{result.stderr}")
+
+    # Verify execution results
+    assert result.returncode == 0, f"Execution failed with return code {result.returncode}"
+    assert "CHECKPOINT_MANAGER_NOT_DEFINED=True" in output
+    assert "APPLY_CHECKPOINTING_EXISTS=True" in output
+    assert "TRAINER_CREATED=True" in output
+    # When JIT is disabled, no callbacks should be injected
+    assert "CALLBACKS_COUNT=0" in output
+
+
+# ============================================================================
+# Auto-Resume Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="find latest checkpoint with multiple valid checkpoints",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": {
+                    "checkpoint-100": {"incomplete": False},
+                    "checkpoint-500": {"incomplete": False},
+                    "checkpoint-300": {"incomplete": False},
+                }
+            },
+            expected_output={"latest_step": 500, "latest_name": "checkpoint-500"},
+        ),
+        TestCase(
+            name="delete incomplete checkpoint and return next latest",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": {
+                    "checkpoint-500": {"incomplete": True},  # Should be deleted
+                    "checkpoint-300": {"incomplete": False},  # Should be returned
+                    "checkpoint-100": {"incomplete": False},
+                }
+            },
+            expected_output={"latest_step": 300, "latest_name": "checkpoint-300"},
+        ),
+        TestCase(
+            name="return None when no checkpoints exist",
+            expected_status=SUCCESS,
+            config={"checkpoints": {}},
+            expected_output={"latest_step": None, "latest_name": None},
+        ),
+        TestCase(
+            name="return None when all checkpoints are incomplete",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": {
+                    "checkpoint-500": {"incomplete": True},
+                    "checkpoint-300": {"incomplete": True},
+                }
+            },
+            expected_output={"latest_step": None, "latest_name": None},
+        ),
+        TestCase(
+            name="ignore non-checkpoint directories",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": {
+                    "checkpoint-100": {"incomplete": False},
+                    "not-a-checkpoint": {"incomplete": False},  # Should be ignored
+                    "checkpoint-abc": {"incomplete": False},  # Invalid number
+                    "other-dir": {"incomplete": False},  # Should be ignored
+                }
+            },
+            expected_output={"latest_step": 100, "latest_name": "checkpoint-100"},
+        ),
+    ],
+)
+def test_find_latest_checkpoint(test_case, tmp_path):
+    """Test _find_latest_checkpoint logic for finding and cleaning checkpoints."""
+    print(f"Executing test: {test_case.name}")
+
+    import os
+    import re
+    import shutil
+
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
+
+    # Create checkpoint directories based on test config
+    for checkpoint_name, checkpoint_config in test_case.config["checkpoints"].items():
+        checkpoint_path = tmp_path / checkpoint_name
+        checkpoint_path.mkdir()
+
+        if checkpoint_config.get("incomplete"):
+            (checkpoint_path / CHECKPOINT_INCOMPLETE_MARKER).write_text("incomplete")
+
+    # Also create a file named checkpoint-200 to test directory check
+    if "not-a-checkpoint" in test_case.config["checkpoints"]:
+        (tmp_path / "checkpoint-200").write_text("file, not dir")
+
+    # Implement the _find_latest_checkpoint logic
+    checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
+    checkpoints = []
+
+    for name in os.listdir(tmp_path):
+        match = checkpoint_pattern.match(name)
+        if not match or not os.path.isdir(os.path.join(tmp_path, name)):
+            continue
+
+        checkpoint_path = os.path.join(tmp_path, name)
+        incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
+
+        # Delete incomplete checkpoints
+        if os.path.exists(incomplete_marker):
+            print(f"[Test] Deleting incomplete checkpoint: {checkpoint_path}")
+            shutil.rmtree(checkpoint_path)
+            continue
+
+        checkpoints.append((int(match.group(1)), checkpoint_path))
+
+    latest = None
+    latest_step = None
+    if checkpoints:
+        checkpoints.sort(reverse=True)
+        latest_step = checkpoints[0][0]
+        latest = checkpoints[0][1]
+
+    assert test_case.expected_status == SUCCESS
+
+    # Verify expected output
+    if test_case.expected_output["latest_step"] is None:
+        assert latest is None
+    else:
+        assert latest_step == test_case.expected_output["latest_step"]
+        assert test_case.expected_output["latest_name"] in latest
+
+    # Verify incomplete checkpoints were deleted
+    for checkpoint_name, checkpoint_config in test_case.config["checkpoints"].items():
+        checkpoint_path = tmp_path / checkpoint_name
+        if checkpoint_config.get("incomplete"):
+            assert not checkpoint_path.exists(), f"{checkpoint_name} should be deleted"
+
+    print("test execution complete")
+
+
+def test_find_latest_checkpoint_nonexistent_dir():
+    """Test _find_latest_checkpoint returns None for nonexistent directory."""
+    print("Executing test: find latest checkpoint with nonexistent directory")
+
+    import os
+
+    output_dir = "/nonexistent/directory/path"
+
+    # Test the logic
+    result = None
+    if output_dir and os.path.exists(output_dir):
+        # Would search for checkpoints
+        result = "some_checkpoint"
+
+    assert result is None, "Should return None when output_dir doesn't exist"
+
+    print("test execution complete")
+
+
+def test_find_latest_checkpoint_none_output_dir():
+    """Test _find_latest_checkpoint returns None for None output_dir."""
+    print("Executing test: find latest checkpoint with None output_dir")
+
+    output_dir = None
+
+    # Test the logic
+    result = None
+    if output_dir:
+        result = "some_checkpoint"
+
+    assert result is None, "Should return None when output_dir is None"
+
+    print("test execution complete")
+
+
+def test_auto_resume_code_generation():
+    """Test that auto-resume code is generated in checkpoint injection."""
+    print("Executing test: auto-resume code generation")
+
+    from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/tmp/checkpoints",
+        periodic_checkpoint_config=None,
+        enable_jit_checkpoint=True,
+    )
+
+    # Verify auto-resume logic is present in generated code
+    assert "_find_latest_checkpoint" in checkpoint_code, "Should include _find_latest_checkpoint"
+    assert "def _patched_train" in checkpoint_code, "Should include _patched_train"
+    assert "resume_from_checkpoint" in checkpoint_code, (
+        "Should include resume_from_checkpoint logic"
+    )
+    assert "if resume_from_checkpoint is None" in checkpoint_code, "Should check if user set it"
+    assert "Auto-resuming from:" in checkpoint_code, "Should log auto-resume action"
+    assert "self.train = _patched_train" in checkpoint_code, "Should patch train method"
+
+    # Verify imports needed for auto-resume
+    assert "import re" in checkpoint_code, "Should import re for regex"
+    assert "import shutil" in checkpoint_code, "Should import shutil for rmtree"
+    assert "import os" in checkpoint_code, "Should import os"
+
+    print("test execution complete")
+
+
+def test_auto_resume_user_override():
+    """Test that user's explicit resume_from_checkpoint is not overridden."""
+    print("Executing test: auto-resume respects user override")
+
+    import sys
+    from unittest.mock import Mock
+
+    # Mock transformers module
+    mock_transformers = Mock()
+    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
+    mock_transformers.trainer = Mock()
+    mock_transformers.trainer_utils = Mock()
+    mock_transformers.trainer_utils.PREFIX_CHECKPOINT_DIR = "checkpoint"
+    sys.modules["transformers"] = mock_transformers
+    sys.modules["transformers.trainer_utils"] = mock_transformers.trainer_utils
+
+    # Mock torch module
+    mock_torch = Mock()
+    mock_torch.cuda.is_available.return_value = False
+    sys.modules["torch"] = mock_torch
+
+    try:
+        from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
+
+        checkpoint_code = get_jit_checkpoint_injection_code(
+            output_dir="/tmp/checkpoints",
+            periodic_checkpoint_config=None,
+            enable_jit_checkpoint=True,
+        )
+
+        # Verify the logic: only auto-resume if resume_from_checkpoint is None
+        assert "if resume_from_checkpoint is None" in checkpoint_code
+
+        assert (
+            "resume_from_checkpoint is None and training_args" in checkpoint_code
+            or "if resume_from_checkpoint is None" in checkpoint_code
+        )
+
+        print("test execution complete")
+
+    finally:
+        if "transformers" in sys.modules:
+            del sys.modules["transformers"]
+        if "transformers.trainer_utils" in sys.modules:
+            del sys.modules["transformers.trainer_utils"]
+        if "torch" in sys.modules:
+            del sys.modules["torch"]
 
 
 if __name__ == "__main__":

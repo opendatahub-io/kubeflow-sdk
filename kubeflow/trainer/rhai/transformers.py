@@ -15,12 +15,45 @@
 """TransformersTrainer for HuggingFace Transformers and TRL with auto-instrumentation."""
 
 from dataclasses import dataclass, field
+import inspect
+import os
+import textwrap
 from typing import Callable, Optional
 
 from kubeflow_trainer_api import models
 
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai.constants import PVC_URI_SCHEME
 from kubeflow.trainer.types import types
+
+
+@dataclass
+class PeriodicCheckpointConfig:
+    """Configuration for periodic checkpointing in Transformers trainers.
+
+    Args:
+        save_strategy: Strategy for saving checkpoints ("steps", "epoch", or "no")
+        save_steps: Number of steps between checkpoints (required if save_strategy="steps")
+        save_total_limit: Maximum number of checkpoints to keep (older ones are deleted)
+    """
+
+    save_strategy: str = "epoch"
+    save_steps: Optional[int] = None
+    save_total_limit: Optional[int] = 3
+
+    def __post_init__(self):
+        """Validate configuration."""
+        valid_strategies = {"steps", "epoch", "no"}
+        if self.save_strategy not in valid_strategies:
+            raise ValueError(
+                f"save_strategy must be one of {valid_strategies}, got '{self.save_strategy}'"
+            )
+
+        if self.save_strategy == "steps" and self.save_steps is None:
+            raise ValueError("save_steps must be specified when save_strategy='steps'")
+
+        if self.save_total_limit is not None and self.save_total_limit < 1:
+            raise ValueError(f"save_total_limit must be >= 1, got {self.save_total_limit}")
 
 
 @dataclass
@@ -46,11 +79,19 @@ class TransformersTrainer:
         metrics_poll_interval_seconds: How often controller should poll metrics (seconds).
                                        Default: 30. Range: 5-300 (5s to 5min).
                                        Fast jobs: use 5-10s. Long jobs: use 60-120s.
+        enable_jit_checkpoint: Enable just-in-time checkpointing on SIGTERM. Default: False.
+                              Automatically enabled when output_dir is provided.
+        output_dir: Directory for saving checkpoints. Supports PVC URIs (pvc://<name>/<path>)
+                   for automatic volume mounting. When provided, automatically enables JIT
+                   checkpointing.
+        periodic_checkpoint_config: Optional configuration for periodic checkpointing.
+                                   See PeriodicCheckpointConfig for available options.
 
     Raises:
         ValueError: If metrics_port is not in range 1024-65535.
         ValueError: If metrics_poll_interval_seconds is not in range 5-300.
         ValueError: If func is not callable.
+        ValueError: If output_dir uses unsupported URI scheme (only pvc:// is supported).
     """
 
     # Core training function (same as CustomTrainer)
@@ -68,6 +109,11 @@ class TransformersTrainer:
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
+
+    # Checkpoint configuration
+    enable_jit_checkpoint: bool = False
+    output_dir: Optional[str] = None
+    periodic_checkpoint_config: Optional[PeriodicCheckpointConfig] = None
 
     def __post_init__(self):
         """Validate configuration after initialization.
@@ -110,6 +156,309 @@ class TransformersTrainer:
                 f"metrics_poll_interval_seconds must be in range 5-300, "
                 f"got {self.metrics_poll_interval_seconds}"
             )
+        # Only allow pvc:// or paths without URI schemes
+        if (
+            self.output_dir
+            and "://" in self.output_dir
+            and not self.output_dir.startswith(PVC_URI_SCHEME)
+        ):
+            raise ValueError(
+                f"Unsupported storage URI scheme. "
+                f"Currently only '{PVC_URI_SCHEME}' URIs are supported for automatic mounting. "
+                f"Supported formats: '{PVC_URI_SCHEME}<pvc-name>/<path>' or local filesystem paths."
+            )
+
+        # Auto-enable JIT checkpoint if output_dir is provided
+        if self.output_dir and not self.enable_jit_checkpoint:
+            self.enable_jit_checkpoint = True
+
+
+def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
+    """
+    Checkpoint instrumentation code injected into training pods.
+    """
+    import os
+    import re
+    import shutil
+    import signal
+    import threading
+    import time
+
+    import torch
+    from transformers import TrainerCallback
+    from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
+
+    class CheckpointManager:
+        """Manages async just-in-time checkpointing on SIGTERM signal using CUDA streams."""
+
+        def __init__(self, trainer):
+            self.trainer = trainer
+            self.checkpoint_requested = False
+            self._original_sigterm_handler = None
+            self.checkpoint_stream = None
+            self.checkpoint_thread = None
+            self._in_optimizer_step = False
+
+            # Initialize CUDA stream for async checkpoint operations
+            try:
+                if torch.cuda.is_available():
+                    self.checkpoint_stream = torch.cuda.Stream()
+                    print("[Kubeflow] CUDA stream initialized for async checkpointing", flush=True)
+            except (ImportError, AttributeError):
+                print(
+                    "[Kubeflow] CUDA not available, checkpointing will be synchronous", flush=True
+                )
+
+        def setup_signal_handler(self):
+            """Register SIGTERM signal handler for JIT checkpointing."""
+            self._original_sigterm_handler = signal.signal(signal.SIGTERM, self._sigterm_handler)
+            print("[Kubeflow] JIT checkpoint signal handler registered for SIGTERM", flush=True)
+
+        def _sigterm_handler(self, signum, frame):
+            """Handle SIGTERM by starting async checkpoint immediately."""
+            if self.checkpoint_requested:
+                return
+
+            print("[Kubeflow] SIGTERM received, starting async checkpoint", flush=True)
+            self.checkpoint_requested = True
+
+            # Start checkpoint thread immediately
+            self.checkpoint_thread = threading.Thread(
+                target=self._async_checkpoint, daemon=True, name="KubeflowJITCheckpoint"
+            )
+            self.checkpoint_thread.start()
+
+        def _async_checkpoint(self):
+            """Execute checkpoint asynchronously, waiting if in optimizer step."""
+            try:
+                # Wait if we're currently in optimizer step (unsafe to checkpoint)
+                while self._in_optimizer_step:
+                    time.sleep(0.5)
+
+                current_step = self.trainer.state.global_step
+                print(f"[Kubeflow] Starting JIT checkpoint at step {current_step}", flush=True)
+
+                # Get rank for distributed training
+                rank = 0
+                if torch.distributed.is_available() and torch.distributed.is_initialized():
+                    rank = torch.distributed.get_rank()
+
+                output_dir = self.trainer._get_output_dir(trial=None)
+                checkpoint_path = os.path.join(
+                    output_dir, f"{PREFIX_CHECKPOINT_DIR}-{current_step}"
+                )
+                os.makedirs(checkpoint_path, exist_ok=True)
+
+                # Create sentinel file to mark incomplete checkpoint (only rank 0)
+                sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
+                if rank == 0:
+                    with open(sentinel_file, "w") as f:
+                        f.write(f"Checkpoint started at step {current_step}")
+
+                # Checkpoint using dedicated CUDA stream
+                if self.checkpoint_stream is not None:
+                    # Wait for default stream to complete all pending operations
+                    self.checkpoint_stream.wait_stream(torch.cuda.default_stream())
+
+                    # Record all model parameters on checkpoint stream to prevent deallocation
+                    for param in self.trainer.model.parameters():
+                        param.record_stream(self.checkpoint_stream)
+
+                    with torch.cuda.stream(self.checkpoint_stream):
+                        self.trainer._save_checkpoint(self.trainer.model, trial=None)
+                    self.checkpoint_stream.synchronize()
+                else:
+                    # Fallback if no CUDA stream
+                    self.trainer._save_checkpoint(self.trainer.model, trial=None)
+
+                # Remove sentinel on success (only rank 0)
+                if rank == 0 and os.path.exists(sentinel_file):
+                    os.remove(sentinel_file)
+
+                print(f"[Kubeflow] JIT checkpoint completed at step {current_step}", flush=True)
+
+            except Exception as e:
+                print(f"[Kubeflow] Failed to save JIT checkpoint: {e}", flush=True)
+                import traceback
+
+                traceback.print_exc()
+
+        def checkpoint_in_progress(self):
+            """Check if a checkpoint is in progress."""
+            return self.checkpoint_requested
+
+    class JITCheckpointCallback(TrainerCallback):
+        """Transformers callback that integrates JIT checkpointing with trainer lifecycle."""
+
+        def __init__(self):
+            self.jit_manager = None
+            self._trainer_ref = None
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            if self._trainer_ref is not None and self.jit_manager is None:
+                self.jit_manager = CheckpointManager(trainer=self._trainer_ref)
+                self.jit_manager.setup_signal_handler()
+                print("[Kubeflow] JIT checkpointing enabled", flush=True)
+            elif self._trainer_ref is None:
+                print(
+                    "[Kubeflow] Warning: Trainer reference not set for JIT checkpoint callback",
+                    flush=True,
+                )
+
+        def on_pre_optimizer_step(self, args, state, control, **kwargs):
+            if self.jit_manager:
+                # Mark that we're entering optimizer step (unsafe for checkpoint)
+                self.jit_manager._in_optimizer_step = True
+
+                if self.jit_manager.checkpoint_in_progress():
+                    control.should_training_stop = True
+
+        def on_optimizer_step(self, args, state, control, **kwargs):
+            if self.jit_manager:
+                # Mark that optimizer step completed (safe for checkpoint again)
+                self.jit_manager._in_optimizer_step = False
+
+        def on_step_end(self, args, state, control, **kwargs):
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_save = False
+                control.should_training_stop = True
+
+        def on_epoch_end(self, args, state, control, **kwargs):
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_save = False
+                control.should_training_stop = True
+
+    def apply_checkpointing():
+        """Setup monkey patch for Trainer to auto inject JIT checkpoint callback."""
+        from transformers import Trainer as _TransformersTrainer
+
+        _jit_checkpoint_callback = JITCheckpointCallback()
+
+        def _find_latest_checkpoint(output_dir):
+            """Find the latest checkpoint and deleting incomplete ones."""
+            if not output_dir or not os.path.exists(output_dir):
+                return None
+
+            checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
+            checkpoints = []
+
+            for name in os.listdir(output_dir):
+                match = checkpoint_pattern.match(name)
+                if not match or not os.path.isdir(os.path.join(output_dir, name)):
+                    continue
+
+                checkpoint_path = os.path.join(output_dir, name)
+                incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
+
+                # Delete incomplete checkpoints
+                if os.path.exists(incomplete_marker):
+                    print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
+                    shutil.rmtree(checkpoint_path)
+                    continue
+
+                checkpoints.append((int(match.group(1)), checkpoint_path))
+
+            if checkpoints:
+                checkpoints.sort(reverse=True)
+                latest = checkpoints[0][1]
+                print(f"[Kubeflow] Found latest checkpoint: {latest}")
+                return latest
+
+            return None
+
+        # Store original __init__ method
+        _original_trainer_init = _TransformersTrainer.__init__
+
+        def _patched_trainer_init(self, *args, **kwargs):
+            """Patched Trainer.__init__ that auto-injects JIT checkpoint callback."""
+            enable_jit = checkpoint_config.get("enable_jit", False)
+
+            # Extract TrainingArguments to patch
+            training_args = kwargs.get("args")
+            if not training_args and len(args) > 1:
+                training_args = args[1]
+
+            # Apply Kubeflow checkpoint config to training_args
+            if training_args and checkpoint_config:
+                # Apply output_dir if provided by user
+                if "output_dir" in checkpoint_config:
+                    training_args.output_dir = checkpoint_config["output_dir"]
+                    print(
+                        f"[Kubeflow] Applied output_dir: {checkpoint_config['output_dir']}",
+                        flush=True,
+                    )
+
+                if "save_strategy" in checkpoint_config:
+                    training_args.save_strategy = checkpoint_config["save_strategy"]
+                    print(
+                        f"[Kubeflow] Applied save_strategy: {checkpoint_config['save_strategy']}",
+                        flush=True,
+                    )
+
+                if (
+                    "save_steps" in checkpoint_config
+                    and checkpoint_config["save_steps"] is not None
+                ):
+                    training_args.save_steps = checkpoint_config["save_steps"]
+                    print(
+                        f"[Kubeflow] Applied save_steps: {checkpoint_config['save_steps']}",
+                        flush=True,
+                    )
+
+                if "save_total_limit" in checkpoint_config:
+                    training_args.save_total_limit = checkpoint_config["save_total_limit"]
+                    print(
+                        f"[Kubeflow] Applied save_total_limit: "
+                        f"{checkpoint_config['save_total_limit']}",
+                        flush=True,
+                    )
+
+            # Inject JIT callback if enabled
+            if enable_jit:
+                callbacks = kwargs.get("callbacks") or []
+                if not isinstance(callbacks, list):
+                    callbacks = list(callbacks)
+                if not any(isinstance(cb, JITCheckpointCallback) for cb in callbacks):
+                    callbacks.append(_jit_checkpoint_callback)
+                    print("[Kubeflow] Auto-injected JIT checkpoint callback", flush=True)
+                kwargs["callbacks"] = callbacks
+
+            # Call original __init__
+            _original_trainer_init(self, *args, **kwargs)
+
+            # Store trainer reference in callback
+            if enable_jit:
+                _jit_checkpoint_callback._trainer_ref = self
+
+            _original_train = self.train
+
+            def _patched_train(resume_from_checkpoint=None, **train_kwargs):
+                """Patched train() that auto-resumes from latest checkpoint if available."""
+
+                # Only auto-resume if user didn't explicitly set it
+                if resume_from_checkpoint is None and training_args:
+                    latest_checkpoint = _find_latest_checkpoint(training_args.output_dir)
+                    if latest_checkpoint:
+                        resume_from_checkpoint = latest_checkpoint
+                        print(f"[Kubeflow] Auto-resuming from: {latest_checkpoint}")
+                return _original_train(
+                    resume_from_checkpoint=resume_from_checkpoint, **train_kwargs
+                )
+
+            self.train = _patched_train
+
+        # Apply monkey-patch
+        _TransformersTrainer.__init__ = _patched_trainer_init
+        print("[Kubeflow] Trainer auto-instrumentation enabled", flush=True)
+
+    enable_jit = checkpoint_config.get("enable_jit", False)
+    return (
+        CheckpointManager if enable_jit else None,
+        JITCheckpointCallback if enable_jit else None,
+        apply_checkpointing,
+    )
 
 
 def _create_progression_instrumentation(metrics_port: int) -> tuple:
@@ -447,10 +796,6 @@ def get_trainer_cr_from_transformers_trainer(
     Returns:
         Trainer CRD with wrapped training function and annotations
     """
-    import inspect
-    import os
-    import textwrap
-
     from kubeflow.trainer.backends.kubernetes import utils
     from kubeflow.trainer.constants import constants
 
@@ -501,6 +846,11 @@ def get_trainer_cr_from_transformers_trainer(
         )
         func_code = wrapper_code.replace("{{user_func_import_and_call}}", func_code)
 
+    # Inject checkpoint code if enabled
+    checkpoint_code = _build_checkpoint_code(trainer)
+    if checkpoint_code:
+        func_code = f"{checkpoint_code}\n\n{func_code}"
+
     # Build the command directly with the wrapped function code
     func_file = os.path.basename(inspect.getfile(trainer.func))
 
@@ -531,3 +881,98 @@ def get_trainer_cr_from_transformers_trainer(
     trainer_crd.command = command
 
     return trainer_crd
+
+
+def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
+    """Generate checkpoint injection code for the trainer."""
+
+    # Only inject if JIT or periodic checkpoint is enabled
+    if not trainer.enable_jit_checkpoint and not trainer.periodic_checkpoint_config:
+        return ""
+
+    # Create default periodic config if JIT is enabled but no config provided
+    periodic_config = trainer.periodic_checkpoint_config
+    if trainer.enable_jit_checkpoint and periodic_config is None:
+        periodic_config = PeriodicCheckpointConfig()
+
+    # Convert PeriodicCheckpointConfig to dict for injection
+    periodic_config_dict = None
+    if periodic_config:
+        periodic_config_dict = {
+            "save_strategy": periodic_config.save_strategy,
+            "save_steps": periodic_config.save_steps,
+            "save_total_limit": periodic_config.save_total_limit,
+        }
+
+    # Parse output_dir URI to get resolved path for checkpoint code
+    from kubeflow.trainer.rhai.utils import parse_output_dir_uri
+
+    resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
+
+    # Generate checkpoint injection code
+    return get_jit_checkpoint_injection_code(
+        output_dir=resolved_output_dir,
+        periodic_checkpoint_config=periodic_config_dict,
+        enable_jit_checkpoint=trainer.enable_jit_checkpoint,
+    )
+
+
+def get_jit_checkpoint_injection_code(
+    output_dir: Optional[str] = None,
+    periodic_checkpoint_config: Optional[dict] = None,
+    enable_jit_checkpoint: bool = False,
+) -> str:
+    """Generate the complete JIT checkpoint code to inject into training scripts."""
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
+
+    # Build checkpoint config dict
+    config_dict = {"enable_jit": enable_jit_checkpoint}
+
+    if output_dir:
+        config_dict["output_dir"] = output_dir
+
+    if periodic_checkpoint_config:
+        if "save_strategy" in periodic_checkpoint_config:
+            config_dict["save_strategy"] = periodic_checkpoint_config["save_strategy"]
+        if "save_steps" in periodic_checkpoint_config:
+            config_dict["save_steps"] = periodic_checkpoint_config["save_steps"]
+        if "save_total_limit" in periodic_checkpoint_config:
+            config_dict["save_total_limit"] = periodic_checkpoint_config["save_total_limit"]
+
+    # Extract the entire function source
+    checkpoint_instrumentation_code = inspect.getsource(_create_checkpoint_instrumentation)
+    checkpoint_instrumentation_code = textwrap.dedent(checkpoint_instrumentation_code)
+
+    # Remove the import that won't be available in training pods (we'll define it globally instead)
+    checkpoint_instrumentation_code = checkpoint_instrumentation_code.replace(
+        "from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER",
+        "# CHECKPOINT_INCOMPLETE_MARKER defined globally above",
+    )
+
+    # Serialize config dict as Python code
+    import pprint
+
+    config_dict_str = pprint.pformat(config_dict, indent=4, width=100, sort_dicts=False)
+
+    # Build the wrapper with function call
+    wrapper = f"""# =============================================================================
+# Kubeflow SDK - Checkpoint Instrumentation
+# Generated by kubeflow.trainer.rhai.transformers
+# =============================================================================
+
+print("[Kubeflow] Initializing checkpoint instrumentation", flush=True)
+
+# Constants (inline to avoid import dependencies in training pods)
+CHECKPOINT_INCOMPLETE_MARKER = {repr(CHECKPOINT_INCOMPLETE_MARKER)}
+
+# Instrumentation function definition
+{checkpoint_instrumentation_code}
+
+# Initialize and apply instrumentation
+checkpoint_config = {config_dict_str}
+_, _, apply_checkpointing = _create_checkpoint_instrumentation(checkpoint_config)
+apply_checkpointing()
+print("[Kubeflow] Checkpoint instrumentation enabled", flush=True)
+"""
+
+    return wrapper

@@ -3,10 +3,16 @@ from typing import Optional
 
 from kubeflow_trainer_api import models
 
+from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import (
     RHAITrainer,
     traininghub,
     transformers,
+)
+from kubeflow.trainer.rhai.constants import (
+    CHECKPOINT_MOUNT_PATH,
+    CHECKPOINT_VOLUME_NAME,
+    PVC_URI_SCHEME,
 )
 from kubeflow.trainer.types import types
 
@@ -74,3 +80,126 @@ def merge_progression_annotations(
         return progression_annotations
     # Merge metadata_annotations last to allow users to override progression annotations
     return {**progression_annotations, **metadata_annotations}
+
+
+def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
+    """
+    Parse output_dir URI and return resolved path and volume mount specs.
+    """
+    if not output_dir:
+        return None, None
+
+    if output_dir.startswith(PVC_URI_SCHEME):
+        # Parse URI and split into PVC name and path
+        uri_path = output_dir[len(PVC_URI_SCHEME) :]
+        parts = uri_path.split("/", 1)
+        pvc_name = parts[0]
+
+        if not pvc_name:
+            raise ValueError(
+                f"Invalid PVC URI: '{output_dir}'. "
+                f"PVC name cannot be empty. Expected format: '{PVC_URI_SCHEME}<pvc-name>/<path>'"
+            )
+        checkpoint_path = parts[1] if len(parts) > 1 else ""
+
+        # SDK mounts PVC at a standard location
+        mount_path = CHECKPOINT_MOUNT_PATH
+        resolved_path = f"{mount_path}/{checkpoint_path}" if checkpoint_path else mount_path
+
+        # Build Kubernetes volume and volumeMount specs
+        volume_spec = {
+            "name": CHECKPOINT_VOLUME_NAME,
+            "persistentVolumeClaim": {"claimName": pvc_name},
+        }
+        volume_mount_spec = {
+            "name": CHECKPOINT_VOLUME_NAME,
+            "mountPath": mount_path,
+            "readOnly": False,
+        }
+
+        return resolved_path, {"volume": volume_spec, "volumeMount": volume_mount_spec}
+
+    return output_dir, None
+
+
+def apply_output_dir_uri_to_pod_overrides(
+    output_dir: str,
+    pod_template_overrides: Optional[list],
+) -> tuple[str, list]:
+    """
+    Process output_dir URI and apply PVC mounting to pod template overrides.
+    """
+    resolved_output_dir, volume_mount_specs = parse_output_dir_uri(output_dir)
+
+    # If no PVC mounting needed return none
+    if volume_mount_specs is None:
+        return resolved_output_dir, pod_template_overrides or []
+
+    # Initialize pod_template_overrides as list if needed
+    if pod_template_overrides is None:
+        pod_template_overrides = []
+
+    # Find existing override for node target job, or create new one
+    node_override = None
+    for override in pod_template_overrides:
+        target_jobs = override.get("targetJobs", [])
+        if any(job.get("name") == constants.NODE for job in target_jobs):
+            node_override = override
+            break
+
+    if node_override is None:
+        # Create new override targeting the node job
+        node_override = {"targetJobs": [{"name": constants.NODE}], "spec": {}}
+        pod_template_overrides.append(node_override)
+
+    # Ensure spec dict exists
+    if "spec" not in node_override:
+        node_override["spec"] = {}
+
+    spec_dict = node_override["spec"]
+
+    # Add volume to spec (only if not already present)
+    if "volumes" not in spec_dict:
+        spec_dict["volumes"] = []
+
+    # Check if volume with the same name already exists
+    volume_name = volume_mount_specs["volume"]["name"]
+    if any(vol.get("name") == volume_name for vol in spec_dict["volumes"]):
+        raise ValueError(
+            f"Volume name conflict: A volume with name '{volume_name}' already exists in "
+            f"pod_template_overrides. This name is reserved by Kubeflow SDK for "
+            f"checkpoint storage. Please rename your existing volume to a different name."
+        )
+    spec_dict["volumes"].append(volume_mount_specs["volume"])
+
+    # Add volumeMount to the trainer container
+    if "containers" not in spec_dict:
+        spec_dict["containers"] = []
+
+    # Find the trainer container in containers list
+    trainer_container_dict = None
+    for container_dict in spec_dict["containers"]:
+        if container_dict.get("name") == constants.NODE:
+            trainer_container_dict = container_dict
+            break
+
+    if trainer_container_dict is None:
+        # Create new container override for trainer
+        trainer_container_dict = {"name": constants.NODE, "volumeMounts": []}
+        spec_dict["containers"].append(trainer_container_dict)
+
+    # Add volumeMount to trainer container (only if not already present)
+    if "volumeMounts" not in trainer_container_dict:
+        trainer_container_dict["volumeMounts"] = []
+
+    # Check if volumeMount with the same name already exists
+    volume_mount_name = volume_mount_specs["volumeMount"]["name"]
+    if any(vm.get("name") == volume_mount_name for vm in trainer_container_dict["volumeMounts"]):
+        raise ValueError(
+            f"VolumeMount name conflict: A volumeMount with name '{volume_mount_name}' already "
+            f"exists in pod_template_overrides. This name is reserved by Kubeflow SDK for "
+            f"checkpoint storage. Please rename your existing volumeMount to a different name."
+        )
+    trainer_container_dict["volumeMounts"].append(volume_mount_specs["volumeMount"])
+
+    return resolved_output_dir, pod_template_overrides
