@@ -97,7 +97,7 @@ def _build_install_snippet(
 
     return k8s_utils.get_script_for_python_packages(
         packages_to_install,
-        pip_index_urls[0] if pip_index_urls else "https://pypi.org/simple",
+        pip_index_urls,
         is_mpi=False,  # Training Hub uses torchrun, not MPI
     )
 
@@ -138,7 +138,11 @@ def _create_training_hub_progression_instrumentation(
     SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"  # noqa: N806
     OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"  # noqa: N806, F841
     OSFT_CONFIG_FILE = "training_params.json"  # noqa: N806, F841
+    TERMINATION_LOG_PATH = "/dev/termination-log"  # noqa: N806
     # fmt: on
+
+    # Track if termination message has been written (to avoid duplicates)
+    _termination_message_written = False
 
     class TrainingHubMetricsHandler(http.server.BaseHTTPRequestHandler):
         """HTTP handler that reads JSONL metrics from Training Hub backends."""
@@ -150,17 +154,49 @@ def _create_training_hub_progression_instrumentation(
                 metrics = self._read_latest_metrics()
                 # Transform to controller-compatible schema
                 transformed = self._transform_schema(metrics)
-                # Serve JSON
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps(transformed, indent=2).encode())
             except Exception as e:
                 print(
                     f"[Kubeflow] Failed to create progress metrics payload: {e}",
                     flush=True,
                 )
                 self.send_error(500)
+            else:
+                # Write termination message when training completes (100%)
+                self._maybe_write_termination_message(transformed)
+                # Serve JSON
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(transformed, indent=2).encode())
+
+        def _maybe_write_termination_message(self, metrics):
+            """Write final metrics to termination message for reliable progress reporting.
+
+            This ensures the controller can get the final training state even if
+            HTTP polling misses it. Only writes once when training reaches 100%.
+            """
+            nonlocal _termination_message_written
+            if _termination_message_written:
+                return
+
+            progress = metrics.get("progressPercentage")
+            if progress is not None and progress >= 100:
+                # Write final metrics to termination message for reliable progress reporting
+                try:
+                    final_metrics = json.dumps(metrics)
+                    with open(TERMINATION_LOG_PATH, "w") as f:
+                        f.write(final_metrics)
+                    _termination_message_written = True
+                    print(
+                        "[Kubeflow] Final metrics written to termination message",
+                        flush=True,
+                    )
+                except (OSError, ValueError, TypeError) as e:
+                    print(
+                        f"[Kubeflow] Warning: Failed to write termination message: {e}. "
+                        f"Controller will fall back to HTTP polling.",
+                        flush=True,
+                    )
 
         def _read_latest_metrics(self):
             """Read last line of JSONL file (most recent metrics from rank 0)."""
@@ -276,22 +312,20 @@ def _create_training_hub_progression_instrumentation(
                 print("[Kubeflow] Error reading SFT metrics", flush=True)
                 return {}
 
-            return {{}}
+            return {}
 
         def _transform_schema(self, metrics):
             """Transform backend schema to controller-compatible progress format."""
             if not metrics:
                 return {
-                    {
-                        "progressPercentage": None,
-                        "estimatedRemainingSeconds": None,
-                        "currentStep": None,
-                        "totalSteps": None,
-                        "currentEpoch": None,
-                        "totalEpochs": None,
-                        "trainMetrics": None,
-                        "evalMetrics": None,
-                    }
+                    "progressPercentage": None,
+                    "estimatedRemainingSeconds": None,
+                    "currentStep": None,
+                    "totalSteps": None,
+                    "currentEpoch": None,
+                    "totalEpochs": None,
+                    "trainMetrics": None,
+                    "evalMetrics": None,
                 }
 
             # Use algorithm parameter to determine transformation
@@ -306,7 +340,7 @@ def _create_training_hub_progression_instrumentation(
             epoch = metrics.get("epoch", 0)
             steps_per_epoch = metrics.get("steps_per_epoch", 0)
 
-            config = metrics.get("_config", {{}})
+            config = metrics.get("_config", {})
             configured_max_epochs = config.get("max_epochs")
 
             total_epochs = configured_max_epochs or metrics.get("total_epochs", 1)
@@ -329,30 +363,25 @@ def _create_training_hub_progression_instrumentation(
             loss_val = metrics.get("loss", 0)
             lr_val = metrics.get("lr")
             grad_norm_val = metrics.get("grad_norm", 0)
-            metrics.get("samples_per_second", 0)
+            samples_per_second = metrics.get("samples_per_second")
             val_loss_val = metrics.get("val_loss")
 
             return {
-                {
-                    "progressPercentage": int(round(percent)),
-                    "estimatedRemainingSeconds": estimated_remaining_sec,
-                    "currentStep": current_step_absolute,
-                    "totalSteps": step_total,
-                    "currentEpoch": epoch + 1,
-                    "totalEpochs": total_epochs,
-                    "trainMetrics": {
-                        {
-                            "loss": f"{loss_val:.4f}" if loss_val else None,
-                            "learning_rate": f"{lr_val:.6f}" if lr_val else None,
-                            "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val else None,
-                        }
-                    },
-                    "evalMetrics": {
-                        {
-                            "eval_loss": f"{val_loss_val:.4f}" if val_loss_val else None,
-                        }
-                    },
-                }
+                "progressPercentage": int(round(percent)),
+                "estimatedRemainingSeconds": estimated_remaining_sec,
+                "currentStep": current_step_absolute,
+                "totalSteps": step_total,
+                "currentEpoch": epoch + 1,
+                "totalEpochs": total_epochs,
+                "trainMetrics": {
+                    "loss": f"{loss_val:.4f}" if loss_val else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val else None,
+                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val else None,
+                    "throughput": f"{samples_per_second:.2f}" if samples_per_second else None,
+                },
+                "evalMetrics": {
+                    "eval_loss": f"{val_loss_val:.4f}" if val_loss_val else None,
+                },
             }
 
         def _transform_sft(self, metrics):
@@ -362,7 +391,7 @@ def _create_training_hub_progression_instrumentation(
             num_epoch_steps = metrics.get("num_epoch_steps") or metrics.get("num_batches", 0)
             total_samples = metrics.get("total_samples", 0)
 
-            config = metrics.get("_config", {{}})
+            config = metrics.get("_config", {})
             configured_num_epochs = config.get("num_epochs")
 
             if not num_epoch_steps:
@@ -414,27 +443,19 @@ def _create_training_hub_progression_instrumentation(
             throughput_val = metrics.get("overall_throughput")
 
             return {
-                {
-                    "progressPercentage": int(round(percent)),
-                    "estimatedRemainingSeconds": estimated_remaining_sec,
-                    "currentStep": current_step_absolute,
-                    "totalSteps": step_total,
-                    "currentEpoch": current_epoch,
-                    "totalEpochs": estimated_total_epochs,
-                    "trainMetrics": {
-                        {
-                            "loss": f"{loss_val:.4f}" if loss_val else None,
-                            "learning_rate": f"{lr_val:.6f}"
-                            if lr_val is not None and lr_val > 0
-                            else None,
-                            "grad_norm": f"{grad_norm_val:.4f}"
-                            if grad_norm_val is not None
-                            else None,
-                            "throughput": f"{throughput_val:.2f}" if throughput_val else None,
-                        }
-                    },
-                    "evalMetrics": {{}},
-                }
+                "progressPercentage": int(round(percent)),
+                "estimatedRemainingSeconds": estimated_remaining_sec,
+                "currentStep": current_step_absolute,
+                "totalSteps": step_total,
+                "currentEpoch": current_epoch,
+                "totalEpochs": estimated_total_epochs,
+                "trainMetrics": {
+                    "loss": f"{loss_val:.4f}" if loss_val else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None and lr_val > 0 else None,
+                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
+                    "throughput": f"{throughput_val:.2f}" if throughput_val else None,
+                },
+                "evalMetrics": {},
             }
 
         def log_message(self, format, *args):
@@ -443,26 +464,98 @@ def _create_training_hub_progression_instrumentation(
 
     def apply_progression_tracking():
         """Start HTTP server for metrics in background thread."""
+        try:
+            server = http.server.HTTPServer(("0.0.0.0", metrics_port), TrainingHubMetricsHandler)
 
-        server = http.server.HTTPServer(("", metrics_port), TrainingHubMetricsHandler)
+            # Run server in background thread
+            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
 
-        print(
-            f"[Kubeflow] Metrics server started on port {metrics_port} for {algorithm}",
-            flush=True,
-        )
+            print(
+                f"[Kubeflow] Metrics server started on port {metrics_port} for {algorithm}",
+                flush=True,
+            )
 
-        # Run server in background thread
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
-
-        return server
+            return server
+        except OSError as e:
+            print(
+                f"[Kubeflow] Warning: Failed to start metrics server on port "
+                f"{metrics_port}: {e}. Training will continue without metrics server.",
+                flush=True,
+            )
+            return None
+        except Exception as e:
+            print(
+                f"[Kubeflow] Warning: Unexpected error starting metrics server: {e}. "
+                f"Training will continue without metrics server.",
+                flush=True,
+            )
+            return None
 
     return (apply_progression_tracking, TrainingHubMetricsHandler)
 
 
 def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) -> str:
-    """Render a small Python script that calls training_hub.<algorithm>(**func_args)."""
+    """Render a small Python script that calls training_hub.<algorithm>(**func_args).
+
+    Includes termination message writing after training completes (on_train_end equivalent)
+    to ensure controller captures final metrics even if HTTP server becomes unreachable.
+    """
     base_script = textwrap.dedent("""
+    def _write_termination_message(ckpt_output_dir, algorithm):
+        \"\"\"Write final metrics to /dev/termination-log for reliable capture.
+
+        Kubernetes reads /dev/termination-log after container exit, providing
+        a reliable fallback mechanism for metrics capture that doesn't depend
+        on pod lifecycle timing or network availability.
+        \"\"\"
+        import json
+        import os
+        import glob
+
+        TERMINATION_LOG_PATH = "/dev/termination-log"
+
+        try:
+            # Read final metrics based on algorithm
+            metrics = None
+            if algorithm == "sft":
+                pattern = os.path.join(ckpt_output_dir, "training_params_and_metrics_global0.jsonl")
+                files = glob.glob(pattern)
+                if files:
+                    with open(files[0], 'r') as f:
+                        lines = f.readlines()
+                        if len(lines) >= 2:
+                            metrics = json.loads(lines[-1])
+            else:  # osft
+                metrics_file = os.path.join(ckpt_output_dir, "training_metrics_0.jsonl")
+                if os.path.exists(metrics_file):
+                    with open(metrics_file, 'r') as f:
+                        lines = f.readlines()
+                        if lines:
+                            metrics = json.loads(lines[-1])
+
+            if metrics:
+                # Build final progress JSON
+                final_progress = {{
+                    "progressPercentage": 100,
+                    "status": "complete",
+                    "trainMetrics": {{
+                        "loss": str(metrics.get("loss", metrics.get("train_loss", 0))),
+                    }},
+                    "evalMetrics": {{}},
+                }}
+
+                with open(TERMINATION_LOG_PATH, 'w') as f:
+                    json.dump(final_progress, f)
+                print("[Kubeflow] Termination message written", flush=True)
+            else:
+                print("[Kubeflow] No metrics found for termination message", flush=True)
+
+        except PermissionError:
+            print("[Kubeflow] Cannot write termination message (not in container)", flush=True)
+        except Exception as e:
+            print(f"[Kubeflow] Warning: Failed to write termination message: {{e}}", flush=True)
+
     def training_func(func_args):
         import os
         from training_hub import {algo}
@@ -474,10 +567,18 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
             print("[PY] Data file NOT found: {{}}".format(_dp), flush=True)
 
         args = dict(func_args or {{}})
+        ckpt_output_dir = args.get('ckpt_output_dir', '/tmp/checkpoints')
+        algorithm = '{algo}'
+
         print("[PY] Launching {algo_upper} training...", flush=True)
         try:
             result = {algo}(**args)
             print("[PY] {algo_upper} training complete. Result=", result, flush=True)
+
+            # Write termination message (on_train_end equivalent)
+            # Ensures controller captures final metrics even if HTTP server unreachable
+            _write_termination_message(ckpt_output_dir, algorithm)
+
         except ValueError as e:
             print("Configuration error:", e, flush=True)
         except Exception as e:
@@ -575,7 +676,7 @@ print("[Kubeflow] Initializing Training Hub progression tracking", flush=True)
     _,
 ) = _create_training_hub_progression_instrumentation(
     algorithm="{algorithm}",
-    ckpt_output_dir="{ckpt_output_dir}",
+    ckpt_output_dir={ckpt_output_dir!r},
     metrics_port={metrics_port}
 )
 apply_progression_tracking()

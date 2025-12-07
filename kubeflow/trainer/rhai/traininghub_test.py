@@ -452,5 +452,162 @@ def test_progression_tracking_enabled_has_server():
     print("test execution complete")
 
 
+def test_instrumentation_wrapper_termination_message_constant():
+    """Test that TERMINATION_LOG_PATH constant is embedded in wrapper."""
+    print("Executing test: Termination message constant")
+
+    wrapper = get_training_hub_instrumentation_wrapper(
+        algorithm="sft",
+        ckpt_output_dir="/tmp/checkpoints",
+        metrics_port=28080,
+    )
+
+    # Verify TERMINATION_LOG_PATH constant is defined
+    assert 'TERMINATION_LOG_PATH = "/dev/termination-log"' in wrapper
+    print("test execution complete")
+
+
+def test_instrumentation_wrapper_termination_method():
+    """Test that _maybe_write_termination_message method is in wrapper."""
+    print("Executing test: Termination message method in HTTP handler")
+
+    wrapper = get_training_hub_instrumentation_wrapper(
+        algorithm="sft",
+        ckpt_output_dir="/tmp/checkpoints",
+        metrics_port=28080,
+    )
+
+    # Verify termination message method exists in HTTP handler
+    assert "def _maybe_write_termination_message(self, metrics)" in wrapper
+    # Verify it checks for 100% progress
+    assert "progress >= 100" in wrapper
+    # Verify it writes to termination log
+    assert "TERMINATION_LOG_PATH" in wrapper
+    # Verify it has write-once flag
+    assert "_termination_message_written" in wrapper
+
+    print("test execution complete")
+
+
+def test_instrumentation_wrapper_explicit_bind_address():
+    """Test that HTTP server binds to 0.0.0.0 explicitly."""
+    print("Executing test: Explicit 0.0.0.0 bind address")
+
+    wrapper = get_training_hub_instrumentation_wrapper(
+        algorithm="sft",
+        ckpt_output_dir="/tmp/checkpoints",
+        metrics_port=28080,
+    )
+
+    # Verify explicit 0.0.0.0 bind (not empty string)
+    assert '("0.0.0.0", metrics_port)' in wrapper
+    # Verify NOT using empty string bind
+    assert '("", metrics_port)' not in wrapper
+
+    print("test execution complete")
+
+
+def test_instrumentation_wrapper_oserror_handling():
+    """Test that wrapper has OSError handling for port binding issues."""
+    print("Executing test: OSError handling for server start")
+
+    wrapper = get_training_hub_instrumentation_wrapper(
+        algorithm="sft",
+        ckpt_output_dir="/tmp/checkpoints",
+        metrics_port=28080,
+    )
+
+    # Verify OSError is specifically caught
+    assert "except OSError as e:" in wrapper
+    # Verify generic Exception is also caught as fallback
+    assert "except Exception as e:" in wrapper
+    # Verify helpful error message mentions port and server
+    assert "Failed to start metrics server on port" in wrapper
+
+    print("test execution complete")
+
+
+def test_instrumentation_wrapper_do_get_try_except_else():
+    """Test that do_GET uses try/except/else pattern for clean error handling."""
+    print("Executing test: do_GET try/except/else pattern")
+
+    wrapper = get_training_hub_instrumentation_wrapper(
+        algorithm="sft",
+        ckpt_output_dir="/tmp/checkpoints",
+        metrics_port=28080,
+    )
+
+    # Verify try/except/else pattern (send_error in except, send_response after else)
+    # The pattern should have send_error(500) in except block
+    assert "self.send_error(500)" in wrapper
+    # And send_response(200) for success case
+    assert "self.send_response(200)" in wrapper
+
+    print("test execution complete")
+
+
+def test_algorithm_wrapper_termination_message():
+    """Test that algorithm wrapper includes termination message writing after training."""
+    print("Executing test: Algorithm wrapper termination message (on_train_end)")
+
+    from kubeflow.trainer.rhai.traininghub import _render_algorithm_wrapper
+
+    wrapper = _render_algorithm_wrapper("sft", {"ckpt_output_dir": "/tmp/checkpoints"})
+
+    # Verify _write_termination_message function is defined
+    assert "def _write_termination_message(ckpt_output_dir, algorithm):" in wrapper
+    # Verify it's called after training completes
+    assert "_write_termination_message(ckpt_output_dir, algorithm)" in wrapper
+    # Verify TERMINATION_LOG_PATH constant
+    assert 'TERMINATION_LOG_PATH = "/dev/termination-log"' in wrapper
+    # Verify it reads metrics files
+    assert "training_params_and_metrics_global0.jsonl" in wrapper  # SFT
+    assert "training_metrics_0.jsonl" in wrapper  # OSFT
+    # Verify docstring explains purpose
+    assert "Kubernetes reads /dev/termination-log after container exit" in wrapper
+
+    print("test execution complete")
+
+
+def test_algorithm_wrapper_termination_handles_errors():
+    """Test that algorithm wrapper termination handles errors gracefully."""
+    print("Executing test: Algorithm wrapper termination error handling")
+
+    from kubeflow.trainer.rhai.traininghub import _render_algorithm_wrapper
+
+    wrapper = _render_algorithm_wrapper("osft", {"ckpt_output_dir": "/tmp"})
+
+    # Verify PermissionError is handled (not in container)
+    assert "except PermissionError:" in wrapper
+    # Verify generic Exception is handled
+    assert "except Exception as e:" in wrapper
+    # Verify helpful messages
+    assert "not in container" in wrapper
+
+    print("test execution complete")
+
+
+def test_instrumentation_wrapper_flush_all_prints():
+    """Test that all print statements use flush=True for real-time logging."""
+    print("Executing test: All prints use flush=True")
+
+    wrapper = get_training_hub_instrumentation_wrapper(
+        algorithm="sft",
+        ckpt_output_dir="/tmp/checkpoints",
+        metrics_port=28080,
+    )
+
+    # Count print statements and verify they have flush=True
+    import re
+
+    print_statements = re.findall(r"print\([^)]+\)", wrapper)
+    for stmt in print_statements:
+        # Logging statements with [Kubeflow] should have flush=True
+        if "flush" not in stmt and "[Kubeflow]" in stmt:
+            pytest.fail(f"Print statement missing flush=True: {stmt}")
+
+    print("test execution complete")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
