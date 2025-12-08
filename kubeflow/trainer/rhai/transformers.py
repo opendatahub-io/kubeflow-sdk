@@ -675,11 +675,7 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
                     _update_progression_metrics(update_dict)
 
         def on_train_end(self, args, state, control, **kwargs) -> None:
-            """Update final progression state with actual completion values.
-
-            Sets training_finished flag to prevent on_step_end from overwriting
-            completion state during post-training evaluation steps.
-            """
+            """Update final progression state and write to termination message."""
             self.training_finished = True
 
             total_steps = state.max_steps if state.max_steps > 0 else None
@@ -693,18 +689,52 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
                 else 100
             )
 
-            _update_progression_metrics(
-                {
-                    "currentStep": current_step,
-                    "totalSteps": total_steps,
-                    "currentEpoch": (
-                        float(state.epoch) if hasattr(state, "epoch") and state.epoch else 0.0
-                    ),
-                    "totalEpochs": total_epochs,
-                    "progressPercentage": progress_pct,
-                    "estimatedRemainingSeconds": 0,
-                }
-            )
+            final_metrics = {
+                "currentStep": current_step,
+                "totalSteps": total_steps,
+                "currentEpoch": (
+                    float(state.epoch) if hasattr(state, "epoch") and state.epoch else 0.0
+                ),
+                "totalEpochs": total_epochs,
+                "progressPercentage": progress_pct,
+                "estimatedRemainingSeconds": 0,
+            }
+
+            # Update HTTP server metrics
+            _update_progression_metrics(final_metrics)
+
+            # Write final metrics to termination message for controller capture
+            if state.is_world_process_zero:
+                try:
+                    import json
+
+                    # Hold lock during message construction and file write
+                    # (to prevent race conditions)
+                    with _progression_metrics_lock:
+                        termination_message = {
+                            "progressPercentage": progress_pct,
+                            "estimatedRemainingSeconds": 0,
+                            "currentStep": current_step,
+                            "totalSteps": total_steps,
+                            "currentEpoch": (
+                                float(state.epoch)
+                                if hasattr(state, "epoch") and state.epoch
+                                else 0.0
+                            ),
+                            "totalEpochs": total_epochs,
+                            "trainMetrics": dict(_progression_metrics_state.trainMetrics),
+                            "evalMetrics": dict(_progression_metrics_state.evalMetrics),
+                        }
+
+                        with open("/dev/termination-log", "w") as f:
+                            json.dump(termination_message, f)
+                    print("[Kubeflow] Final metrics written to termination message", flush=True)
+                except Exception as e:
+                    print(
+                        f"[Kubeflow] Warning: Failed to write termination message: {e}. "
+                        f"Controller will fall back to HTTP polling.",
+                        flush=True,
+                    )
 
     def apply_progression_tracking():
         """Patch Trainer.__init__ to inject KubeflowProgressCallback."""
