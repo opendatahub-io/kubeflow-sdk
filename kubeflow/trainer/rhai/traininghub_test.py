@@ -17,9 +17,11 @@
 import pytest
 
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai import constants as rhai_constants
 from kubeflow.trainer.rhai.traininghub import (
     TrainingHubAlgorithms,
     TrainingHubTrainer,
+    get_progress_tracking_annotations,
     get_training_hub_instrumentation_wrapper,
 )
 from kubeflow.trainer.test.common import SUCCESS, TestCase
@@ -452,9 +454,77 @@ def test_progression_tracking_enabled_has_server():
     print("test execution complete")
 
 
-def test_instrumentation_wrapper_termination_message_constant():
-    """Test that TERMINATION_LOG_PATH constant is embedded in wrapper."""
-    print("Executing test: Termination message constant")
+def test_get_progress_tracking_annotations_enabled():
+    """Test that annotations are generated when progression tracking is enabled."""
+    print("Executing test: get_progress_tracking_annotations with enabled=True")
+
+    trainer = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.SFT,
+        func_args={"ckpt_output_dir": "/tmp"},
+        enable_progression_tracking=True,
+        metrics_port=28080,
+        metrics_poll_interval_seconds=30,
+    )
+
+    annotations = get_progress_tracking_annotations(trainer)
+
+    # Verify all expected annotations are present
+    assert rhai_constants.ANNOTATION_PROGRESSION_TRACKING in annotations
+    assert annotations[rhai_constants.ANNOTATION_PROGRESSION_TRACKING] == "true"
+
+    assert rhai_constants.ANNOTATION_METRICS_PORT in annotations
+    assert annotations[rhai_constants.ANNOTATION_METRICS_PORT] == "28080"
+
+    assert rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL in annotations
+    assert annotations[rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL] == "30s"
+
+    assert rhai_constants.ANNOTATION_FRAMEWORK in annotations
+    assert annotations[rhai_constants.ANNOTATION_FRAMEWORK] == "traininghub"
+
+    print("test execution complete")
+
+
+def test_get_progress_tracking_annotations_disabled():
+    """Test that empty dict is returned when progression tracking is disabled."""
+    print("Executing test: get_progress_tracking_annotations with enabled=False")
+
+    trainer = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.OSFT,
+        func_args={"ckpt_output_dir": "/tmp"},
+        enable_progression_tracking=False,
+    )
+
+    annotations = get_progress_tracking_annotations(trainer)
+
+    # Should return empty dict when disabled
+    assert annotations == {}
+
+    print("test execution complete")
+
+
+def test_get_progress_tracking_annotations_custom_values():
+    """Test that custom port and interval values are correctly set in annotations."""
+    print("Executing test: get_progress_tracking_annotations with custom values")
+
+    trainer = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.OSFT,
+        func_args={"ckpt_output_dir": "/tmp"},
+        enable_progression_tracking=True,
+        metrics_port=9999,
+        metrics_poll_interval_seconds=120,
+    )
+
+    annotations = get_progress_tracking_annotations(trainer)
+
+    assert annotations[rhai_constants.ANNOTATION_METRICS_PORT] == "9999"
+    assert annotations[rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL] == "120s"
+
+    print("test execution complete")
+
+
+def test_instrumentation_wrapper_termination_log_path():
+    """Test that termination log path is used in wrapper."""
+    print("Executing test: Termination log path used")
 
     wrapper = get_training_hub_instrumentation_wrapper(
         algorithm="sft",
@@ -462,8 +532,8 @@ def test_instrumentation_wrapper_termination_message_constant():
         metrics_port=28080,
     )
 
-    # Verify TERMINATION_LOG_PATH constant is defined
-    assert 'TERMINATION_LOG_PATH = "/dev/termination-log"' in wrapper
+    # Verify /dev/termination-log path is used directly
+    assert '"/dev/termination-log"' in wrapper
     print("test execution complete")
 
 
@@ -481,8 +551,8 @@ def test_instrumentation_wrapper_termination_method():
     assert "def _maybe_write_termination_message(self, metrics)" in wrapper
     # Verify it checks for 100% progress
     assert "progress >= 100" in wrapper
-    # Verify it writes to termination log
-    assert "TERMINATION_LOG_PATH" in wrapper
+    # Verify it writes to termination log path
+    assert '"/dev/termination-log"' in wrapper
     # Verify it has write-once flag
     assert "_termination_message_written" in wrapper
 
@@ -558,8 +628,8 @@ def test_algorithm_wrapper_termination_message():
     assert "def _write_termination_message(ckpt_output_dir, algorithm):" in wrapper
     # Verify it's called after training completes
     assert "_write_termination_message(ckpt_output_dir, algorithm)" in wrapper
-    # Verify TERMINATION_LOG_PATH constant
-    assert 'TERMINATION_LOG_PATH = "/dev/termination-log"' in wrapper
+    # Verify termination log path is used
+    assert '"/dev/termination-log"' in wrapper
     # Verify it reads metrics files
     assert "training_params_and_metrics_global0.jsonl" in wrapper  # SFT
     assert "training_metrics_0.jsonl" in wrapper  # OSFT

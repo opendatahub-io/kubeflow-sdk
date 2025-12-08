@@ -138,7 +138,6 @@ def _create_training_hub_progression_instrumentation(
     SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"  # noqa: N806
     OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"  # noqa: N806, F841
     OSFT_CONFIG_FILE = "training_params.json"  # noqa: N806, F841
-    TERMINATION_LOG_PATH = "/dev/termination-log"  # noqa: N806
     # fmt: on
 
     # Track if termination message has been written (to avoid duplicates)
@@ -184,7 +183,7 @@ def _create_training_hub_progression_instrumentation(
                 # Write final metrics to termination message for reliable progress reporting
                 try:
                     final_metrics = json.dumps(metrics)
-                    with open(TERMINATION_LOG_PATH, "w") as f:
+                    with open("/dev/termination-log", "w") as f:
                         f.write(final_metrics)
                     _termination_message_written = True
                     print(
@@ -513,8 +512,6 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
         import os
         import glob
 
-        TERMINATION_LOG_PATH = "/dev/termination-log"
-
         try:
             # Read final metrics based on algorithm
             metrics = None
@@ -545,7 +542,7 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
                     "evalMetrics": {{}},
                 }}
 
-                with open(TERMINATION_LOG_PATH, 'w') as f:
+                with open("/dev/termination-log", 'w') as f:
                     json.dump(final_progress, f)
                 print("[Kubeflow] Termination message written", flush=True)
             else:
