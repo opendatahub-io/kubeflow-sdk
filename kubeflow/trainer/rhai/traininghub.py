@@ -199,10 +199,13 @@ def _create_training_hub_progression_instrumentation(
 
         def _read_latest_metrics(self):
             """Read last line of JSONL file (most recent metrics from rank 0)."""
-            if algorithm == "osft":
-                return self._read_osft_metrics()
-            else:  # sft
+            if algorithm == "sft":
                 return self._read_sft_metrics()
+            elif algorithm == "osft":
+                return self._read_osft_metrics()
+            else:
+                # TODO: Add support for other algorithms (e.g., lora_sft) in future
+                return {}
 
         def _read_osft_metrics(self):
             """Read OSFT metrics from training_metrics_0.jsonl."""
@@ -328,10 +331,13 @@ def _create_training_hub_progression_instrumentation(
                 }
 
             # Use algorithm parameter to determine transformation
-            if algorithm == "osft":
-                return self._transform_osft(metrics)
-            else:  # sft
+            if algorithm == "sft":
                 return self._transform_sft(metrics)
+            elif algorithm == "osft":
+                return self._transform_osft(metrics)
+            else:
+                # TODO: Add support for other algorithms (e.g., lora_sft) in future
+                return {}
 
         def _transform_osft(self, metrics):
             """Transform OSFT schema to controller-compatible format."""
@@ -523,13 +529,16 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
                         lines = f.readlines()
                         if len(lines) >= 2:
                             metrics = json.loads(lines[-1])
-            else:  # osft
+            elif algorithm == "osft":
                 metrics_file = os.path.join(ckpt_output_dir, "training_metrics_0.jsonl")
                 if os.path.exists(metrics_file):
                     with open(metrics_file, 'r') as f:
                         lines = f.readlines()
                         if lines:
                             metrics = json.loads(lines[-1])
+            else:
+                # TODO: Add support for other algorithms (e.g., lora_sft) in future
+                metrics = None
 
             if metrics:
                 # Build final progress JSON
