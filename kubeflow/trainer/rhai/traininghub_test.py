@@ -70,7 +70,7 @@ def _simple_training_fn():
             expected_error=ValueError,
         ),
         TestCase(
-            name="builds CRD for SFT algorithm wrapper",
+            name="builds CRD for SFT algorithm wrapper with explicit resources",
             expected_status=SUCCESS,
             config={
                 "runtime": create_runtime_type(name="torch"),
@@ -79,10 +79,12 @@ def _simple_training_fn():
                     func_args={"nnodes": 2, "nproc_per_node": 2, "data_path": "/data/file.json"},
                     packages_to_install=["training_hub"],
                     algorithm=TrainingHubAlgorithms.SFT,
+                    resources_per_node={"gpu": "2"},
                 ),
             },
             expected_output=models.TrainerV1alpha1Trainer(
                 numNodes=2,
+                numProcPerNode=models.IoK8sApimachineryPkgUtilIntstrIntOrString(2),
                 resourcesPerNode=get_expected_resources_per_node(2),
                 command=["bash", "-c"],
             ),
@@ -101,8 +103,6 @@ def _simple_training_fn():
                 ),
             },
             expected_output=models.TrainerV1alpha1Trainer(
-                numNodes=1,
-                resourcesPerNode=get_expected_resources_per_node(1),
                 command=["bash", "-c"],
                 env=[
                     models.IoK8sApiCoreV1EnvVar(name="A", value="1"),
@@ -137,6 +137,11 @@ def test_traininghub_builder(test_case):
                 assert (
                     crd.resources_per_node.limits.get("nvidia.com/gpu").actual_instance
                     == exp.resources_per_node.limits.get("nvidia.com/gpu").actual_instance  # type: ignore
+                )
+            if exp.num_proc_per_node is not None:
+                assert crd.num_proc_per_node is not None
+                assert (
+                    crd.num_proc_per_node.actual_instance == exp.num_proc_per_node.actual_instance
                 )
             if exp.command is not None:
                 assert crd.command == exp.command
@@ -217,13 +222,24 @@ def test_traininghub_algorithm_crd(test_case):
         crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer_cfg)
 
         assert test_case.expected_status == SUCCESS
-        # Validate topology mapping.
-        nnodes_expected = trainer_cfg.func_args.get("nnodes", 1) if trainer_cfg.func_args else 1
+        # Validate topology mapping: when nnodes / nproc_per_node are provided in func_args,
+        # they should be propagated; otherwise they should be left unset so that the
+        # TrainingRuntime ML policy can supply defaults.
+        nnodes_expected = trainer_cfg.func_args.get("nnodes") if trainer_cfg.func_args else None
         nproc_expected = (
-            trainer_cfg.func_args.get("nproc_per_node", 1) if trainer_cfg.func_args else 1
+            trainer_cfg.func_args.get("nproc_per_node") if trainer_cfg.func_args else None
         )
-        assert crd.num_nodes == nnodes_expected
-        assert _gpu_quantity(crd.resources_per_node) == str(nproc_expected)
+
+        if nnodes_expected is not None:
+            assert crd.num_nodes == nnodes_expected
+        else:
+            assert crd.num_nodes is None
+
+        if nproc_expected is not None:
+            assert crd.num_proc_per_node is not None
+            assert crd.num_proc_per_node.actual_instance == nproc_expected
+        else:
+            assert crd.num_proc_per_node is None
 
         # Validate command/args structure.
         assert crd.command == ["bash", "-c"]
@@ -278,9 +294,12 @@ def test_traininghub_user_func_crd(test_case):
         crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer_cfg)
 
         assert test_case.expected_status == SUCCESS
-        # Topology defaulted to 1/1 if not specified.
-        assert crd.num_nodes == 1
-        assert _gpu_quantity(crd.resources_per_node) == "1"
+        # Topology parameters are not set when not provided in func_args; ML policy will
+        # supply defaults instead of the SDK.
+        assert crd.num_nodes is None
+        assert crd.num_proc_per_node is None
+        # No explicit resources_per_node were provided, so resources should be unset.
+        assert crd.resources_per_node is None
 
         # Validate command/args
         assert crd.command == ["bash", "-c"]
