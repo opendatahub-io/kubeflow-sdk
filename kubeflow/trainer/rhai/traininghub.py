@@ -52,19 +52,16 @@ def _derive_topology_from_func_args(func_args: Optional[dict]) -> tuple[int, int
 
 
 def _build_install_snippet(
-    runtime: types.Runtime,
     packages_to_install: Optional[list[str]],
     pip_index_urls: list[str],
 ) -> str:
     """Build the shell snippet to install Python packages if requested."""
-    is_mpi = len(runtime.trainer.command) > 0 and runtime.trainer.command[0] == "mpirun"
-    if packages_to_install:
-        return k8s_utils.get_script_for_python_packages(
-            packages_to_install,
-            pip_index_urls,
-            is_mpi,
-        )
-    return ""
+    if not packages_to_install:
+        return ""
+    return k8s_utils.get_script_for_python_packages(
+        packages_to_install,
+        pip_index_urls,
+    )
 
 
 def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) -> str:
@@ -154,9 +151,7 @@ def get_trainer_cr_from_training_hub_trainer(
     trainer_crd.num_nodes = nnodes
     trainer_crd.resources_per_node = k8s_utils.get_resources_per_node({"gpu": str(nproc_per_node)})
 
-    install_snippet = _build_install_snippet(
-        runtime, trainer.packages_to_install, trainer.pip_index_urls
-    )
+    install_snippet = _build_install_snippet(trainer.packages_to_install, trainer.pip_index_urls)
 
     # Primary case: no user function; generate wrapper that imports and calls algorithm(**func_args)
     if trainer.func is None:
