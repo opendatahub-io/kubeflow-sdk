@@ -4,7 +4,7 @@ from enum import Enum
 import inspect
 import os
 import textwrap
-from typing import Optional
+from typing import Optional, Union
 
 from kubeflow_trainer_api import models
 
@@ -54,6 +54,7 @@ class TrainingHubTrainer:
     )
     env: Optional[dict[str, str]] = None
     algorithm: Optional[TrainingHubAlgorithms] = None
+    resources_per_node: Optional[dict] = None
 
     # Progress tracking parameters
     enable_progression_tracking: bool = True
@@ -83,6 +84,24 @@ class TrainingHubTrainer:
                 f"metrics_poll_interval_seconds must be in range 5-300 seconds, "
                 f"got {self.metrics_poll_interval_seconds}"
             )
+def _derive_topology_from_func_args(
+    func_args: Optional[dict],
+) -> tuple[Optional[int], Optional[Union[int, str]]]:
+    """Return (nnodes, nproc_per_node) based on provided func_args.
+
+    If values are not provided in func_args, they are left as None so that the
+    TrainingRuntime ML policy can supply appropriate defaults instead of the SDK.
+    """
+    nnodes: Optional[int] = None
+    nproc_per_node: Optional[Union[int, str]] = None
+    if isinstance(func_args, dict):
+        nnodes_value = func_args.get("nnodes")
+        if isinstance(nnodes_value, int):
+            nnodes = nnodes_value
+        npp_value = func_args.get("nproc_per_node")
+        if isinstance(npp_value, (int, str)):
+            nproc_per_node = npp_value
+    return nnodes, nproc_per_node
 
 
 def _build_install_snippet(
@@ -711,6 +730,28 @@ def get_trainer_cr_from_training_hub_trainer(
 
     Returns:
         Trainer CRD spec
+    # Derive topology (nnodes, nproc_per_node) from func_args, if provided.
+    # nnodes controls TrainJob.spec.trainer.numNodes and therefore PET_NNODES.
+    # nproc_per_node controls TrainJob.spec.trainer.numProcPerNode which in turn
+    # drives PET_NPROC_PER_NODE via the Torch runtime plugin.
+    nnodes, nproc_per_node = _derive_topology_from_func_args(trainer.func_args)
+    if nnodes is not None:
+        trainer_crd.num_nodes = nnodes
+
+    # Map nproc_per_node directly to NumProcPerNode when provided so that it overrides the
+    # runtime ML policy and sets PET_NPROC_PER_NODE as expected. If it is not provided,
+    # we leave it unset so the runtime ML policy determines the value.
+    if nproc_per_node is not None:
+        trainer_crd.num_proc_per_node = models.IoK8sApimachineryPkgUtilIntstrIntOrString(
+            nproc_per_node
+        )
+
+    # Map explicit resources_per_node exactly like CustomTrainer. If users want to
+    # control GPU/CPU quantities, they should pass them via this field.
+    if trainer.resources_per_node:
+        trainer_crd.resources_per_node = k8s_utils.get_resources_per_node(
+            trainer.resources_per_node
+        )
 
     Note:
         Distributed training settings (num_nodes, resources) should be configured

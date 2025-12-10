@@ -25,17 +25,8 @@ jobs:
         run: |
           BASE_VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' kubeflow/__init__.py)
 
-          # Determine release version with -odh suffix
-          # Start at -odh-1 and increment from there
-          RELEASE_VERSION_BASE="v${BASE_VERSION}-odh"
-
-          # Check if this version tag already exists, and find the next available increment
-          INCREMENT=1
-          FINAL_VERSION="${RELEASE_VERSION_BASE}-${INCREMENT}"
-          while git ls-remote --tags origin | grep -q "refs/tags/${FINAL_VERSION}$"; do
-            INCREMENT=$((INCREMENT + 1))
-            FINAL_VERSION="${RELEASE_VERSION_BASE}-${INCREMENT}"
-          done
+          # Use the version from kubeflow/__init__.py directly as the release tag.
+          FINAL_VERSION="${BASE_VERSION}"
 
           echo "base-version=$BASE_VERSION" >> $GITHUB_OUTPUT
           echo "release-version=$FINAL_VERSION" >> $GITHUB_OUTPUT

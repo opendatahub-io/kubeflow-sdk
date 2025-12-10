@@ -234,6 +234,11 @@ class KubernetesBackend(RuntimeBackend):
             pod_template_overrides=pod_template_overrides,
         )
 
+        # Apply RHAI trainer progression tracking annotations to metadata
+        is_rhai_trainer = trainer and isinstance(trainer, get_args(RHAITrainer))
+        if is_rhai_trainer:
+            annotations = rhai_utils.merge_progression_annotations(trainer, annotations)
+
         # Build the TrainJob.
         train_job = models.TrainerV1alpha1TrainJob(
             apiVersion=constants.API_VERSION,
@@ -679,12 +684,6 @@ class KubernetesBackend(RuntimeBackend):
                 if initializer.dataset
                 else None,
                 model=utils.get_model_initializer(initializer.model) if initializer.model else None,
-            )
-
-        # Apply RHAI trainer progression tracking annotations
-        if is_rhai_trainer:
-            trainjob_spec.annotations = rhai_utils.merge_progression_annotations(
-                trainer, trainjob_spec.annotations
             )
 
         return trainjob_spec
