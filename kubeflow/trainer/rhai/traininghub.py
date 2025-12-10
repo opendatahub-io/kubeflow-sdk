@@ -37,8 +37,12 @@ class TrainingHubTrainer:
     Args:
         func: Optional user-defined training function. If None, uses algorithm wrapper mode.
         func_args: Arguments to pass to the training function or algorithm.
+            Note: `nnodes` and `nproc_per_node` can be specified here to control
+            distributed training topology (maps to numNodes and numProcPerNode).
         packages_to_install: Python packages to install before training.
         pip_index_urls: PyPI index URLs for package installation.
+        resources_per_node: The computing resources to allocate per node.
+            Example: {"cpu": 4, "memory": "16Gi", "nvidia.com/gpu": 2}
         env: Environment variables to set in training pods.
         algorithm: Training Hub algorithm (SFT or OSFT). Required when func is None.
         enable_progression_tracking: Enable file-based progress tracking with HTTP server.
@@ -57,7 +61,8 @@ class TrainingHubTrainer:
     resources_per_node: Optional[dict] = None
 
     # Progress tracking parameters
-    enable_progression_tracking: bool = True
+    # Default is False - users must explicitly opt-in to progression tracking
+    enable_progression_tracking: bool = False
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
 
@@ -105,19 +110,24 @@ def _derive_topology_from_func_args(
 
 
 def _build_install_snippet(
+    runtime: types.Runtime,
     packages_to_install: Optional[list[str]],
     pip_index_urls: list[str],
 ) -> str:
-    """Build shell snippet to install Python packages if requested.
-    Note: Training Hub uses PyTorch torchrun for distributed training.
-    """
+    """Build the shell snippet to install Python packages if requested."""
+    # Check if runtime uses MPI (safely handle uninitialized command)
+    try:
+        cmd = runtime.trainer.command
+        is_mpi = len(cmd) > 0 and cmd[0] == "mpirun"
+    except AttributeError:
+        is_mpi = False
     if not packages_to_install:
         return ""
 
     return k8s_utils.get_script_for_python_packages(
         packages_to_install,
         pip_index_urls,
-        is_mpi=False,  # Training Hub uses torchrun, not MPI
+        is_mpi=is_mpi,
     )
 
 
@@ -730,6 +740,13 @@ def get_trainer_cr_from_training_hub_trainer(
 
     Returns:
         Trainer CRD spec
+
+    Note:
+        Distributed training settings (num_nodes, resources) should be configured
+        via TrainJob spec.mlPolicy, not in the trainer configuration.
+    """
+    trainer_crd = models.TrainerV1alpha1Trainer()
+
     # Derive topology (nnodes, nproc_per_node) from func_args, if provided.
     # nnodes controls TrainJob.spec.trainer.numNodes and therefore PET_NNODES.
     # nproc_per_node controls TrainJob.spec.trainer.numProcPerNode which in turn
@@ -753,13 +770,9 @@ def get_trainer_cr_from_training_hub_trainer(
             trainer.resources_per_node
         )
 
-    Note:
-        Distributed training settings (num_nodes, resources) should be configured
-        via TrainJob spec.mlPolicy, not in the trainer configuration.
-    """
-    trainer_crd = models.TrainerV1alpha1Trainer()
-
-    install_snippet = _build_install_snippet(trainer.packages_to_install, trainer.pip_index_urls)
+    install_snippet = _build_install_snippet(
+        runtime, trainer.packages_to_install, trainer.pip_index_urls
+    )
 
     # Primary case: no user function; generate wrapper that imports and calls algorithm(**func_args)
     if trainer.func is None:
@@ -843,9 +856,9 @@ def get_progress_tracking_annotations(trainer: TrainingHubTrainer) -> dict[str, 
         rhai_constants.ANNOTATION_PROGRESSION_TRACKING: "true",
         # Set metrics port (where HTTP server listens)
         rhai_constants.ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
-        # Set metrics poll interval (how often controller polls)
-        rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL: (
-            f"{trainer.metrics_poll_interval_seconds}s"
+        # Set metrics poll interval (how often controller polls) - integer only, no suffix
+        rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL: str(
+            trainer.metrics_poll_interval_seconds
         ),
         # Set framework annotation
         rhai_constants.ANNOTATION_FRAMEWORK: "traininghub",
