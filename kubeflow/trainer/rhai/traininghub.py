@@ -785,14 +785,15 @@ def get_trainer_cr_from_training_hub_trainer(
         raw_code = _render_algorithm_wrapper(algorithm_name, trainer.func_args)
 
         # Inject progress tracking code if enabled
-        if (
-            trainer.enable_progression_tracking
-            and trainer.func_args
-            and "ckpt_output_dir" in trainer.func_args
-        ):
+        if trainer.enable_progression_tracking:
+            # Use the same default as the wrapper if ckpt_output_dir is not provided.
+            ckpt_dir = "/tmp/checkpoints"
+            if trainer.func_args and "ckpt_output_dir" in trainer.func_args:
+                ckpt_dir = trainer.func_args["ckpt_output_dir"]
+
             progress_code = get_training_hub_instrumentation_wrapper(
                 algorithm=algorithm_name,
-                ckpt_output_dir=trainer.func_args["ckpt_output_dir"],
+                ckpt_output_dir=ckpt_dir,
                 metrics_port=trainer.metrics_port,
             )
             raw_code = progress_code + "\n" + raw_code
