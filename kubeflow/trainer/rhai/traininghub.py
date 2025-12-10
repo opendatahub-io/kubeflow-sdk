@@ -89,6 +89,8 @@ class TrainingHubTrainer:
                 f"metrics_poll_interval_seconds must be in range 5-300 seconds, "
                 f"got {self.metrics_poll_interval_seconds}"
             )
+
+
 def _derive_topology_from_func_args(
     func_args: Optional[dict],
 ) -> tuple[Optional[int], Optional[Union[int, str]]]:
@@ -857,9 +859,7 @@ def get_progress_tracking_annotations(trainer: TrainingHubTrainer) -> dict[str, 
         # Set metrics port (where HTTP server listens)
         rhai_constants.ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
         # Set metrics poll interval (how often controller polls) - integer only, no suffix
-        rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL: str(
-            trainer.metrics_poll_interval_seconds
-        ),
+        rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL: str(trainer.metrics_poll_interval_seconds),
         # Set framework annotation
         rhai_constants.ANNOTATION_FRAMEWORK: "traininghub",
     }
