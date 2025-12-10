@@ -61,8 +61,7 @@ class TrainingHubTrainer:
     resources_per_node: Optional[dict] = None
 
     # Progress tracking parameters
-     
-    enable_progression_tracking: bool = True #Enabled by default
+    enable_progression_tracking: bool = True  # Enabled by default
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
 
