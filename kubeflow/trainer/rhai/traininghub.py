@@ -112,24 +112,15 @@ def _derive_topology_from_func_args(
 
 
 def _build_install_snippet(
-    runtime: types.Runtime,
     packages_to_install: Optional[list[str]],
     pip_index_urls: list[str],
 ) -> str:
     """Build the shell snippet to install Python packages if requested."""
-    # Check if runtime uses MPI (safely handle uninitialized command)
-    try:
-        cmd = runtime.trainer.command
-        is_mpi = len(cmd) > 0 and cmd[0] == "mpirun"
-    except AttributeError:
-        is_mpi = False
     if not packages_to_install:
         return ""
-
     return k8s_utils.get_script_for_python_packages(
         packages_to_install,
         pip_index_urls,
-        is_mpi=is_mpi,
     )
 
 
@@ -772,9 +763,7 @@ def get_trainer_cr_from_training_hub_trainer(
             trainer.resources_per_node
         )
 
-    install_snippet = _build_install_snippet(
-        runtime, trainer.packages_to_install, trainer.pip_index_urls
-    )
+    install_snippet = _build_install_snippet(trainer.packages_to_install, trainer.pip_index_urls)
 
     # Primary case: no user function; generate wrapper that imports and calls algorithm(**func_args)
     if trainer.func is None:
