@@ -341,6 +341,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if not output_dir or not os.path.exists(output_dir):
                 return None
 
+            is_rank_0 = int(os.environ.get("RANK", "0")) == 0
             checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
             checkpoints = []
 
@@ -352,10 +353,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 checkpoint_path = os.path.join(output_dir, name)
                 incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
 
-                # Delete incomplete checkpoints
+                # Delete incomplete checkpoints (rank 0 only to avoid race condition)
                 if os.path.exists(incomplete_marker):
-                    print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
-                    shutil.rmtree(checkpoint_path)
+                    if is_rank_0:
+                        print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
+                        shutil.rmtree(checkpoint_path)
                     continue
 
                 checkpoints.append((int(match.group(1)), checkpoint_path))
