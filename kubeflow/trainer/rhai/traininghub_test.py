@@ -45,8 +45,8 @@ def test_traininghub_trainer_initialization():
     assert trainer.pip_index_urls == list(constants.DEFAULT_PIP_INDEX_URLS)
     assert trainer.env is None
     assert trainer.algorithm == TrainingHubAlgorithms.SFT
-    # Default is False - users must opt-in to progression tracking
-    assert trainer.enable_progression_tracking is False
+    # Enabled by default for consistency with TransformersTrainer
+    assert trainer.enable_progression_tracking is True
     assert trainer.metrics_port == 28080
     assert trainer.metrics_poll_interval_seconds == 30
 
@@ -346,6 +346,13 @@ def test_algorithm_parameter_used_not_detected():
             expected_status=SUCCESS,
             config={
                 "enable_progression_tracking": False,
+            },
+        ),
+        TestCase(
+            name="trainer with progression tracking enabled (defaults)",
+            expected_status=SUCCESS,
+            config={
+                "enable_progression_tracking": True,
             },
         ),
         TestCase(
