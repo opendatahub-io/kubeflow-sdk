@@ -1597,6 +1597,9 @@ class cuda:
     def stream(stream_obj):
         return stream_obj
 
+def load(f, *args, **kwargs):
+    return {}
+
 Tensor = object  # Stub
 """
 
@@ -1762,6 +1765,9 @@ class cuda:
     @staticmethod
     def is_available():
         return True
+
+def load(f, *args, **kwargs):
+    return {}
 """
 
     transformers_stub = """

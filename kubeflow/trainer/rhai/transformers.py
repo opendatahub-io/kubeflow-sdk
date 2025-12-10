@@ -190,6 +190,27 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
     from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
 
+    # PyTorch 2.4+ fix: Catches numpy unpickling errors and retries with weights_only=False
+    # RNG state files from Transformers Trainer contain numpy types that fail with weights_only=True
+    _original_torch_load = torch.load
+
+    def _patched_torch_load(f, *args, **kwargs):
+        import pickle
+
+        if kwargs.get("weights_only") is True:
+            try:
+                return _original_torch_load(f, *args, **kwargs)
+            except pickle.UnpicklingError as e:
+                if "numpy" in str(e).lower() or "weights_only" in str(e).lower():
+                    if hasattr(f, "seek"):
+                        f.seek(0)
+                    kwargs["weights_only"] = False
+                    return _original_torch_load(f, *args, **kwargs)
+                raise
+        return _original_torch_load(f, *args, **kwargs)
+
+    torch.load = _patched_torch_load
+
     class CheckpointManager:
         """Manages async just-in-time checkpointing on SIGTERM signal using CUDA streams."""
 
