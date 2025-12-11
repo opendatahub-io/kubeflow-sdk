@@ -825,5 +825,3 @@ def get_trainer_cr_from_training_hub_trainer(
     )
 
     return trainer_crd
-
-
