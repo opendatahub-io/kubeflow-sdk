@@ -562,10 +562,9 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
                 metrics = None
 
             if metrics:
-                # Build final progress JSON
+                # Build final progress JSON (matches controller's AnnotationStatus struct)
                 final_progress = {{
                     "progressPercentage": 100,
-                    "status": "complete",
                     "trainMetrics": {{
                         "loss": str(metrics.get("loss", metrics.get("train_loss", 0))),
                     }},
