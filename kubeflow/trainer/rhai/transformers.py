@@ -884,17 +884,12 @@ def get_trainer_cr_from_transformers_trainer(
     # Build the command directly with the wrapped function code
     func_file = os.path.basename(inspect.getfile(trainer.func))
 
-    is_mpi = runtime.trainer.command[0] == "mpirun"
-    if is_mpi:
-        func_file = os.path.join(constants.DEFAULT_MPI_USER_HOME, func_file)
-
     # Install Python packages if required
     install_packages = ""
     if trainer.packages_to_install:
         install_packages = utils.get_script_for_python_packages(
             trainer.packages_to_install,
             trainer.pip_index_urls,
-            is_mpi,
         )
 
     # Build the trainer command with wrapped function code
