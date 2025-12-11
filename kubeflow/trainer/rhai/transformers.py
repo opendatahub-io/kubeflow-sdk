@@ -241,9 +241,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 print(f"[Kubeflow] Starting JIT checkpoint at step {current_step}", flush=True)
 
                 # Get rank for distributed training
-                rank = 0
-                if torch.distributed.is_available() and torch.distributed.is_initialized():
-                    rank = torch.distributed.get_rank()
+                from accelerate import PartialState
+
+                is_main_process = PartialState().is_main_process
 
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
@@ -253,7 +253,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
                 # Create sentinel file to mark incomplete checkpoint (only rank 0)
                 sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
-                if rank == 0:
+                if is_main_process:
                     with open(sentinel_file, "w") as f:
                         f.write(f"Checkpoint started at step {current_step}")
 
@@ -274,7 +274,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
                 # Remove sentinel on success (only rank 0)
-                if rank == 0 and os.path.exists(sentinel_file):
+                if is_main_process and os.path.exists(sentinel_file):
                     os.remove(sentinel_file)
 
                 print(f"[Kubeflow] JIT checkpoint completed at step {current_step}", flush=True)
@@ -341,7 +341,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if not output_dir or not os.path.exists(output_dir):
                 return None
 
-            is_rank_0 = int(os.environ.get("RANK", "0")) == 0
+            from accelerate import PartialState
+
+            is_rank_0 = PartialState().is_main_process
             checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
             checkpoints = []
 
