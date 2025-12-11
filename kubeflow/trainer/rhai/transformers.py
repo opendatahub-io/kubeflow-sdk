@@ -17,6 +17,7 @@
 from dataclasses import dataclass, field
 import inspect
 import os
+import pickle
 import textwrap
 from typing import Callable, Optional
 
@@ -195,13 +196,12 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     _original_torch_load = torch.load
 
     def _patched_torch_load(f, *args, **kwargs):
-        import pickle
-
         if kwargs.get("weights_only") is True:
             try:
                 return _original_torch_load(f, *args, **kwargs)
             except pickle.UnpicklingError as e:
-                if "numpy" in str(e).lower() or "weights_only" in str(e).lower():
+                error_msg = str(e).lower()
+                if "numpy" in error_msg or "weights_only" in error_msg:
                     if hasattr(f, "seek"):
                         f.seek(0)
                     kwargs["weights_only"] = False
