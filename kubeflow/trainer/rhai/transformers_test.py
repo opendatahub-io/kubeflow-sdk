@@ -2111,5 +2111,241 @@ def test_auto_resume_user_override():
             del sys.modules["torch"]
 
 
+def test_checkpoint_instrumentation_is_self_contained():
+    """Test that injected checkpoint code doesn't reference undefined module-level names.
+
+    This test ensures that _create_checkpoint_instrumentation is self-contained:
+    all names it uses must be either imported within the function, defined locally,
+    or be Python builtins. This prevents NameError at runtime in training pods
+    where only the function body is injected via inspect.getsource().
+    """
+    print("Executing test: checkpoint instrumentation is self-contained")
+    import ast
+    import builtins
+    import sys
+    from unittest.mock import Mock
+
+    # Mock required modules
+    mock_transformers = Mock()
+    mock_transformers.TrainerCallback = Mock
+    mock_transformers.trainer_utils = Mock()
+    mock_transformers.trainer_utils.PREFIX_CHECKPOINT_DIR = "checkpoint"
+    sys.modules["transformers"] = mock_transformers
+    sys.modules["transformers.trainer_utils"] = mock_transformers.trainer_utils
+
+    mock_torch = Mock()
+    mock_torch.cuda.is_available.return_value = False
+    sys.modules["torch"] = mock_torch
+
+    try:
+        from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
+
+        checkpoint_code = get_jit_checkpoint_injection_code(
+            output_dir="/tmp/checkpoints",
+            periodic_checkpoint_config=None,
+            enable_jit_checkpoint=True,
+        )
+
+        # Parse the generated code
+        tree = ast.parse(checkpoint_code)
+
+        # Collect all names that are defined/imported within the code
+        defined_names: set[str] = set()
+
+        for node in ast.walk(tree):
+            # Function definitions and their parameters
+            if isinstance(node, ast.FunctionDef):
+                defined_names.add(node.name)
+                for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
+                    defined_names.add(arg.arg)
+                if node.args.vararg:
+                    defined_names.add(node.args.vararg.arg)
+                if node.args.kwarg:
+                    defined_names.add(node.args.kwarg.arg)
+            # Class definitions
+            elif isinstance(node, ast.ClassDef):
+                defined_names.add(node.name)
+            # Assignments (including tuple unpacking)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        defined_names.add(target.id)
+                    elif isinstance(target, ast.Tuple):
+                        for elt in target.elts:
+                            if isinstance(elt, ast.Name):
+                                defined_names.add(elt.id)
+            # Import statements
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    name = alias.asname if alias.asname else alias.name.split(".")[0]
+                    defined_names.add(name)
+            # From imports
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    name = alias.asname if alias.asname else alias.name
+                    defined_names.add(name)
+            # For loop targets
+            elif isinstance(node, ast.For):
+                if isinstance(node.target, ast.Name):
+                    defined_names.add(node.target.id)
+                elif isinstance(node.target, ast.Tuple):
+                    for elt in node.target.elts:
+                        if isinstance(elt, ast.Name):
+                            defined_names.add(elt.id)
+            # With statement targets
+            elif isinstance(node, ast.With):
+                for item in node.items:
+                    if item.optional_vars and isinstance(item.optional_vars, ast.Name):
+                        defined_names.add(item.optional_vars.id)
+            # Exception handlers
+            elif isinstance(node, ast.ExceptHandler):
+                if node.name:
+                    defined_names.add(node.name)
+            # Comprehension variables
+            elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+                for generator in node.generators:
+                    if isinstance(generator.target, ast.Name):
+                        defined_names.add(generator.target.id)
+
+        # Get all builtin names
+        builtin_names = set(dir(builtins))
+
+        # Collect all Name nodes that are being loaded (used, not assigned)
+        used_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                used_names.add(node.id)
+
+        # Find undefined names
+        undefined_names = used_names - defined_names - builtin_names
+
+        assert not undefined_names, (
+            f"Injected checkpoint code references undefined names: {sorted(undefined_names)}. "
+            "These names must be imported inside _create_checkpoint_instrumentation, "
+            "not at module level, because only the function body is injected."
+        )
+
+        print("test execution complete")
+
+    finally:
+        for mod in ["transformers", "transformers.trainer_utils", "torch"]:
+            if mod in sys.modules:
+                del sys.modules[mod]
+
+
+def test_progression_instrumentation_is_self_contained():
+    """Test that injected progression code doesn't reference undefined module-level names.
+
+    This test ensures that _create_progression_instrumentation is self-contained:
+    all names it uses must be either imported within the function, defined locally,
+    or be Python builtins. This prevents NameError at runtime in training pods
+    where only the function body is injected via inspect.getsource().
+    """
+    print("Executing test: progression instrumentation is self-contained")
+    import ast
+    import builtins
+    import sys
+    from unittest.mock import Mock
+
+    # Mock required modules
+    mock_transformers = Mock()
+    mock_transformers.TrainerCallback = Mock
+    mock_transformers.trainer = Mock()
+    sys.modules["transformers"] = mock_transformers
+    sys.modules["transformers.trainer"] = mock_transformers.trainer
+
+    try:
+        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
+
+        # Replace placeholder to make it valid Python
+        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
+
+        # Parse the generated code
+        tree = ast.parse(wrapper_code)
+
+        # Collect all names that are defined/imported within the code
+        defined_names: set[str] = set()
+
+        for node in ast.walk(tree):
+            # Function definitions and their parameters
+            if isinstance(node, ast.FunctionDef):
+                defined_names.add(node.name)
+                for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
+                    defined_names.add(arg.arg)
+                if node.args.vararg:
+                    defined_names.add(node.args.vararg.arg)
+                if node.args.kwarg:
+                    defined_names.add(node.args.kwarg.arg)
+            # Class definitions
+            elif isinstance(node, ast.ClassDef):
+                defined_names.add(node.name)
+            # Assignments (including tuple unpacking)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        defined_names.add(target.id)
+                    elif isinstance(target, ast.Tuple):
+                        for elt in target.elts:
+                            if isinstance(elt, ast.Name):
+                                defined_names.add(elt.id)
+            # Import statements
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    name = alias.asname if alias.asname else alias.name.split(".")[0]
+                    defined_names.add(name)
+            # From imports
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    name = alias.asname if alias.asname else alias.name
+                    defined_names.add(name)
+            # For loop targets
+            elif isinstance(node, ast.For):
+                if isinstance(node.target, ast.Name):
+                    defined_names.add(node.target.id)
+                elif isinstance(node.target, ast.Tuple):
+                    for elt in node.target.elts:
+                        if isinstance(elt, ast.Name):
+                            defined_names.add(elt.id)
+            # With statement targets
+            elif isinstance(node, ast.With):
+                for item in node.items:
+                    if item.optional_vars and isinstance(item.optional_vars, ast.Name):
+                        defined_names.add(item.optional_vars.id)
+            # Exception handlers
+            elif isinstance(node, ast.ExceptHandler):
+                if node.name:
+                    defined_names.add(node.name)
+            # Comprehension variables
+            elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+                for generator in node.generators:
+                    if isinstance(generator.target, ast.Name):
+                        defined_names.add(generator.target.id)
+
+        # Get all builtin names
+        builtin_names = set(dir(builtins))
+
+        # Collect all Name nodes that are being loaded (used, not assigned)
+        used_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                used_names.add(node.id)
+
+        # Find undefined names
+        undefined_names = used_names - defined_names - builtin_names
+
+        assert not undefined_names, (
+            f"Injected progression code references undefined names: {sorted(undefined_names)}. "
+            "These names must be imported inside _create_progression_instrumentation, "
+            "not at module level, because only the function body is injected."
+        )
+
+        print("test execution complete")
+
+    finally:
+        for mod in ["transformers", "transformers.trainer"]:
+            if mod in sys.modules:
+                del sys.modules[mod]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
