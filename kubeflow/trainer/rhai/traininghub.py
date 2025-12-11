@@ -10,7 +10,6 @@ from kubeflow_trainer_api import models
 
 import kubeflow.trainer.backends.kubernetes.utils as k8s_utils
 from kubeflow.trainer.constants import constants
-from kubeflow.trainer.rhai import constants as rhai_constants
 from kubeflow.trainer.types import types
 
 # Training Hub specific file names and patterns
@@ -400,13 +399,15 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": epoch + 1,
                 "totalEpochs": total_epochs,
                 "trainMetrics": {
-                    "loss": f"{loss_val:.4f}" if loss_val else None,
-                    "learning_rate": f"{lr_val:.6f}" if lr_val else None,
-                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val else None,
-                    "throughput": f"{samples_per_second:.2f}" if samples_per_second else None,
+                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
+                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
+                    "throughput": (
+                        f"{samples_per_second:.2f}" if samples_per_second is not None else None
+                    ),
                 },
                 "evalMetrics": {
-                    "eval_loss": f"{val_loss_val:.4f}" if val_loss_val else None,
+                    "eval_loss": f"{val_loss_val:.4f}" if val_loss_val is not None else None,
                 },
             }
 
@@ -476,10 +477,10 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": current_epoch,
                 "totalEpochs": estimated_total_epochs,
                 "trainMetrics": {
-                    "loss": f"{loss_val:.4f}" if loss_val else None,
-                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None and lr_val > 0 else None,
+                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
                     "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
-                    "throughput": f"{throughput_val:.2f}" if throughput_val else None,
+                    "throughput": f"{throughput_val:.2f}" if throughput_val is not None else None,
                 },
                 "evalMetrics": {},
             }
@@ -826,28 +827,3 @@ def get_trainer_cr_from_training_hub_trainer(
     return trainer_crd
 
 
-def get_progress_tracking_annotations(trainer: TrainingHubTrainer) -> dict[str, str]:
-    """Generate progress tracking annotations for TrainJob metadata.
-
-    These annotations enable the trainer controller to poll the HTTP metrics endpoint
-    and update the TrainJob status with real-time progress.
-
-    Args:
-        trainer: TrainingHubTrainer instance with progress tracking configuration
-
-    Returns:
-        Dictionary of annotations to add to TrainJob metadata
-    """
-    if not trainer.enable_progression_tracking:
-        return {}
-
-    return {
-        # Enable progression tracking (controller will poll HTTP endpoint)
-        rhai_constants.ANNOTATION_PROGRESSION_TRACKING: "true",
-        # Set metrics port (where HTTP server listens)
-        rhai_constants.ANNOTATION_METRICS_PORT: str(trainer.metrics_port),
-        # Set metrics poll interval (how often controller polls) - integer only, no suffix
-        rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL: str(trainer.metrics_poll_interval_seconds),
-        # Set framework annotation
-        rhai_constants.ANNOTATION_FRAMEWORK: "traininghub",
-    }

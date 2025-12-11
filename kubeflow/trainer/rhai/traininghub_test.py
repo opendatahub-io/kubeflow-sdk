@@ -17,11 +17,9 @@
 import pytest
 
 from kubeflow.trainer.constants import constants
-from kubeflow.trainer.rhai import constants as rhai_constants
 from kubeflow.trainer.rhai.traininghub import (
     TrainingHubAlgorithms,
     TrainingHubTrainer,
-    get_progress_tracking_annotations,
     get_training_hub_instrumentation_wrapper,
 )
 from kubeflow.trainer.test.common import SUCCESS, TestCase
@@ -458,74 +456,6 @@ def test_progression_tracking_enabled_has_server():
     # Should contain progression tracking code
     assert "[Kubeflow]" in script  # Message is in the script
     assert "TrainingHubMetricsHandler" in script
-
-    print("test execution complete")
-
-
-def test_get_progress_tracking_annotations_enabled():
-    """Test that annotations are generated when progression tracking is enabled."""
-    print("Executing test: get_progress_tracking_annotations with enabled=True")
-
-    trainer = TrainingHubTrainer(
-        algorithm=TrainingHubAlgorithms.SFT,
-        func_args={"ckpt_output_dir": "/tmp"},
-        enable_progression_tracking=True,
-        metrics_port=28080,
-        metrics_poll_interval_seconds=30,
-    )
-
-    annotations = get_progress_tracking_annotations(trainer)
-
-    # Verify all expected annotations are present
-    assert rhai_constants.ANNOTATION_PROGRESSION_TRACKING in annotations
-    assert annotations[rhai_constants.ANNOTATION_PROGRESSION_TRACKING] == "true"
-
-    assert rhai_constants.ANNOTATION_METRICS_PORT in annotations
-    assert annotations[rhai_constants.ANNOTATION_METRICS_PORT] == "28080"
-
-    assert rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL in annotations
-    assert annotations[rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL] == "30"
-
-    assert rhai_constants.ANNOTATION_FRAMEWORK in annotations
-    assert annotations[rhai_constants.ANNOTATION_FRAMEWORK] == "traininghub"
-
-    print("test execution complete")
-
-
-def test_get_progress_tracking_annotations_disabled():
-    """Test that empty dict is returned when progression tracking is disabled."""
-    print("Executing test: get_progress_tracking_annotations with enabled=False")
-
-    trainer = TrainingHubTrainer(
-        algorithm=TrainingHubAlgorithms.OSFT,
-        func_args={"ckpt_output_dir": "/tmp"},
-        enable_progression_tracking=False,
-    )
-
-    annotations = get_progress_tracking_annotations(trainer)
-
-    # Should return empty dict when disabled
-    assert annotations == {}
-
-    print("test execution complete")
-
-
-def test_get_progress_tracking_annotations_custom_values():
-    """Test that custom port and interval values are correctly set in annotations."""
-    print("Executing test: get_progress_tracking_annotations with custom values")
-
-    trainer = TrainingHubTrainer(
-        algorithm=TrainingHubAlgorithms.OSFT,
-        func_args={"ckpt_output_dir": "/tmp"},
-        enable_progression_tracking=True,
-        metrics_port=9999,
-        metrics_poll_interval_seconds=120,
-    )
-
-    annotations = get_progress_tracking_annotations(trainer)
-
-    assert annotations[rhai_constants.ANNOTATION_METRICS_PORT] == "9999"
-    assert annotations[rhai_constants.ANNOTATION_METRICS_POLL_INTERVAL] == "120"
 
     print("test execution complete")
 
