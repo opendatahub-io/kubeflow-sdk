@@ -32,6 +32,7 @@ jobs:
           scopes: |
             ci
             docs
+            deps
             examples
             scripts
             test
