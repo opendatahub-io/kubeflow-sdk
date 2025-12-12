@@ -321,6 +321,7 @@ def get_traininghub_trainer_for_expected(
     packages_to_install: Optional[list[str]] = None,
     pip_index_urls: Optional[list[str]] = None,
     env: Optional[dict[str, str]] = None,
+    enable_progression_tracking: bool = False,
 ) -> models.TrainerV1alpha1Trainer:
     """Use production builder to construct expected TrainingHub Trainer CR."""
     trainer_cfg = TrainingHubTrainer(
@@ -330,6 +331,7 @@ def get_traininghub_trainer_for_expected(
         pip_index_urls=pip_index_urls or constants.DEFAULT_PIP_INDEX_URLS,
         env=env,
         algorithm=algo,
+        enable_progression_tracking=enable_progression_tracking,
     )
     return rhai_traininghub.get_trainer_cr_from_training_hub_trainer(runtime, trainer_cfg)
 
@@ -839,6 +841,7 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                     packages_to_install=["training_hub"],
                     pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
                     algorithm=TrainingHubAlgorithms.SFT,
+                    enable_progression_tracking=False,
                 )
             },
             expected_output=get_train_job(
@@ -850,6 +853,7 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                     func_args={"nnodes": 2, "nproc_per_node": 2, "data_path": "/data/file.json"},
                     packages_to_install=["training_hub"],
                     pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
+                    enable_progression_tracking=False,
                 ),
             ),
         ),
