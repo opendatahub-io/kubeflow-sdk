@@ -240,10 +240,15 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 current_step = self.trainer.state.global_step
                 print(f"[Kubeflow] Starting JIT checkpoint at step {current_step}", flush=True)
 
-                # Get rank for distributed training
-                rank = 0
-                if torch.distributed.is_available() and torch.distributed.is_initialized():
-                    rank = torch.distributed.get_rank()
+                # Get rank for distributed training. Fall back to True for single-process
+                # runs or if accelerate is unavailable.
+                try:
+                    from accelerate import PartialState
+
+                    is_main_process = PartialState().is_main_process
+                except Exception:
+                    # accelerate not installed or PartialState unavailable - assume single process
+                    is_main_process = True
 
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
@@ -253,9 +258,12 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
                 # Create sentinel file to mark incomplete checkpoint (only rank 0)
                 sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
-                if rank == 0:
-                    with open(sentinel_file, "w") as f:
-                        f.write(f"Checkpoint started at step {current_step}")
+                if is_main_process:
+                    try:
+                        with open(sentinel_file, "w") as f:
+                            f.write(f"Checkpoint started at step {current_step}")
+                    except Exception as e:
+                        print(f"[Kubeflow] Warning: Failed to write sentinel file: {e}")
 
                 # Checkpoint using dedicated CUDA stream
                 if self.checkpoint_stream is not None:
@@ -274,8 +282,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
                 # Remove sentinel on success (only rank 0)
-                if rank == 0 and os.path.exists(sentinel_file):
-                    os.remove(sentinel_file)
+                if is_main_process and os.path.exists(sentinel_file):
+                    try:
+                        os.remove(sentinel_file)
+                    except Exception as e:
+                        print(f"[Kubeflow] Warning: Failed to remove sentinel file: {e}")
 
                 print(f"[Kubeflow] JIT checkpoint completed at step {current_step}", flush=True)
 
@@ -341,6 +352,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if not output_dir or not os.path.exists(output_dir):
                 return None
 
+            # Determine if this is rank 0 (main process). Fall back to True for single-process
+            # runs or if accelerate is unavailable.
+            try:
+                from accelerate import PartialState
+
+                is_rank_0 = PartialState().is_main_process
+            except Exception:
+                # accelerate not installed or PartialState unavailable - assume single process
+                is_rank_0 = True
+
             checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
             checkpoints = []
 
@@ -352,10 +373,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 checkpoint_path = os.path.join(output_dir, name)
                 incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
 
-                # Delete incomplete checkpoints
+                # Delete incomplete checkpoints (rank 0 only to avoid race condition)
                 if os.path.exists(incomplete_marker):
-                    print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
-                    shutil.rmtree(checkpoint_path)
+                    if is_rank_0:
+                        try:
+                            print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
+                            shutil.rmtree(checkpoint_path)
+                        except Exception as e:
+                            print(f"[Kubeflow] Warning: Failed to delete checkpoint: {e}")
                     continue
 
                 checkpoints.append((int(match.group(1)), checkpoint_path))
