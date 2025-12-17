@@ -52,8 +52,8 @@ The automated workflow will:
 
 1. **Validate & Prepare**:
    - Validate version format matches `vX.Y.Z+rhaiN`
-   - Create release branch if it doesn't exist (e.g., `release-0.2`)
-   - Or update existing release branch with latest from main
+   - Create release branch from main if it doesn't exist (e.g., `release-0.2`)
+   - Or use existing release branch as-is
    - Update `__init__.py` on release branch with rhai version
 
 2. **Build**:

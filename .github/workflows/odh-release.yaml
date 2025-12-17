@@ -65,10 +65,8 @@ jobs:
 
           if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
             echo "Using existing branch: $BRANCH"
-            git fetch origin "$BRANCH":"$BRANCH"
+            git fetch origin "$BRANCH"
             git checkout "$BRANCH"
-            # Merge latest from main
-            git merge --no-edit origin/main || true
           else
             echo "Creating new branch: $BRANCH from main"
             git checkout -B "$BRANCH" "$CURRENT_SHA"
