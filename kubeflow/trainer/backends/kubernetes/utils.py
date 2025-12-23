@@ -375,8 +375,9 @@ def get_trainer_cr_from_custom_trainer(
             trainer.pip_index_urls,
             trainer.packages_to_install,
         )
-    else:
-        # Alternatively, set the Trainer image.
+
+    # Set the TrainJob trainer image if that is set.
+    if trainer.image:
         trainer_cr.image = trainer.image
 
     # Add environment variables to the Trainer.
