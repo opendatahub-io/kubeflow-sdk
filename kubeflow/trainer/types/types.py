@@ -32,6 +32,7 @@ class CustomTrainer:
     Args:
         func (`Callable`): The function that encapsulates the entire model training process.
         func_args (`Optional[dict]`): The arguments to pass to the function.
+        image (`Optional[str]`): The optional container image to use in TrainJob.
         packages_to_install (`Optional[list[str]]`):
             A list of Python packages to install before running the function.
         pip_index_urls (`list[str]`): The PyPI URLs from which to install
@@ -44,6 +45,7 @@ class CustomTrainer:
 
     func: Callable
     func_args: Optional[dict] = None
+    image: Optional[str] = None
     packages_to_install: Optional[list[str]] = None
     pip_index_urls: list[str] = field(
         default_factory=lambda: list(constants.DEFAULT_PIP_INDEX_URLS)
@@ -459,14 +461,15 @@ class TrainJobTemplate:
 
     Args:
         trainer (`CustomTrainer`): Configuration for a CustomTrainer.
-        runtime (`Optional[Runtime]`): Optional, reference to one of the existing runtimes. Defaults
-            to the torch-distributed runtime if not provided.
+        runtime (`Optional[Union[str, Runtime]]`): Optional, reference to one of the existing
+            runtimes. It can accept the runtime name or Runtime object from the `get_runtime()` API.
+            Defaults to the torch-distributed runtime if not provided.
         initializer (`Optional[Initializer]`): Optional configuration for the dataset and model
             initializers.
     """
 
     trainer: CustomTrainer
-    runtime: Optional[Runtime] = None
+    runtime: Optional[Union[str, Runtime]] = None
     initializer: Optional[Initializer] = None
 
     def keys(self):
