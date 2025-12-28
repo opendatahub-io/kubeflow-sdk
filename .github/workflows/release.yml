@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - 'release-*'
+    paths:
+      - 'kubeflow/__init__.py'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  prepare:
+    name: Prepare release branch
+    if: ${{ github.repository == 'kubeflow/sdk' && !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release-') && github.actor == 'github-actions[bot]') }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+      branch: ${{ steps.vars.outputs.branch }}
+      is-prerelease: ${{ steps.vars.outputs.is-prerelease }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Check version and branch
+        id: vars
+        run: |
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' kubeflow/__init__.py)
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          BRANCH=release-$MAJOR_MINOR
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+
+          if [[ "$VERSION" =~ rc[0-9]+$ ]]; then
+            echo "is-prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is-prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Ensure release branch exists and contains version bump
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.vars.outputs.version }}"
+          BRANCH="${{ steps.vars.outputs.branch }}"
+          MAIN_SHA="${{ github.sha }}"
+
+          if [[ "${GITHUB_REF_NAME}" == "$BRANCH" ]]; then
+            echo "Triggered on $BRANCH. Skipping cherry-pick from main."
+            exit 0
+          fi
+
+          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
+            echo "Using existing branch: $BRANCH"
+            git fetch origin "$BRANCH":"$BRANCH"
+            git checkout "$BRANCH"
+            if git merge-base --is-ancestor "$MAIN_SHA" "$BRANCH"; then
+              echo "Commit $MAIN_SHA already present in $BRANCH. Skipping cherry-pick."
+            else
+              if ! git cherry-pick -x "$MAIN_SHA"; then
+                echo "Cherry-pick failed. Please resolve manually on $BRANCH." >&2
+                exit 1
+              fi
+            fi
+          else
+            echo "Creating new branch: $BRANCH from main@$MAIN_SHA"
+            git checkout -B "$BRANCH" "$MAIN_SHA"
+          fi
+          git push origin "$BRANCH"
+
+  build:
+    name: Build package
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.branch }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Setup build environment
+        run: |
+          make verify
+
+      - name: Run unit tests
+        run: |
+          make test-python
+
+      - name: Verify version
+        run: |
+          TAG_VERSION="${{ needs.prepare.outputs.version }}"
+          CODE_VERSION="$(python -c "import kubeflow; print(kubeflow.__version__)")"
+          echo "Tag version: $TAG_VERSION"
+          echo "Code version: $CODE_VERSION"
+          if [[ "$TAG_VERSION" != "$CODE_VERSION" ]]; then
+            echo "Version mismatch"; exit 1; fi
+          echo "Version verified: $TAG_VERSION"
+
+      - name: Build and validate package
+        run: |
+          uv build
+          uvx twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: dist-${{ needs.prepare.outputs.version }}
+          path: dist/
+
+  create-tag:
+    name: Create and push tag
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.branch }}
+      - name: Create tag
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          if git ls-remote --tags origin "$VERSION" | grep -q "refs/tags/$VERSION"; then
+            echo "Tag $VERSION already exists. Skipping"; exit 0; fi
+          git tag "$VERSION"
+          git push origin "$VERSION"
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [prepare, build, create-tag]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://pypi.org/project/kubeflow/
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: dist-${{ needs.prepare.outputs.version }}
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          verbose: true
+
+  github-release:
+    name: Create GitHub Release
+    needs: [prepare, build, create-tag, publish-pypi]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/kubeflow/sdk/releases
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.branch }}
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: dist-${{ needs.prepare.outputs.version }}
+          path: dist/
+      - name: Extract changelog
+        if: needs.prepare.outputs.is-prerelease != 'true'
+        id: changelog
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          CHANGELOG_FILE="CHANGELOG/CHANGELOG-${MAJOR_MINOR}.md"
+          set -euo pipefail
+          [[ -f "$CHANGELOG_FILE" ]] || { echo "ERROR: $CHANGELOG_FILE not found" >&2; exit 1; }
+          HEADER_REGEX="^# \\[${VERSION//./\\.}\\]"
+          SECTION=$(sed -n "/$HEADER_REGEX/,\$p" "$CHANGELOG_FILE" | tail -n +2)
+          [[ -n "$SECTION" ]] || { echo "ERROR: No changelog section for $VERSION in $CHANGELOG_FILE" >&2; exit 1; }
+          NEXT_VERSION=$(echo "$SECTION" | grep -m1 "^# \\[[0-9]" || true)
+          if [[ -n "$NEXT_VERSION" ]]; then
+            CHANGELOG=$(echo "$SECTION" | sed -n "1,/^# \\[[0-9]/p" | sed '1d;$d')
+          else
+            CHANGELOG=$(echo "$SECTION" | sed '1d')
+          fi
+          [[ -n "$CHANGELOG" ]] || { echo "ERROR: Empty changelog body for $VERSION in $CHANGELOG_FILE" >&2; exit 1; }
+          {
+            echo "changelog<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: ${{ needs.prepare.outputs.version }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: ${{ needs.prepare.outputs.is-prerelease == 'true' }}
+          generate_release_notes: false
+          files: |
+            dist/*
