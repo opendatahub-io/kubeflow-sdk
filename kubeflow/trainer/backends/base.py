@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import abc
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Optional, Union
 
 from kubeflow.trainer.constants import constants
@@ -74,6 +74,7 @@ class RuntimeBackend(abc.ABC):
         status: set[str] = {constants.TRAINJOB_COMPLETE},
         timeout: int = 600,
         polling_interval: int = 2,
+        callbacks: Optional[list[Callable[[types.TrainJob], None]]] = None,
     ) -> types.TrainJob:
         raise NotImplementedError()
 

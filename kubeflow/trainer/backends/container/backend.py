@@ -37,7 +37,7 @@ Key behaviors:
   Docker/Podman backends, but with automatic runtime detection.
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 import logging
 import os
@@ -613,6 +613,7 @@ class ContainerBackend(RuntimeBackend):
         status: set[str] = {constants.TRAINJOB_COMPLETE},
         timeout: int = 600,
         polling_interval: int = 2,
+        callbacks: Optional[list[Callable[[types.TrainJob], None]]] = None,
     ) -> types.TrainJob:
         import time
 
@@ -620,6 +621,12 @@ class ContainerBackend(RuntimeBackend):
         while time.time() < end:
             tj = self.get_job(name)
             logger.debug(f"TrainJob {name}, status {tj.status}")
+
+            # Invoke callbacks if provided
+            if callbacks:
+                for callback in callbacks:
+                    callback(tj)
+
             if tj.status in status:
                 return tj
             if constants.TRAINJOB_FAILED not in status and tj.status == constants.TRAINJOB_FAILED:

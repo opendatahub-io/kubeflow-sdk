@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import logging
 import multiprocessing
 import random
@@ -268,6 +268,7 @@ class KubernetesBackend(RuntimeBackend):
         status: set[str] = {constants.OPTIMIZATION_JOB_COMPLETE},
         timeout: int = 3600,
         polling_interval: int = 2,
+        callbacks: Optional[list[Callable[[OptimizationJob], None]]] = None,
     ) -> OptimizationJob:
         job_statuses = {
             constants.OPTIMIZATION_JOB_CREATED,
@@ -289,6 +290,11 @@ class KubernetesBackend(RuntimeBackend):
             logger.debug(
                 f"{constants.OPTIMIZATION_JOB_KIND} {name}, status {optimization_job.status}"
             )
+
+            # Invoke callbacks if provided
+            if callbacks:
+                for callback in callbacks:
+                    callback(optimization_job)
 
             if (
                 constants.OPTIMIZATION_JOB_FAILED not in status

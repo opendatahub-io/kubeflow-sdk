@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import logging
 from typing import Any, Optional
 
@@ -185,6 +185,7 @@ class OptimizerClient:
         status: set[str] = {constants.OPTIMIZATION_JOB_COMPLETE},
         timeout: int = 3600,
         polling_interval: int = 2,
+        callbacks: Optional[list[Callable[[OptimizationJob], None]]] = None,
     ) -> OptimizationJob:
         """Wait for an OptimizationJob to reach a desired status.
 
@@ -195,6 +196,8 @@ class OptimizerClient:
             timeout: Maximum number of seconds to wait for the OptimizationJob to reach one of the
                 expected statuses.
             polling_interval: The polling interval in seconds to check OptimizationJob status.
+            callbacks: Optional list of callback functions to be invoked after each polling
+                interval. Each callback should accept a single argument: the OptimizationJob object.
 
         Returns:
             An OptimizationJob object that reaches the desired status.
@@ -210,6 +213,7 @@ class OptimizerClient:
             status=status,
             timeout=timeout,
             polling_interval=polling_interval,
+            callbacks=callbacks,
         )
 
     def delete_job(self, name: str):

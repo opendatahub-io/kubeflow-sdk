@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import copy
 import logging
 import multiprocessing
@@ -352,6 +352,7 @@ class KubernetesBackend(RuntimeBackend):
         status: set[str] = {constants.TRAINJOB_COMPLETE},
         timeout: int = 600,
         polling_interval: int = 2,
+        callbacks: Optional[list[Callable[[types.TrainJob], None]]] = None,
     ) -> types.TrainJob:
         job_statuses = {
             constants.TRAINJOB_CREATED,
@@ -371,6 +372,11 @@ class KubernetesBackend(RuntimeBackend):
             # Check the status after event is generated for the TrainJob's Pods.
             trainjob = self.get_job(name)
             logger.debug(f"TrainJob {name}, status {trainjob.status}")
+
+            # Invoke callbacks if provided
+            if callbacks:
+                for callback in callbacks:
+                    callback(trainjob)
 
             # Raise an error if TrainJob is Failed and it is not the expected status.
             if (
