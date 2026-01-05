@@ -40,6 +40,14 @@ class CustomTrainer:
             are extra-index-urls.
         num_nodes (`Optional[int]`): The number of nodes to use for training.
         resources_per_node (`Optional[dict]`): The computing resources to allocate per node.
+          ```python
+          resources_per_node = {"gpu": 4, "cpu": 5, "memory": "10G"}
+          ```
+         If your compute supports fractional GPUs (e.g. multi-instance GPU),
+            you can set the resources as follows (request 1 GPU slice of 5Gb) :
+          ```python
+          resources_per_node = {"mig-1g.5gb": 1}
+          ```
         env (`Optional[dict[str, str]]`): The environment variables to set in the training nodes.
     """
 
@@ -65,6 +73,14 @@ class CustomTrainerContainer:
         image (`str`): The container image that encapsulates the entire model training process.
         num_nodes (`Optional[int]`): The number of nodes to use for training.
         resources_per_node (`Optional[dict]`): The computing resources to allocate per node.
+          ```python
+          resources_per_node = {"gpu": 4, "cpu": 5, "memory": "10G"}
+          ```
+         If your compute supports fractional GPUs (e.g. multi-instance GPU),
+            you can set the resources as follows (request 1 GPU slice of 5Gb) :
+          ```python
+          resources_per_node = {"mig-1g.5gb": 1}
+          ```
         env (`Optional[dict[str, str]]`): The environment variables to set in the training nodes.
     """
 
