@@ -413,6 +413,62 @@ class KubernetesBackend(RuntimeBackend):
 
         logger.debug(f"{constants.TRAINJOB_KIND} {self.namespace}/{name} has been deleted")
 
+    def get_job_events(self, name: str) -> list[types.Event]:
+        # Get all pod names related to this TrainJob
+        trainjob = self.get_job(name)
+
+        # Create set of all TrainJob-related resource names
+        trainjob_resources = {name}
+        for step in trainjob.steps:
+            trainjob_resources.add(step.name)
+            if step.pod_name:
+                trainjob_resources.add(step.pod_name)
+
+        events = []
+        try:
+            # Retrieve events from the namespace
+            event_response = self.core_api.list_namespaced_event(
+                namespace=self.namespace,
+                async_req=True,
+            ).get(common_constants.DEFAULT_TIMEOUT)
+
+            # Convert to event list
+            event_list = models.IoK8sApiCoreV1EventList.from_dict(event_response.to_dict())
+
+            if not event_list:
+                return events
+
+            # Filter events related to this TrainJob or its pods
+            for event in event_list.items:
+                if not (event.metadata and event.involved_object and event.first_timestamp):
+                    continue
+
+                involved_object = event.involved_object
+
+                # Check if event is related to TrainJob resources
+                if (
+                    involved_object.kind in {constants.TRAINJOB_KIND, "JobSet", "Job", "Pod"}
+                    and involved_object.name in trainjob_resources
+                ):
+                    events.append(
+                        types.Event(
+                            involved_object_kind=involved_object.kind,
+                            involved_object_name=involved_object.name,
+                            message=event.message or "",
+                            reason=event.reason or "",
+                            event_time=event.first_timestamp,
+                        )
+                    )
+
+            # Sort events by first occurrence time
+            events.sort(key=lambda e: e.event_time)
+
+            return events
+        except multiprocessing.TimeoutError as e:
+            raise TimeoutError(
+                f"Timeout getting {constants.TRAINJOB_KIND} events: {self.namespace}/{name}"
+            ) from e
+
     def __get_runtime_from_cr(
         self,
         runtime_cr: models.TrainerV1alpha1ClusterTrainingRuntime,
