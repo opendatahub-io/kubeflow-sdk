@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import copy
 import logging
 import multiprocessing
@@ -175,7 +175,7 @@ class KubernetesBackend(RuntimeBackend):
 
     def train(
         self,
-        runtime: Optional[types.Runtime] = None,
+        runtime: Optional[Union[str, types.Runtime]] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
             Union[
@@ -187,9 +187,6 @@ class KubernetesBackend(RuntimeBackend):
         ] = None,
         options: Optional[list] = None,
     ) -> str:
-        if runtime is None:
-            runtime = self.get_runtime(constants.TORCH_RUNTIME)
-
         # Process options to extract configuration
         job_spec = {}
         labels = None
@@ -368,6 +365,7 @@ class KubernetesBackend(RuntimeBackend):
         status: set[str] = {constants.TRAINJOB_COMPLETE},
         timeout: int = 600,
         polling_interval: int = 2,
+        callbacks: Optional[list[Callable[[types.TrainJob], None]]] = None,
     ) -> types.TrainJob:
         job_statuses = {
             constants.TRAINJOB_CREATED,
@@ -387,6 +385,11 @@ class KubernetesBackend(RuntimeBackend):
             # Check the status after event is generated for the TrainJob's Pods.
             trainjob = self.get_job(name)
             logger.debug(f"TrainJob {name}, status {trainjob.status}")
+
+            # Invoke callbacks if provided
+            if callbacks:
+                for callback in callbacks:
+                    callback(trainjob)
 
             # Raise an error if TrainJob is Failed and it is not the expected status.
             if (
@@ -422,6 +425,62 @@ class KubernetesBackend(RuntimeBackend):
             ) from e
 
         logger.debug(f"{constants.TRAINJOB_KIND} {self.namespace}/{name} has been deleted")
+
+    def get_job_events(self, name: str) -> list[types.Event]:
+        # Get all pod names related to this TrainJob
+        trainjob = self.get_job(name)
+
+        # Create set of all TrainJob-related resource names
+        trainjob_resources = {name}
+        for step in trainjob.steps:
+            trainjob_resources.add(step.name)
+            if step.pod_name:
+                trainjob_resources.add(step.pod_name)
+
+        events = []
+        try:
+            # Retrieve events from the namespace
+            event_response = self.core_api.list_namespaced_event(
+                namespace=self.namespace,
+                async_req=True,
+            ).get(common_constants.DEFAULT_TIMEOUT)
+
+            # Convert to event list
+            event_list = models.IoK8sApiCoreV1EventList.from_dict(event_response.to_dict())
+
+            if not event_list:
+                return events
+
+            # Filter events related to this TrainJob or its pods
+            for event in event_list.items:
+                if not (event.metadata and event.involved_object and event.first_timestamp):
+                    continue
+
+                involved_object = event.involved_object
+
+                # Check if event is related to TrainJob resources
+                if (
+                    involved_object.kind in {constants.TRAINJOB_KIND, "JobSet", "Job", "Pod"}
+                    and involved_object.name in trainjob_resources
+                ):
+                    events.append(
+                        types.Event(
+                            involved_object_kind=involved_object.kind,
+                            involved_object_name=involved_object.name,
+                            message=event.message or "",
+                            reason=event.reason or "",
+                            event_time=event.first_timestamp,
+                        )
+                    )
+
+            # Sort events by first occurrence time
+            events.sort(key=lambda e: e.event_time)
+
+            return events
+        except multiprocessing.TimeoutError as e:
+            raise TimeoutError(
+                f"Timeout getting {constants.TRAINJOB_KIND} events: {self.namespace}/{name}"
+            ) from e
 
     def __get_runtime_from_cr(
         self,
@@ -601,7 +660,7 @@ class KubernetesBackend(RuntimeBackend):
 
     def _get_trainjob_spec(
         self,
-        runtime: Optional[types.Runtime] = None,
+        runtime: Optional[Union[str, types.Runtime]] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
             Union[
@@ -617,8 +676,11 @@ class KubernetesBackend(RuntimeBackend):
         pod_template_overrides: Optional[models.IoK8sApiCoreV1PodTemplateSpec] = None,
     ) -> models.TrainerV1alpha1TrainJobSpec:
         """Get TrainJob spec from the given parameters"""
+
         if runtime is None:
-            runtime = self.get_runtime(constants.TORCH_RUNTIME)
+            runtime = self.get_runtime(constants.DEFAULT_TRAINING_RUNTIME)
+        elif isinstance(runtime, str):
+            runtime = self.get_runtime(runtime)
 
         # Check if trainer is RHAI trainer
         is_rhai_trainer = trainer and isinstance(trainer, get_args(RHAITrainer))
