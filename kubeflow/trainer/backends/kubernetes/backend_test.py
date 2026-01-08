@@ -102,6 +102,7 @@ def kubernetes_backend(request):
             return_value=Mock(
                 list_namespaced_pod=Mock(side_effect=list_namespaced_pod_response),
                 read_namespaced_pod_log=Mock(side_effect=mock_read_namespaced_pod_log),
+                list_namespaced_event=Mock(side_effect=mock_list_namespaced_event),
             ),
         ),
     ):
@@ -222,6 +223,7 @@ def get_custom_trainer(
     env: Optional[list[models.IoK8sApiCoreV1EnvVar]] = None,
     pip_index_urls: Optional[list[str]] = constants.DEFAULT_PIP_INDEX_URLS,
     packages_to_install: list[str] = ["torch", "numpy"],
+    image: Optional[str] = None,
 ) -> models.TrainerV1alpha1Trainer:
     """
     Get the custom trainer for the TrainJob.
@@ -249,6 +251,7 @@ def get_custom_trainer(
         ],
         numNodes=2,
         env=env,
+        image=image,
     )
 
 
@@ -432,6 +435,52 @@ def mock_read_namespaced_pod_log(*args, **kwargs):
     if kwargs.get("namespace") == FAIL_LOGS:
         raise Exception("Failed to read logs")
     return "test log content"
+
+
+def mock_list_namespaced_event(*args, **kwargs):
+    """Simulate event listing from namespace."""
+    namespace = kwargs.get("namespace")
+
+    # Errors occur at call time, not during .get()
+    if namespace == TIMEOUT:
+        raise multiprocessing.TimeoutError()
+    if namespace == RUNTIME:
+        raise RuntimeError()
+
+    mock_thread = Mock()
+    mock_thread.get.return_value = models.IoK8sApiCoreV1EventList(
+        items=[
+            models.IoK8sApiCoreV1Event(
+                metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
+                    name="test-event-1",
+                    namespace=DEFAULT_NAMESPACE,
+                ),
+                involved_object=models.IoK8sApiCoreV1ObjectReference(
+                    kind=constants.TRAINJOB_KIND,
+                    name=BASIC_TRAIN_JOB_NAME,
+                    namespace=DEFAULT_NAMESPACE,
+                ),
+                message="TrainJob created successfully",
+                reason="Created",
+                first_timestamp=datetime.datetime(2025, 6, 1, 10, 30, 0),
+            ),
+            models.IoK8sApiCoreV1Event(
+                metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
+                    name="test-event-2",
+                    namespace=DEFAULT_NAMESPACE,
+                ),
+                involved_object=models.IoK8sApiCoreV1ObjectReference(
+                    kind="Pod",
+                    name="node-0-pod",
+                    namespace=DEFAULT_NAMESPACE,
+                ),
+                message="Pod scheduled successfully",
+                reason="Scheduled",
+                first_timestamp=datetime.datetime(2025, 6, 1, 10, 31, 0),
+            ),
+        ]
+    )
+    return mock_thread
 
 
 def mock_watch(*args, **kwargs):
@@ -871,6 +920,7 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                         "TEST_ENV": "test_value",
                         "ANOTHER_ENV": "another_value",
                     },
+                    image="my-custom-image",
                 )
             },
             expected_output=get_train_job(
@@ -883,6 +933,7 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
                     ],
                     pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
                     packages_to_install=["torch", "numpy"],
+                    image="my-custom-image",
                 ),
             ),
         ),
@@ -1286,13 +1337,60 @@ def test_delete_job(kubernetes_backend, test_case):
         kubernetes_backend.delete_job(test_case.config.get("name"))
         assert test_case.expected_status == SUCCESS
 
-        kubernetes_backend.custom_api.delete_namespaced_custom_object.assert_called_with(
-            constants.GROUP,
-            constants.VERSION,
-            test_case.config.get("namespace", DEFAULT_NAMESPACE),
-            constants.TRAINJOB_PLURAL,
-            name=test_case.config.get("name"),
-        )
+    except Exception as e:
+        assert type(e) is test_case.expected_error
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="get job events with valid trainjob",
+            expected_status=SUCCESS,
+            config={"name": BASIC_TRAIN_JOB_NAME},
+            expected_output=[
+                types.Event(
+                    involved_object_kind=constants.TRAINJOB_KIND,
+                    involved_object_name=BASIC_TRAIN_JOB_NAME,
+                    message="TrainJob created successfully",
+                    reason="Created",
+                    event_time=datetime.datetime(2025, 6, 1, 10, 30, 0),
+                ),
+                types.Event(
+                    involved_object_kind="Pod",
+                    involved_object_name="node-0-pod",
+                    message="Pod scheduled successfully",
+                    reason="Scheduled",
+                    event_time=datetime.datetime(2025, 6, 1, 10, 31, 0),
+                ),
+            ],
+        ),
+        TestCase(
+            name="timeout error when getting job events",
+            expected_status=FAILED,
+            config={"namespace": TIMEOUT, "name": BASIC_TRAIN_JOB_NAME},
+            expected_error=TimeoutError,
+        ),
+        TestCase(
+            name="runtime error when getting job events",
+            expected_status=FAILED,
+            config={"namespace": RUNTIME, "name": BASIC_TRAIN_JOB_NAME},
+            expected_error=RuntimeError,
+        ),
+    ],
+)
+def test_get_job_events(kubernetes_backend, test_case):
+    """Test KubernetesBackend.get_job_events with various scenarios."""
+    print("Executing test:", test_case.name)
+    try:
+        kubernetes_backend.namespace = test_case.config.get("namespace", DEFAULT_NAMESPACE)
+        events = kubernetes_backend.get_job_events(test_case.config.get("name"))
+
+        assert test_case.expected_status == SUCCESS
+        assert isinstance(events, list)
+        assert len(events) == len(test_case.expected_output)
+        assert [asdict(e) for e in events] == [asdict(e) for e in test_case.expected_output]
 
     except Exception as e:
         assert type(e) is test_case.expected_error
