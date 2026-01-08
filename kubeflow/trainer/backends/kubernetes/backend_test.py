@@ -881,7 +881,6 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
             ),
         ),
         TestCase(
-<<<<<<< HEAD
             name="valid flow with experimental TrainingHub trainer (SFT)",
             expected_status=SUCCESS,
             config={
@@ -909,9 +908,6 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
         ),
         TestCase(
             name="valid flow with custom trainer and env vars",
-=======
-            name="valid flow with custom trainer that has env and image",
->>>>>>> upstream/main
             expected_status=SUCCESS,
             config={
                 "trainer": types.CustomTrainer(
