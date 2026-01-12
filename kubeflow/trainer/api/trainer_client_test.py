@@ -51,8 +51,12 @@ from kubeflow.trainer.backends.localprocess.types import LocalProcessBackendConf
 def test_backend_selection(test_case):
     """Test TrainerClient backend selection logic."""
     if test_case["use_k8s_mocks"]:
+        from kubernetes import client
+
+        mock_api_client = Mock(spec=client.ApiClient)
+
         with (
-            patch("kubernetes.config.load_kube_config"),
+            patch("kubeflow.common.auth.get_kubernetes_client", return_value=mock_api_client),
             patch("kubernetes.client.CustomObjectsApi") as mock_custom_api,
             patch("kubernetes.client.CoreV1Api") as mock_core_api,
         ):
@@ -60,13 +64,13 @@ def test_backend_selection(test_case):
             mock_core_api.return_value = Mock()
 
             if test_case["backend_config"]:
-                client = TrainerClient(backend_config=test_case["backend_config"])
+                client_instance = TrainerClient(backend_config=test_case["backend_config"])
             else:
-                client = TrainerClient()
+                client_instance = TrainerClient()
 
-            backend_name = client.backend.__class__.__name__
+            backend_name = client_instance.backend.__class__.__name__
             assert backend_name == test_case["expected_backend"]
     else:
-        client = TrainerClient(backend_config=test_case["backend_config"])
-        backend_name = client.backend.__class__.__name__
+        client_instance = TrainerClient(backend_config=test_case["backend_config"])
+        backend_name = client_instance.backend.__class__.__name__
         assert backend_name == test_case["expected_backend"]

@@ -79,8 +79,12 @@ TRAIN_JOB_WITH_CUSTOM_TRAINER = "train-job-with-custom-trainer"
 @pytest.fixture
 def kubernetes_backend(request):
     """Provide a KubernetesBackend with mocked Kubernetes APIs."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
     with (
-        patch("kubernetes.config.load_kube_config", return_value=None),
+        patch("kubeflow.common.auth.get_kubernetes_client", return_value=mock_api_client),
         patch(
             "kubernetes.client.CustomObjectsApi",
             return_value=Mock(
@@ -1395,3 +1399,306 @@ def test_get_job_events(kubernetes_backend, test_case):
     except Exception as e:
         assert type(e) is test_case.expected_error
     print("test execution complete")
+
+
+# --------------------------
+# Authentication Tests
+# --------------------------
+
+
+def test_auth_backward_compatibility_config_file():
+    """Test that legacy config_file parameter still works with deprecation warning."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(config_file="/path/to/kubeconfig")
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert backend.namespace == "default"
+
+
+def test_auth_backward_compatibility_context():
+    """Test that legacy context parameter still works with deprecation warning."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(context="my-context")
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert backend.namespace == "default"
+
+
+def test_auth_explicit_method_oidc():
+    """Test explicit OIDC authentication method."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(
+            auth_method="oidc",
+            oidc_issuer="https://issuer.example.com",
+            oidc_client_id="client-id",
+            oidc_client_secret="client-secret",
+        )
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert backend.namespace == "default"
+
+
+def test_auth_explicit_method_openshift():
+    """Test explicit OpenShift OAuth authentication method."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(auth_method="openshift")
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert backend.namespace == "default"
+
+
+def test_auth_client_configuration_override():
+    """Test that client_configuration bypasses kube-authkit."""
+    from kubernetes import client
+
+    mock_client_config = Mock(spec=client.Configuration)
+    mock_api_client = Mock()
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client", return_value=mock_api_client),
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        cfg = KubernetesBackendConfig(client_configuration=mock_client_config)
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called (it will use client_configuration internally)
+        assert backend.namespace == "default"
+
+
+def test_auth_auto_detection():
+    """Test auto-detection when no parameters are provided."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig()
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert backend.namespace == "default"
+
+
+def test_auth_device_flow_flag():
+    """Test OIDC with device flow flag."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(
+            auth_method="oidc",
+            oidc_issuer="https://issuer.example.com",
+            oidc_client_id="client-id",
+            oidc_client_secret="client-secret",
+            use_device_flow=True,
+        )
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert cfg.use_device_flow is True
+
+
+def test_auth_keyring_flag():
+    """Test authentication with keyring storage flag."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(
+            auth_method="oidc",
+            oidc_issuer="https://issuer.example.com",
+            oidc_client_id="client-id",
+            oidc_client_secret="client-secret",
+            use_keyring=True,
+        )
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert cfg.use_keyring is True
+
+
+def test_auth_openshift_with_token():
+    """Test OpenShift OAuth with explicit token."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(
+            auth_method="openshift",
+            k8s_api_host="https://api.cluster.example.com:6443",
+            openshift_token="sha256~test-token",
+        )
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert cfg.openshift_token == "sha256~test-token"
+        assert cfg.k8s_api_host == "https://api.cluster.example.com:6443"
+
+
+def test_auth_kubeconfig_path():
+    """Test authentication with custom kubeconfig path."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(
+            auth_method="kubeconfig",
+            kubeconfig_path="/custom/path/to/kubeconfig",
+        )
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert cfg.kubeconfig_path == "/custom/path/to/kubeconfig"
+
+
+def test_auth_oidc_with_scopes():
+    """Test OIDC authentication with custom scopes."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(
+            auth_method="oidc",
+            oidc_issuer="https://issuer.example.com",
+            oidc_client_id="client-id",
+            oidc_client_secret="client-secret",
+            scopes=["openid", "profile", "email"],
+            oidc_callback_port=9090,
+        )
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert cfg.scopes == ["openid", "profile", "email"]
+        assert cfg.oidc_callback_port == 9090
+
+
+def test_auth_with_custom_ca_cert():
+    """Test authentication with custom CA certificate."""
+    from kubernetes import client
+
+    mock_api_client = Mock(spec=client.ApiClient)
+
+    with (
+        patch("kubeflow.common.auth.get_kubernetes_client") as mock_get_client,
+        patch("kubeflow.common.utils.get_default_target_namespace", return_value="default"),
+        patch("kubernetes.client.CustomObjectsApi"),
+        patch("kubernetes.client.CoreV1Api"),
+    ):
+        mock_get_client.return_value = mock_api_client
+
+        cfg = KubernetesBackendConfig(
+            auth_method="kubeconfig",
+            ca_cert="/path/to/ca-bundle.crt",
+        )
+        backend = KubernetesBackend(cfg)
+
+        # Verify get_kubernetes_client was called
+        mock_get_client.assert_called_once_with(cfg)
+        assert cfg.ca_cert == "/path/to/ca-bundle.crt"

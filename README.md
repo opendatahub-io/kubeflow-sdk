@@ -109,6 +109,108 @@ optimization_id = OptimizerClient().optimize(
 print(f"OptimizationJob created: {optimization_id}")
 ```
 
+## Authentication
+
+The Kubeflow SDK supports multiple authentication methods via the `kube-authkit` library, enabling you to work with various Kubernetes and OpenShift environments.
+
+### Auto-Detection (Default)
+
+By default, the SDK auto-detects the best authentication method for your environment:
+
+```python
+from kubeflow.trainer import TrainerClient
+
+# Automatically uses kubeconfig from ~/.kube/config or in-cluster service account
+client = TrainerClient()
+```
+
+### Kubeconfig
+
+Explicitly use kubeconfig authentication:
+
+```python
+from kubeflow.trainer import TrainerClient
+from kubeflow.common.types import KubernetesBackendConfig
+
+client = TrainerClient(
+    backend_config=KubernetesBackendConfig(
+        auth_method="kubeconfig"
+    )
+)
+```
+
+### In-Cluster (Service Account)
+
+When running inside a Kubernetes pod:
+
+```python
+from kubeflow.trainer import TrainerClient
+from kubeflow.common.types import KubernetesBackendConfig
+
+client = TrainerClient(
+    backend_config=KubernetesBackendConfig(
+        auth_method="incluster"
+    )
+)
+```
+
+### OIDC Authentication
+
+For OIDC/OAuth2 providers:
+
+```python
+from kubeflow.trainer import TrainerClient
+from kubeflow.common.types import KubernetesBackendConfig
+
+client = TrainerClient(
+    backend_config=KubernetesBackendConfig(
+        auth_method="oidc",
+        oidc_issuer="https://your-issuer.example.com",
+        oidc_client_id="your-client-id",
+        oidc_client_secret="your-client-secret",
+        use_device_flow=False,  # Set to True for CLI/headless environments
+        use_keyring=True,       # Persist tokens in system keyring
+    )
+)
+```
+
+### OpenShift OAuth
+
+For OpenShift clusters with token-based authentication:
+
+```python
+from kubeflow.trainer import TrainerClient
+from kubeflow.common.types import KubernetesBackendConfig
+
+# Option 1: With explicit token
+client = TrainerClient(
+    backend_config=KubernetesBackendConfig(
+        auth_method="openshift",
+        k8s_api_host="https://api.cluster.example.com:6443",
+        openshift_token="sha256~your-token-here"
+    )
+)
+
+# Option 2: Interactive OAuth flow
+client = TrainerClient(
+    backend_config=KubernetesBackendConfig(
+        auth_method="openshift",
+        k8s_api_host="https://api.cluster.example.com:6443"
+    )
+)
+
+# Option 3: Using environment variable
+# export OPENSHIFT_TOKEN="sha256~your-token-here"
+client = TrainerClient(
+    backend_config=KubernetesBackendConfig(
+        auth_method="openshift",
+        k8s_api_host="https://api.cluster.example.com:6443"
+    )
+)
+```
+
+For more details, see the [Authentication Guide](docs/guides/authentication.md).
+
 ## Local Development
 
 Kubeflow Trainer client supports local development without needing a Kubernetes cluster.
