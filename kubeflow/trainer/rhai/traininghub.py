@@ -608,10 +608,14 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
 
         except ValueError as e:
             print("Configuration error:", e, flush=True)
+            # Propagate configuration errors so the pod fails
+            raise
         except Exception as e:
             import traceback
             print("[PY] Training failed with error:", e, flush=True)
             traceback.print_exc()
+            # Propagate errors so the pod fails
+            raise
 
     """).format(algo=algorithm_name, algo_upper=algorithm_name.upper())
 

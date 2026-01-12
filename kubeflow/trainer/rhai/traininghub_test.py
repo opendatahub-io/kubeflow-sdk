@@ -515,6 +515,79 @@ def test_instrumentation_wrapper_explicit_bind_address():
     print("test execution complete")
 
 
+def _install_dummy_training_hub(raises: Exception) -> None:
+    """Install a dummy training_hub module in sys.modules for wrapper exec().
+
+    The wrapper imports `from training_hub import <algo>` and calls it.
+    We provide an implementation that raises the supplied exception to
+    verify the wrapper re-raises and surfaces failures.
+    """
+    import sys
+    import types
+
+    module = types.ModuleType("training_hub")
+
+    def sft(**kwargs):  # type: ignore[unused-argument]
+        raise raises
+
+    def osft(**kwargs):  # type: ignore[unused-argument]
+        raise raises
+
+    module.sft = sft  # type: ignore[attr-defined]
+    module.osft = osft  # type: ignore[attr-defined]
+    sys.modules["training_hub"] = module
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="sft ValueError is re-raised via CR script",
+            expected_status="failed",
+            config={"algorithm": "sft", "exception": ValueError("bad config")},
+            expected_error=ValueError,
+            expected_output="Configuration error:",
+        ),
+        TestCase(
+            name="sft RuntimeError is re-raised via CR script",
+            expected_status="failed",
+            config={"algorithm": "sft", "exception": RuntimeError("boom")},
+            expected_error=RuntimeError,
+            expected_output="Training failed with error:",
+        ),
+    ],
+)
+def test_traininghub_wrapper_reraises_failure(test_case: TestCase, capsys):
+    """Generate wrapper code and assert it re-raises exceptions."""
+    print(f"Executing test: {test_case.name}")
+
+    from kubeflow.trainer.rhai.traininghub import _render_algorithm_wrapper
+
+    # Arrange: fake training_hub module that raises
+    _install_dummy_training_hub(test_case.config["exception"])
+
+    # Generate the self-contained Python wrapper that the SDK injects into the container
+    # command. Executing this code simulates what actually runs inside the training pod
+    # (without the surrounding bash heredoc). The dummy training_hub installed above
+    # ensures the selected algorithm raises so we can assert failure propagation.
+    code = _render_algorithm_wrapper(test_case.config["algorithm"], {"ckpt_output_dir": "/tmp"})
+
+    # Act / Assert
+    # Execute the generated wrapper code in-process. Because we installed a dummy
+    # training_hub module that raises, the wrapper should re-raise the same exception.
+    # This validates failure propagation (so the container exits non‑zero in real runs).
+    with pytest.raises(test_case.expected_error):
+        exec(code, {})  # nosec: B102 - executing generated test-only code
+
+    # Additionally, verify that the wrapper printed the expected human-readable
+    # error message (useful for debugging in container logs).
+    out, err = capsys.readouterr()
+    combined = out + err
+    assert test_case.expected_output in combined
+
+    print("test execution complete")
+
+
 def test_instrumentation_wrapper_oserror_handling():
     """Test that wrapper has OSError handling for port binding issues."""
     print("Executing test: OSError handling for server start")
