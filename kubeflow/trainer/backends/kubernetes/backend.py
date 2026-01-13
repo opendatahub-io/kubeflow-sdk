@@ -24,8 +24,9 @@ from typing import Any, Optional, Union, get_args
 import uuid
 
 from kubeflow_trainer_api import models
-from kubernetes import client, config, watch
+from kubernetes import client, watch
 
+import kubeflow.common.auth as common_auth
 import kubeflow.common.constants as common_constants
 from kubeflow.common.types import KubernetesBackendConfig
 import kubeflow.common.utils as common_utils
@@ -46,15 +47,9 @@ class KubernetesBackend(RuntimeBackend):
         if cfg.namespace is None:
             cfg.namespace = common_utils.get_default_target_namespace(cfg.context)
 
-        # If client configuration is not set, use kube-config to access Kubernetes APIs.
-        if cfg.client_configuration is None:
-            # Load kube-config or in-cluster config.
-            if cfg.config_file or not common_utils.is_running_in_k8s():
-                config.load_kube_config(config_file=cfg.config_file, context=cfg.context)
-            else:
-                config.load_incluster_config()
+        # Get Kubernetes client using kube-authkit
+        k8s_client = common_auth.get_kubernetes_client(cfg)
 
-        k8s_client = client.ApiClient(cfg.client_configuration)
         self.custom_api = client.CustomObjectsApi(k8s_client)
         self.core_api = client.CoreV1Api(k8s_client)
 
