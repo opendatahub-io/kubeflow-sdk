@@ -166,8 +166,8 @@ client = TrainerClient(
     backend_config=KubernetesBackendConfig(
         auth_method="oidc",
         oidc_issuer="https://your-issuer.example.com",
-        oidc_client_id="your-client-id",
-        oidc_client_secret="your-client-secret",
+        client_id="your-client-id",
+        client_secret="your-client-secret",
         use_device_flow=False,  # Set to True for CLI/headless environments
         use_keyring=True,       # Persist tokens in system keyring
     )
@@ -187,7 +187,7 @@ client = TrainerClient(
     backend_config=KubernetesBackendConfig(
         auth_method="openshift",
         k8s_api_host="https://api.cluster.example.com:6443",
-        openshift_token="sha256~your-token-here"
+        token="sha256~your-token-here"
     )
 )
 

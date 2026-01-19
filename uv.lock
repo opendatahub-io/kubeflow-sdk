@@ -393,7 +393,7 @@ wheels = [
 
 [[package]]
 name = "kube-authkit"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "kubernetes" },
@@ -401,9 +401,9 @@ dependencies = [
     { name = "requests" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e2/a7/52b5eeedec0b5f5838fc1b00b878b9deb8fbb019be43b164d1be70a74c5e/kube_authkit-0.1.0.tar.gz", hash = "sha256:412971b12980e32ce2d9ce9f965b1049de1ef82b199f3d4fa2a155fb55d13c64", size = 104524, upload-time = "2026-01-06T14:10:29.509Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/71/17bc56b1f34b8be7d951f3bdaf3b040a1f4d9eb1978d34d342b43717e2f0/kube_authkit-0.2.0.tar.gz", hash = "sha256:b91b65dc059bbd0a83b26b6cb9622fbf7fcce79a9dde334b8a6e96646c0ddc8e", size = 106174, upload-time = "2026-01-16T11:46:23.369Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/77/32b1a8bc9286d55a67b480443bee831f9f1a58fcfc28e299c80d2d3dd183/kube_authkit-0.1.0-py3-none-any.whl", hash = "sha256:a137664ef1a382d54e8d0dc85818eaec67030cb714c1ed36426c6862ae5793e2", size = 30336, upload-time = "2026-01-06T14:10:27.956Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/21/7d1c1286adacd0f6c1d7b5c69e512d1cd475c97c780a1c3b983d1d247b0b/kube_authkit-0.2.0-py3-none-any.whl", hash = "sha256:ab7cb0d59d31a631688c0cdb80e4a8dc27dc09f1153e80975fd5f76557f40a26", size = 31158, upload-time = "2026-01-16T11:46:21.876Z" },
 ]
 
 [[package]]
@@ -440,7 +440,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "docker", marker = "extra == 'docker'", specifier = ">=6.1.3" },
-    { name = "kube-authkit", specifier = ">=0.1.0" },
+    { name = "kube-authkit", specifier = ">=0.2.0" },
     { name = "kubeflow-katib-api", specifier = ">=0.19.0" },
     { name = "kubeflow-trainer-api", specifier = ">=2.0.0" },
     { name = "kubernetes", specifier = ">=27.2.0" },

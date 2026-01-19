@@ -152,8 +152,8 @@ client = TrainerClient(
     backend_config=KubernetesBackendConfig(
         auth_method="oidc",
         oidc_issuer="https://your-issuer.example.com",
-        oidc_client_id="your-client-id",
-        oidc_client_secret="your-client-secret",
+        client_id="your-client-id",
+        client_secret="your-client-secret",
         use_device_flow=False,
         use_keyring=True,  # Persist tokens across sessions
     )
@@ -172,8 +172,8 @@ client = TrainerClient(
     backend_config=KubernetesBackendConfig(
         auth_method="oidc",
         oidc_issuer="https://your-issuer.example.com",
-        oidc_client_id="your-client-id",
-        oidc_client_secret="your-client-secret",
+        client_id="your-client-id",
+        client_secret="your-client-secret",
         use_device_flow=True,  # Enable device code flow
         use_keyring=True,
     )
@@ -198,8 +198,8 @@ client = TrainerClient(
     backend_config=KubernetesBackendConfig(
         auth_method="oidc",
         oidc_issuer="https://your-issuer.example.com",
-        oidc_client_id="service-account-id",
-        oidc_client_secret="service-account-secret",
+        client_id="service-account-id",
+        client_secret="service-account-secret",
     )
 )
 ```
@@ -220,7 +220,7 @@ client = TrainerClient(
     backend_config=KubernetesBackendConfig(
         auth_method="openshift",
         k8s_api_host="https://api.cluster.example.com:6443",
-        openshift_token="sha256~your-token-here"
+        token="sha256~your-token-here"
     )
 )
 ```
@@ -228,8 +228,8 @@ client = TrainerClient(
 #### Option 2: Environment Variable
 
 ```bash
-export OPENSHIFT_TOKEN="sha256~your-token-here"
-export K8S_API_HOST="https://api.cluster.example.com:6443"
+export AUTHKIT_TOKEN="sha256~your-token-here"
+export AUTHKIT_K8S_API_HOST="https://api.cluster.example.com:6443"
 ```
 
 ```python
@@ -298,14 +298,14 @@ class KubernetesBackendConfig:
 
     # OIDC configuration
     oidc_issuer: Optional[str] = None                  # OIDC provider URL
-    oidc_client_id: Optional[str] = None               # OAuth client ID
-    oidc_client_secret: Optional[str] = None           # OAuth client secret
+    client_id: Optional[str] = None                    # OAuth client ID
+    client_secret: Optional[str] = None                # OAuth client secret
     scopes: Optional[list] = None                      # OIDC scopes (default: ["openid"])
     use_device_flow: bool = False                      # Enable device code flow for OIDC
     oidc_callback_port: int = 8080                     # OAuth callback port
 
-    # OpenShift OAuth configuration
-    openshift_token: Optional[str] = None              # OpenShift OAuth token (for token-based auth)
+    # Token-based authentication (OpenShift, etc.)
+    token: Optional[str] = None                        # Authentication token (e.g., OpenShift OAuth token)
 
     # Advanced options
     use_keyring: bool = False                          # Persist tokens in system keyring
@@ -320,17 +320,19 @@ class KubernetesBackendConfig:
 
 ## Environment Variables
 
-The SDK respects standard Kubernetes environment variables:
+The SDK respects standard Kubernetes and kube-authkit environment variables:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `KUBECONFIG` | Path to kubeconfig file | `/path/to/kubeconfig` |
-| `K8S_API_HOST` | Kubernetes API server URL | `https://api.cluster.example.com:6443` |
+| `AUTHKIT_K8S_API_HOST` | Kubernetes API server URL | `https://api.cluster.example.com:6443` |
 | `KUBERNETES_SERVICE_HOST` | Detected for in-cluster mode | `10.96.0.1` |
-| `OIDC_ISSUER` | OIDC provider URL | `https://issuer.example.com` |
-| `OIDC_CLIENT_ID` | OAuth client ID | `my-client-id` |
-| `OIDC_CLIENT_SECRET` | OAuth client secret | `my-secret` |
-| `OPENSHIFT_TOKEN` | OpenShift authentication token | `sha256~...` |
+| `AUTHKIT_OIDC_ISSUER` | OIDC provider URL | `https://issuer.example.com` |
+| `AUTHKIT_CLIENT_ID` | OAuth client ID | `my-client-id` |
+| `AUTHKIT_CLIENT_SECRET` | OAuth client secret | `my-secret` |
+| `AUTHKIT_TOKEN` | Authentication token (e.g., OpenShift) | `sha256~...` |
+
+**Note:** kube-authkit 0.2.0 introduced the `AUTHKIT_` prefix for all authentication-related environment variables.
 
 ## Token Management
 
@@ -342,8 +344,8 @@ By default, tokens are stored in memory and lost when the process ends. Enable k
 backend_config = KubernetesBackendConfig(
     auth_method="oidc",
     oidc_issuer="https://issuer.example.com",
-    oidc_client_id="client-id",
-    oidc_client_secret="client-secret",
+    client_id="client-id",
+    client_secret="client-secret",
     use_keyring=True,  # Persist tokens in system keyring
 )
 ```
@@ -439,7 +441,7 @@ pip install kube-authkit
 
 **Solution:**
 - Verify `oidc_issuer` URL is correct and accessible
-- Check `oidc_client_id` and `oidc_client_secret` are valid
+- Check `client_id` and `client_secret` are valid
 - Clear cached tokens: `python -c "import keyring; keyring.delete_password('kube-authkit', 'oidc-token')"`
 
 #### 4. "Permission denied" errors
@@ -558,9 +560,9 @@ from kubeflow.common.types import KubernetesBackendConfig
 client = TrainerClient(
     backend_config=KubernetesBackendConfig(
         auth_method="oidc",
-        oidc_issuer=os.environ["OIDC_ISSUER"],
-        oidc_client_id=os.environ["OIDC_CLIENT_ID"],
-        oidc_client_secret=os.environ["OIDC_CLIENT_SECRET"],
+        oidc_issuer=os.environ["AUTHKIT_OIDC_ISSUER"],
+        client_id=os.environ["AUTHKIT_CLIENT_ID"],
+        client_secret=os.environ["AUTHKIT_CLIENT_SECRET"],
         use_keyring=True,
         namespace="ml-experiments"
     )
@@ -580,7 +582,7 @@ client = TrainerClient(
     backend_config=KubernetesBackendConfig(
         auth_method="openshift",
         k8s_api_host="https://api.cluster.example.com:6443",
-        openshift_token=os.environ["OPENSHIFT_TOKEN"],
+        token=os.environ["AUTHKIT_TOKEN"],
         namespace="data-science"
     )
 )

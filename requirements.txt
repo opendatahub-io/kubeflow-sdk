@@ -38,7 +38,7 @@ idna==3.10
     # via requests
 iniconfig==2.1.0
     # via pytest
-kube-authkit==0.1.0
+kube-authkit==0.2.0
     # via kubeflow
 kubeflow-katib-api @ git+https://github.com/kubeflow/katib.git@38982e298d9c8d003d8964eaa067b71cb432fb7e#subdirectory=api/python_api
     # via kubeflow

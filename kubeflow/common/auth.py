@@ -83,18 +83,18 @@ def get_kubernetes_client(cfg: KubernetesBackendConfig) -> client.ApiClient:
         # Add OIDC parameters if using OIDC
         if cfg.auth_method == "oidc":
             auth_config_params["oidc_issuer"] = cfg.oidc_issuer
-            auth_config_params["client_id"] = cfg.oidc_client_id
-            auth_config_params["client_secret"] = cfg.oidc_client_secret
+            auth_config_params["client_id"] = cfg.client_id
+            auth_config_params["client_secret"] = cfg.client_secret
             auth_config_params["use_device_flow"] = cfg.use_device_flow
             auth_config_params["oidc_callback_port"] = cfg.oidc_callback_port
 
             if cfg.scopes is not None:
                 auth_config_params["scopes"] = cfg.scopes
 
-        # Add OpenShift parameters if using OpenShift
+        # Add token-based authentication (OpenShift, etc.)
         if cfg.auth_method == "openshift":
-            if cfg.openshift_token is not None:
-                auth_config_params["openshift_token"] = cfg.openshift_token
+            if cfg.token is not None:
+                auth_config_params["token"] = cfg.token
 
         auth_config_params["use_keyring"] = cfg.use_keyring
 

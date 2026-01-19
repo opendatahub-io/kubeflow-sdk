@@ -32,14 +32,14 @@ class KubernetesBackendConfig(BaseModel):
 
     # OIDC authentication fields
     oidc_issuer: Optional[str] = None
-    oidc_client_id: Optional[str] = None
-    oidc_client_secret: Optional[str] = None
+    client_id: Optional[str] = None  # OAuth client ID
+    client_secret: Optional[str] = None  # OAuth client secret
     scopes: Optional[list] = None  # OIDC scopes (default: ["openid"])
     use_device_flow: bool = False
     oidc_callback_port: int = 8080  # OAuth callback port
 
-    # OpenShift OAuth fields
-    openshift_token: Optional[str] = None  # OpenShift OAuth token (for token-based auth)
+    # Token-based authentication (OpenShift, etc.)
+    token: Optional[str] = None  # Authentication token (e.g., OpenShift OAuth token)
 
     # Advanced options
     use_keyring: bool = False  # Persist tokens in system keyring

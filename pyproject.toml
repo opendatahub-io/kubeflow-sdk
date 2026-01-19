@@ -29,7 +29,7 @@ dependencies = [
   "pydantic>=2.10.0",
   "kubeflow-trainer-api>=2.0.0",
   "kubeflow-katib-api>=0.19.0",
-  "kube-authkit>=0.1.0",
+  "kube-authkit>=0.2.0",
 ]
 
 [project.optional-dependencies]

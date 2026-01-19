@@ -1467,8 +1467,8 @@ def test_auth_explicit_method_oidc():
         cfg = KubernetesBackendConfig(
             auth_method="oidc",
             oidc_issuer="https://issuer.example.com",
-            oidc_client_id="client-id",
-            oidc_client_secret="client-secret",
+            client_id="client-id",
+            client_secret="client-secret",
         )
         backend = KubernetesBackend(cfg)
 
@@ -1558,8 +1558,8 @@ def test_auth_device_flow_flag():
         cfg = KubernetesBackendConfig(
             auth_method="oidc",
             oidc_issuer="https://issuer.example.com",
-            oidc_client_id="client-id",
-            oidc_client_secret="client-secret",
+            client_id="client-id",
+            client_secret="client-secret",
             use_device_flow=True,
         )
         backend = KubernetesBackend(cfg)
@@ -1586,8 +1586,8 @@ def test_auth_keyring_flag():
         cfg = KubernetesBackendConfig(
             auth_method="oidc",
             oidc_issuer="https://issuer.example.com",
-            oidc_client_id="client-id",
-            oidc_client_secret="client-secret",
+            client_id="client-id",
+            client_secret="client-secret",
             use_keyring=True,
         )
         backend = KubernetesBackend(cfg)
@@ -1614,13 +1614,13 @@ def test_auth_openshift_with_token():
         cfg = KubernetesBackendConfig(
             auth_method="openshift",
             k8s_api_host="https://api.cluster.example.com:6443",
-            openshift_token="sha256~test-token",
+            token="sha256~test-token",
         )
         backend = KubernetesBackend(cfg)
 
         # Verify get_kubernetes_client was called
         mock_get_client.assert_called_once_with(cfg)
-        assert cfg.openshift_token == "sha256~test-token"
+        assert cfg.token == "sha256~test-token"
         assert cfg.k8s_api_host == "https://api.cluster.example.com:6443"
 
 
@@ -1666,8 +1666,8 @@ def test_auth_oidc_with_scopes():
         cfg = KubernetesBackendConfig(
             auth_method="oidc",
             oidc_issuer="https://issuer.example.com",
-            oidc_client_id="client-id",
-            oidc_client_secret="client-secret",
+            client_id="client-id",
+            client_secret="client-secret",
             scopes=["openid", "profile", "email"],
             oidc_callback_port=9090,
         )
