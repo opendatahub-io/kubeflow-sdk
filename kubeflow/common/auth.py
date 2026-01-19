@@ -101,8 +101,8 @@ def get_kubernetes_client(cfg: KubernetesBackendConfig) -> client.ApiClient:
     # Priority 3: Legacy config_file or context (with deprecation warning)
     elif cfg.config_file is not None or cfg.context is not None:
         logger.warning(
-            "The 'config_file' and 'context' parameters are deprecated and will be removed "
-            "in a future version. Please use 'kubeconfig_path' and 'auth_method=\"kubeconfig\"' instead."
+            "The 'config_file' and 'context' parameters are deprecated and will be removed in "
+            "a future version. Use 'kubeconfig_path' and 'auth_method=\"kubeconfig\"' instead."
         )
         auth_config_params["method"] = "kubeconfig"
 
