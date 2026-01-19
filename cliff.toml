@@ -1,0 +1,72 @@
+[remote.github]
+owner = "kubeflow"
+repo = "sdk"
+
+[changelog]
+header = """
+# Changelog
+"""
+
+body = """
+{%- if version %}
+## [{{ version }}](https://github.com/kubeflow/sdk/releases/tag/{{ version }}) ({{ timestamp | date(format="%Y-%m-%d") }})
+{%- else %}
+## [Unreleased]
+{%- endif %}
+
+{%- set groups = commits | group_by(attribute="group") -%}
+
+{%- for group, commits in groups %}
+{%- if commits | length > 0 %}
+### {{ group | split(pat="-->") | last | trim | replace(from="feat", to="🚀 Features")
+          | replace(from="fix", to="🐛 Bug Fixes")
+          | replace(from="revert", to="⏪ Reverts")
+          | replace(from="chore", to="🔧 Chores")
+          | upper_first }}
+
+{% for commit in commits | reverse %}
+{%- set message = commit.message | split(pat="\n") | first | trim -%}
+{% if commit.remote and commit.remote.username -%}
+   {%- set parts = message | split(pat=" (#") -%}
+   {% if parts | length > 1 and parts | last | trim | split(pat=")") | length > 1 -%}
+      {%- set pr_part = parts | last | trim -%}
+      {%- set pr_number = pr_part | replace(from=")", to="") -%}
+      - {{ parts | slice(end=-1) | join(sep=" (#") }} ([#{{ pr_number }}](https://github.com/kubeflow/sdk/pull/{{ pr_number }}) by @{{ commit.remote.username }})
+   {% else -%}
+      - {{ message }} (@{{ commit.remote.username }})
+   {% endif -%}
+{% else -%}
+- {{ message }} ({{ commit.author.name }})
+{% endif -%}
+{% endfor %}
+
+{%- endif %}
+{%- endfor %}
+
+{%- if github -%}
+{%- set new_contributors = github.contributors | filter(attribute="is_first_time", value=true) -%}
+{%- if new_contributors | length != 0 %}
+{% raw %}\n{% endraw -%}
+### New Contributors
+{%- for contributor in new_contributors %}
+* @{{ contributor.username }} made their first contribution in \
+  [#{{ contributor.pr_number }}](https://github.com/kubeflow/sdk/pull/{{ contributor.pr_number }})
+{%- endfor %}
+{%- endif %}
+{%- endif -%}
+
+{% raw %}\n{% endraw %}
+"""
+
+trim = true
+
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+
+# Only stable release tags
+tag_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+ignore_tags = ".*-(alpha|beta|rc).*"
