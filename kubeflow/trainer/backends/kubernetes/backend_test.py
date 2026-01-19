@@ -428,28 +428,28 @@ def mock_list_namespaced_event(*args, **kwargs):
                     name="test-event-1",
                     namespace=DEFAULT_NAMESPACE,
                 ),
-                involved_object=models.IoK8sApiCoreV1ObjectReference(
+                involvedObject=models.IoK8sApiCoreV1ObjectReference(
                     kind=constants.TRAINJOB_KIND,
                     name=BASIC_TRAIN_JOB_NAME,
                     namespace=DEFAULT_NAMESPACE,
                 ),
                 message="TrainJob created successfully",
                 reason="Created",
-                first_timestamp=datetime.datetime(2025, 6, 1, 10, 30, 0),
+                firstTimestamp=datetime.datetime(2025, 6, 1, 10, 30, 0),
             ),
             models.IoK8sApiCoreV1Event(
                 metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
                     name="test-event-2",
                     namespace=DEFAULT_NAMESPACE,
                 ),
-                involved_object=models.IoK8sApiCoreV1ObjectReference(
+                involvedObject=models.IoK8sApiCoreV1ObjectReference(
                     kind="Pod",
                     name="node-0-pod",
                     namespace=DEFAULT_NAMESPACE,
                 ),
                 message="Pod scheduled successfully",
                 reason="Scheduled",
-                first_timestamp=datetime.datetime(2025, 6, 1, 10, 31, 0),
+                firstTimestamp=datetime.datetime(2025, 6, 1, 10, 31, 0),
             ),
         ]
     )
