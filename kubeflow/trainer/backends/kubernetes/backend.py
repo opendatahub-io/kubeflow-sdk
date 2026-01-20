@@ -691,7 +691,7 @@ class KubernetesBackend(RuntimeBackend):
 
         if trainer:
             # If users choose to use a custom training script.
-            if isinstance(trainer, (types.CustomTrainer, types.CustomTrainerContainer)):
+            if isinstance(trainer, types.CustomTrainer | types.CustomTrainerContainer):
                 if runtime.trainer.trainer_type != types.TrainerType.CUSTOM_TRAINER:
                     raise ValueError(f"CustomTrainer can't be used with {runtime} runtime")
                 trainer_cr = utils.get_trainer_cr_from_custom_trainer(runtime, trainer)

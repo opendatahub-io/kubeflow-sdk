@@ -104,7 +104,7 @@ def _derive_topology_from_func_args(
         if isinstance(nnodes_value, int):
             nnodes = nnodes_value
         npp_value = func_args.get("nproc_per_node")
-        if isinstance(npp_value, (int, str)):
+        if isinstance(npp_value, int | str):
             nproc_per_node = npp_value
     return nnodes, nproc_per_node
 

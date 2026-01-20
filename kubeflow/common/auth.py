@@ -16,15 +16,14 @@ import logging
 
 from kubernetes import client
 
+from kubeflow.common.types import KubernetesBackendConfig
+
 try:
-    from kube_authkit import AuthConfig
-    from kube_authkit import get_k8s_client as kube_authkit_get_client
+    from kube_authkit import AuthConfig, get_k8s_client as kube_authkit_get_client
 
     KUBE_AUTHKIT_AVAILABLE = True
 except ImportError:
     KUBE_AUTHKIT_AVAILABLE = False
-
-from kubeflow.common.types import KubernetesBackendConfig
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +50,7 @@ def get_kubernetes_client(cfg: KubernetesBackendConfig) -> client.ApiClient:
     """
     if not KUBE_AUTHKIT_AVAILABLE:
         raise ImportError(
-            "kube-authkit is required for authentication. "
-            "Install it with: pip install kube-authkit"
+            "kube-authkit is required for authentication. Install it with: pip install kube-authkit"
         )
 
     # Priority 1: Use client_configuration if provided (bypass kube-authkit)
@@ -92,9 +90,8 @@ def get_kubernetes_client(cfg: KubernetesBackendConfig) -> client.ApiClient:
                 auth_config_params["scopes"] = cfg.scopes
 
         # Add token-based authentication (OpenShift, etc.)
-        if cfg.auth_method == "openshift":
-            if cfg.token is not None:
-                auth_config_params["token"] = cfg.token
+        if cfg.auth_method == "openshift" and cfg.token is not None:
+            auth_config_params["token"] = cfg.token
 
         auth_config_params["use_keyring"] = cfg.use_keyring
 

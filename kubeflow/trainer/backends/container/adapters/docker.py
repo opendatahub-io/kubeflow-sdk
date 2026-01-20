@@ -154,7 +154,7 @@ class DockerClientAdapter(BaseContainerClientAdapter):
                 detach=False,
                 remove=True,
             )
-            if isinstance(output, (bytes, bytearray)):
+            if isinstance(output, bytes | bytearray):
                 return output.decode("utf-8", errors="ignore")
             return str(output)
         except Exception as e:

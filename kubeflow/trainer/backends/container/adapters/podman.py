@@ -164,7 +164,7 @@ class PodmanClientAdapter(BaseContainerClientAdapter):
             container.wait()
             logs = container.logs()
 
-            if isinstance(logs, (bytes, bytearray)):
+            if isinstance(logs, bytes | bytearray):
                 return logs.decode("utf-8", errors="ignore")
             return str(logs)
         except Exception as e:

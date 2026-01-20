@@ -1562,7 +1562,7 @@ def test_auth_device_flow_flag():
             client_secret="client-secret",
             use_device_flow=True,
         )
-        backend = KubernetesBackend(cfg)
+        KubernetesBackend(cfg)
 
         # Verify get_kubernetes_client was called
         mock_get_client.assert_called_once_with(cfg)
@@ -1590,7 +1590,7 @@ def test_auth_keyring_flag():
             client_secret="client-secret",
             use_keyring=True,
         )
-        backend = KubernetesBackend(cfg)
+        KubernetesBackend(cfg)
 
         # Verify get_kubernetes_client was called
         mock_get_client.assert_called_once_with(cfg)
@@ -1616,7 +1616,7 @@ def test_auth_openshift_with_token():
             k8s_api_host="https://api.cluster.example.com:6443",
             token="sha256~test-token",
         )
-        backend = KubernetesBackend(cfg)
+        KubernetesBackend(cfg)
 
         # Verify get_kubernetes_client was called
         mock_get_client.assert_called_once_with(cfg)
@@ -1642,7 +1642,7 @@ def test_auth_kubeconfig_path():
             auth_method="kubeconfig",
             kubeconfig_path="/custom/path/to/kubeconfig",
         )
-        backend = KubernetesBackend(cfg)
+        KubernetesBackend(cfg)
 
         # Verify get_kubernetes_client was called
         mock_get_client.assert_called_once_with(cfg)
@@ -1671,7 +1671,7 @@ def test_auth_oidc_with_scopes():
             scopes=["openid", "profile", "email"],
             oidc_callback_port=9090,
         )
-        backend = KubernetesBackend(cfg)
+        KubernetesBackend(cfg)
 
         # Verify get_kubernetes_client was called
         mock_get_client.assert_called_once_with(cfg)
@@ -1697,7 +1697,7 @@ def test_auth_with_custom_ca_cert():
             auth_method="kubeconfig",
             ca_cert="/path/to/ca-bundle.crt",
         )
-        backend = KubernetesBackend(cfg)
+        KubernetesBackend(cfg)
 
         # Verify get_kubernetes_client was called
         mock_get_client.assert_called_once_with(cfg)
