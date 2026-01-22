@@ -147,7 +147,9 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
                         "storageClassName": CHECKPOINT_EPHEMERAL_STORAGE_CLASS,
                         "resources": {
                             "requests": {
-                                "storage": CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
+                                "storage": models.IoK8sApimachineryPkgApiResourceQuantity(
+                                    CHECKPOINT_EPHEMERAL_VOLUME_SIZE
+                                ),
                             }
                         },
                     }
