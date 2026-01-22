@@ -638,7 +638,7 @@ class KubernetesBackend(RuntimeBackend):
                 and trainer.data_connection_name
             ):
                 # Validate the secret exists before mounting
-                utils.validate_secret_exists(
+                rhai_utils.validate_secret_exists(
                     self.core_api,
                     trainer.data_connection_name,
                     self.namespace,

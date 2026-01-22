@@ -28,10 +28,8 @@ CHECKPOINT_VOLUME_NAME = "checkpoint-storage"
 CHECKPOINT_INCOMPLETE_MARKER = "checkpoint-is-incomplete.txt"
 
 # Ephemeral volume for cloud storage checkpoint staging (for S3)
-CHECKPOINT_EPHEMERAL_VOLUME_NAME = "kubeflow-checkpoints"
-CHECKPOINT_EPHEMERAL_MOUNT_PATH = "/mnt/kubeflow-checkpoints"
 CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
-CHECKPOINT_EPHEMERAL_STORAGE_CLASS = "ibmc-vpc-block-5iops-tier"
+CHECKPOINT_EPHEMERAL_STORAGE_CLASS = "default"
 
 # Cloud storage URI schemes
 S3_URI_SCHEME = "s3://"

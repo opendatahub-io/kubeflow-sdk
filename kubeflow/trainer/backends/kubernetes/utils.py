@@ -20,7 +20,6 @@ from typing import Any, Callable, Optional, Union
 from urllib.parse import urlparse
 
 from kubeflow_trainer_api import models
-from kubernetes import client
 
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
@@ -613,32 +612,3 @@ def get_model_initializer(
         )
 
     raise ValueError(f"Model initializer type is invalid: {type(model)}")
-
-
-def validate_secret_exists(
-    core_api: client.CoreV1Api,
-    secret_name: str,
-    namespace: str,
-) -> None:
-    """Validate that a Kubernetes secret exists.
-
-    Args:
-        core_api: Kubernetes CoreV1Api client.
-        secret_name: Name of the secret to check.
-        namespace: Namespace to check in.
-
-    Raises:
-        ValueError: If secret does not exist.
-    """
-    from kubernetes.client.rest import ApiException
-
-    try:
-        core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
-    except ApiException as e:
-        if e.status == 404:
-            raise ValueError(
-                f"Secret '{secret_name}' not found in namespace '{namespace}'. "
-                "Please create the Data Connection secret or verify the "
-                "data_connection_name is correct."
-            ) from e
-        raise
