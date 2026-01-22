@@ -13,6 +13,7 @@ from kubeflow.trainer.rhai.constants import (
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
     PVC_URI_SCHEME,
+    S3_CREDENTIAL_KEYS,
     S3_URI_SCHEME,
 )
 from kubeflow.trainer.types import types
@@ -229,46 +230,36 @@ def apply_output_dir_uri_to_pod_overrides(
     return resolved_output_dir, pod_template_overrides
 
 
-def apply_data_connection_credentials_to_pod_overrides(
+def get_s3_credential_env_vars(
     secret_name: str,
-    pod_template_overrides: Optional[list],
-) -> list:
-    """Apply cloud storage credentials from a Kubernetes secret to pod template overrides.
+) -> list[models.IoK8sApiCoreV1EnvVar]:
+    """Get environment variables for S3 credentials from a Kubernetes secret.
 
-    Uses envFrom with secretRef to load all keys from the secret as environment
+    Uses valueFrom with secretKeyRef to load specific keys from the secret as environment
     variables. This exposes keys like AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
+    Keys that don't exist in the secret are marked as optional.
 
     Args:
         secret_name: The name of the K8s secret containing storage credentials.
-        pod_template_overrides: Existing pod template overrides list.
 
     Returns:
-        Updated pod_template_overrides with envFrom secretRef entry.
+        List of EnvVar objects with secretKeyRef for each S3 credential key.
     """
-    if pod_template_overrides is None:
-        pod_template_overrides = []
+    env_vars = []
+    for key in S3_CREDENTIAL_KEYS:
+        env_var = models.IoK8sApiCoreV1EnvVar(
+            name=key,
+            value_from=models.IoK8sApiCoreV1EnvVarSource(
+                secret_key_ref=models.IoK8sApiCoreV1SecretKeySelector(
+                    name=secret_name,
+                    key=key,
+                    optional=True,  # Don't fail if key doesn't exist in secret
+                )
+            ),
+        )
+        env_vars.append(env_var)
 
-    # Build the pod template override dict using envFrom with secretRef
-    override_dict = {
-        "targetJobs": [{"name": constants.NODE}],
-        "spec": {
-            "containers": [
-                {
-                    "name": constants.NODE,
-                    "envFrom": [
-                        {
-                            "secretRef": {
-                                "name": secret_name,
-                            }
-                        }
-                    ],
-                }
-            ]
-        },
-    }
-
-    pod_template_overrides.append(override_dict)
-    return pod_template_overrides
+    return env_vars
 
 
 def inject_checkpoint_staging_volume(

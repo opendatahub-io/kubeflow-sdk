@@ -640,15 +640,10 @@ class KubernetesBackend(RuntimeBackend):
                 # Validate the secret exists before mounting
                 utils.validate_secret_exists(
                     self.core_api,
-                    trainer.data_connection_name,                    
+                    trainer.data_connection_name,
                     self.namespace,
                 )
 
-                pod_template_overrides = (
-                    rhai_utils.apply_data_connection_credentials_to_pod_overrides(
-                        trainer.data_connection_name, pod_template_overrides
-                    )
-                )
                 pod_template_overrides = rhai_utils.inject_checkpoint_staging_volume(
                     pod_template_overrides
                 )
@@ -690,6 +685,20 @@ class KubernetesBackend(RuntimeBackend):
                 trainer_cr.command = trainer_overrides["command"]
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
+
+        # Add S3 credential env vars to trainer_cr if using S3 output_dir
+        if (
+            is_rhai_trainer
+            and hasattr(trainer, "output_dir")
+            and trainer.output_dir
+            and trainer.output_dir.startswith(S3_URI_SCHEME)
+            and hasattr(trainer, "data_connection_name")
+            and trainer.data_connection_name
+        ):
+            s3_env_vars = rhai_utils.get_s3_credential_env_vars(trainer.data_connection_name)
+            if trainer_cr.env is None:
+                trainer_cr.env = []
+            trainer_cr.env.extend(s3_env_vars)
 
         trainjob_spec = models.TrainerV1alpha1TrainJobSpec(
             runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),
