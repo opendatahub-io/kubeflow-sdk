@@ -246,11 +246,6 @@ def apply_data_connection_credentials_to_pod_overrides(
     Returns:
         Updated pod_template_overrides with env secretKeyRef entries.
     """
-    from kubeflow.trainer.options.kubernetes import (
-        ContainerOverride,
-        PodSpecOverride,
-        PodTemplateOverride,
-    )
     from kubeflow.trainer.rhai.constants import S3_SECRET_KEYS
 
     if pod_template_overrides is None:
@@ -270,24 +265,21 @@ def apply_data_connection_credentials_to_pod_overrides(
         for key in S3_SECRET_KEYS
     ]
 
-    # Use PodTemplateOverride dataclasses for type-safe override construction
-    override = PodTemplateOverride(
-        target_jobs=[constants.NODE],
-        spec=PodSpecOverride(
-            containers=[
-                ContainerOverride(
-                    name=constants.NODE,
-                    env=env_vars,
-                )
+    # Build the pod template override dict directly
+    override_dict = {
+        "targetJobs": [{"name": constants.NODE}],
+        "spec": {
+            "containers": [
+                {
+                    "name": constants.NODE,
+                    "env": env_vars,
+                }
             ]
-        ),
-    )
+        },
+    }
 
-    # Apply the override via the options API mechanism
-    job_spec: dict = {"spec": {"podTemplateOverrides": pod_template_overrides}}
-    override(job_spec, None, None)
-
-    return job_spec["spec"]["podTemplateOverrides"]
+    pod_template_overrides.append(override_dict)
+    return pod_template_overrides
 
 
 def inject_checkpoint_staging_volume(
@@ -304,11 +296,6 @@ def inject_checkpoint_staging_volume(
     Returns:
         Updated pod_template_overrides with ephemeral volume.
     """
-    from kubeflow.trainer.options.kubernetes import (
-        ContainerOverride,
-        PodSpecOverride,
-        PodTemplateOverride,
-    )
     from kubeflow.trainer.rhai.constants import (
         CHECKPOINT_EPHEMERAL_MOUNT_PATH,
         CHECKPOINT_EPHEMERAL_VOLUME_NAME,
@@ -340,22 +327,19 @@ def inject_checkpoint_staging_volume(
         "mountPath": CHECKPOINT_EPHEMERAL_MOUNT_PATH,
     }
 
-    # Use PodTemplateOverride dataclasses for type-safe override construction
-    override = PodTemplateOverride(
-        target_jobs=[constants.NODE],
-        spec=PodSpecOverride(
-            volumes=[volume_spec],
-            containers=[
-                ContainerOverride(
-                    name=constants.NODE,
-                    volume_mounts=[volume_mount_spec],
-                )
+    # Build the pod template override dict directly
+    override_dict = {
+        "targetJobs": [{"name": constants.NODE}],
+        "spec": {
+            "volumes": [volume_spec],
+            "containers": [
+                {
+                    "name": constants.NODE,
+                    "volumeMounts": [volume_mount_spec],
+                }
             ],
-        ),
-    )
+        },
+    }
 
-    # Apply the override via the options API mechanism
-    job_spec: dict = {"spec": {"podTemplateOverrides": pod_template_overrides}}
-    override(job_spec, None, None)
-
-    return job_spec["spec"]["podTemplateOverrides"]
+    pod_template_overrides.append(override_dict)
+    return pod_template_overrides
