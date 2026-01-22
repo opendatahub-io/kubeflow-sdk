@@ -306,6 +306,7 @@ def inject_checkpoint_staging_volume(
         pod_template_overrides = []
 
     # Ephemeral volume spec (uses cluster default storage class)
+    # Use IoK8sApimachineryPkgApiResourceQuantity for proper pydantic validation
     volume_spec = {
         "name": CHECKPOINT_EPHEMERAL_VOLUME_NAME,
         "ephemeral": {
@@ -314,7 +315,9 @@ def inject_checkpoint_staging_volume(
                     "accessModes": ["ReadWriteOnce"],
                     "resources": {
                         "requests": {
-                            "storage": CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
+                            "storage": models.IoK8sApimachineryPkgApiResourceQuantity(
+                                CHECKPOINT_EPHEMERAL_VOLUME_SIZE
+                            ),
                         }
                     },
                 }
