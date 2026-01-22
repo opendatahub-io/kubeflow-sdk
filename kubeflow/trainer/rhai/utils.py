@@ -235,44 +235,33 @@ def apply_data_connection_credentials_to_pod_overrides(
 ) -> list:
     """Apply cloud storage credentials from a Kubernetes secret to pod template overrides.
 
-    Mounts each credential key from the secret as an environment variable
-    using secretKeyRef. This exposes keys like AWS_ACCESS_KEY_ID,
-    AWS_SECRET_ACCESS_KEY, etc. as env vars.
+    Uses envFrom with secretRef to load all keys from the secret as environment
+    variables. This exposes keys like AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
 
     Args:
         secret_name: The name of the K8s secret containing storage credentials.
         pod_template_overrides: Existing pod template overrides list.
 
     Returns:
-        Updated pod_template_overrides with env secretKeyRef entries.
+        Updated pod_template_overrides with envFrom secretRef entry.
     """
-    from kubeflow.trainer.rhai.constants import S3_SECRET_KEYS
-
     if pod_template_overrides is None:
         pod_template_overrides = []
 
-    # Build env vars with secretKeyRef for each credential key
-    env_vars = [
-        {
-            "name": key,
-            "valueFrom": {
-                "secretKeyRef": {
-                    "name": secret_name,
-                    "key": key,
-                }
-            },
-        }
-        for key in S3_SECRET_KEYS
-    ]
-
-    # Build the pod template override dict directly
+    # Build the pod template override dict using envFrom with secretRef
     override_dict = {
         "targetJobs": [{"name": constants.NODE}],
         "spec": {
             "containers": [
                 {
                     "name": constants.NODE,
-                    "env": env_vars,
+                    "envFrom": [
+                        {
+                            "secretRef": {
+                                "name": secret_name,
+                            }
+                        }
+                    ],
                 }
             ]
         },

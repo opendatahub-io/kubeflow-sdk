@@ -34,12 +34,3 @@ CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
 
 # Cloud storage URI schemes
 S3_URI_SCHEME = "s3://"
-
-# S3 credential keys from RHOAI Data Connection secrets
-S3_SECRET_KEYS = [
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_S3_ENDPOINT",
-    "AWS_S3_BUCKET",
-    "AWS_DEFAULT_REGION",
-]
