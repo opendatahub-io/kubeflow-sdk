@@ -13,6 +13,7 @@ from kubeflow.trainer.rhai.constants import (
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
     PVC_URI_SCHEME,
+    S3_URI_SCHEME,
 )
 from kubeflow.trainer.types import types
 
@@ -119,6 +120,26 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
 
         return resolved_path, {"volume": volume_spec, "volumeMount": volume_mount_spec}
 
+    if output_dir.startswith(S3_URI_SCHEME):
+        # Parse S3 URI: s3://bucket/path
+        uri_path = output_dir[len(S3_URI_SCHEME) :]
+        parts = uri_path.split("/", 1)
+        bucket_name = parts[0]
+
+        if not bucket_name:
+            raise ValueError(
+                f"Invalid S3 URI: '{output_dir}'. "
+                f"Bucket name cannot be empty. Expected format: '{S3_URI_SCHEME}<bucket>/<path>'"
+            )
+
+        s3_path = parts[1] if len(parts) > 1 else ""
+
+        return output_dir, {
+            "type": "s3",
+            "bucket": bucket_name,
+            "path": s3_path,
+        }
+
     return output_dir, None
 
 
@@ -130,6 +151,9 @@ def apply_output_dir_uri_to_pod_overrides(
     Process output_dir URI and apply PVC mounting to pod template overrides.
     """
     resolved_output_dir, volume_mount_specs = parse_output_dir_uri(output_dir)
+
+    if volume_mount_specs is None or volume_mount_specs.get("type") == "s3":
+        return resolved_output_dir, pod_template_overrides or []
 
     # If no PVC mounting needed return none
     if volume_mount_specs is None:
@@ -203,3 +227,120 @@ def apply_output_dir_uri_to_pod_overrides(
     trainer_container_dict["volumeMounts"].append(volume_mount_specs["volumeMount"])
 
     return resolved_output_dir, pod_template_overrides
+
+
+def apply_data_connection_credentials_to_pod_overrides(
+    secret_name: str,
+    pod_template_overrides: Optional[list],
+) -> list:
+    """Apply cloud storage credentials from a Kubernetes secret to pod template overrides.
+
+    Mounts all keys from the secret as environment variables using envFrom
+    with secretRef. This automatically exposes all keys in the secret
+    (e.g., AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.) as env vars.
+
+    Args:
+        secret_name: The name of the K8s secret containing storage credentials.
+        pod_template_overrides: Existing pod template overrides list.
+
+    Returns:
+        Updated pod_template_overrides with envFrom secretRef.
+    """
+    from kubeflow.trainer.options.kubernetes import (
+        ContainerOverride,
+        PodSpecOverride,
+        PodTemplateOverride,
+    )
+
+    if pod_template_overrides is None:
+        pod_template_overrides = []
+
+    # Use PodTemplateOverride dataclasses for type-safe override construction
+    override = PodTemplateOverride(
+        target_jobs=[constants.NODE],
+        spec=PodSpecOverride(
+            containers=[
+                ContainerOverride(
+                    name=constants.NODE,
+                    env_from=[{"secretRef": {"name": secret_name}}],
+                )
+            ]
+        ),
+    )
+
+    # Apply the override via the options API mechanism
+    job_spec: dict = {"spec": {"podTemplateOverrides": pod_template_overrides}}
+    override(job_spec, None, None)
+
+    return job_spec["spec"]["podTemplateOverrides"]
+
+
+def inject_checkpoint_staging_volume(
+    pod_template_overrides: Optional[list],
+) -> list:
+    """Inject an ephemeral volume for cloud storage checkpoint staging.
+
+    This volume is used as temporary local storage before uploading
+    checkpoints to cloud storage (S3, Azure, GCS, etc.).
+
+    Args:
+        pod_template_overrides: Existing pod template overrides list.
+
+    Returns:
+        Updated pod_template_overrides with ephemeral volume.
+    """
+    from kubeflow.trainer.options.kubernetes import (
+        ContainerOverride,
+        PodSpecOverride,
+        PodTemplateOverride,
+    )
+    from kubeflow.trainer.rhai.constants import (
+        CHECKPOINT_EPHEMERAL_MOUNT_PATH,
+        CHECKPOINT_EPHEMERAL_VOLUME_NAME,
+        CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
+    )
+
+    if pod_template_overrides is None:
+        pod_template_overrides = []
+
+    # Ephemeral volume spec (uses cluster default storage class)
+    volume_spec = {
+        "name": CHECKPOINT_EPHEMERAL_VOLUME_NAME,
+        "ephemeral": {
+            "volumeClaimTemplate": {
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "resources": {
+                        "requests": {
+                            "storage": CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
+                        }
+                    },
+                }
+            }
+        },
+    }
+
+    volume_mount_spec = {
+        "name": CHECKPOINT_EPHEMERAL_VOLUME_NAME,
+        "mountPath": CHECKPOINT_EPHEMERAL_MOUNT_PATH,
+    }
+
+    # Use PodTemplateOverride dataclasses for type-safe override construction
+    override = PodTemplateOverride(
+        target_jobs=[constants.NODE],
+        spec=PodSpecOverride(
+            volumes=[volume_spec],
+            containers=[
+                ContainerOverride(
+                    name=constants.NODE,
+                    volume_mounts=[volume_mount_spec],
+                )
+            ],
+        ),
+    )
+
+    # Apply the override via the options API mechanism
+    job_spec: dict = {"spec": {"podTemplateOverrides": pod_template_overrides}}
+    override(job_spec, None, None)
+
+    return job_spec["spec"]["podTemplateOverrides"]

@@ -629,6 +629,30 @@ class KubernetesBackend(RuntimeBackend):
                 trainer.output_dir, pod_template_overrides
             )
 
+            # If S3 output_dir, mount credentials and inject ephemeral staging volume
+            from kubeflow.trainer.rhai.constants import S3_URI_SCHEME
+
+            if (
+                trainer.output_dir.startswith(S3_URI_SCHEME)
+                and hasattr(trainer, "data_connection_name")
+                and trainer.data_connection_name
+            ):
+                # Validate the secret exists before mounting
+                utils.validate_secret_exists(
+                    self.core_api,
+                    trainer.data_connection_name,                    
+                    self.namespace,
+                )
+
+                pod_template_overrides = (
+                    rhai_utils.apply_data_connection_credentials_to_pod_overrides(
+                        trainer.data_connection_name, pod_template_overrides
+                    )
+                )
+                pod_template_overrides = rhai_utils.inject_checkpoint_staging_volume(
+                    pod_template_overrides
+                )
+
         # Build the Trainer.
         trainer_cr = models.TrainerV1alpha1Trainer()
 

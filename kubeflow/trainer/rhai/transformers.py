@@ -23,7 +23,7 @@ from typing import Callable, Optional
 from kubeflow_trainer_api import models
 
 from kubeflow.trainer.constants import constants
-from kubeflow.trainer.rhai.constants import PVC_URI_SCHEME
+from kubeflow.trainer.rhai.constants import PVC_URI_SCHEME, S3_URI_SCHEME
 from kubeflow.trainer.types import types
 
 
@@ -82,10 +82,12 @@ class TransformersTrainer:
         enable_jit_checkpoint: Enable just-in-time checkpointing on SIGTERM. Default: False.
                               Automatically enabled when output_dir is provided.
         output_dir: Directory for saving checkpoints. Supports PVC URIs (pvc://<name>/<path>)
-                   for automatic volume mounting. When provided, automatically enables JIT
-                   checkpointing.
+                    or S3 URIs (s3://<bucket>/<path>) for automatic volume mounting.
+                    When provided, automatically enables JIT checkpointing.
         periodic_checkpoint_config: Optional configuration for periodic checkpointing.
                                    See PeriodicCheckpointConfig for available options.
+        data_connection_name: Name of the Kubernetes secret containing S3 credentials.
+                              Required when output_dir uses s3:// scheme.
 
     Raises:
         ValueError: If metrics_port is not in range 1024-65535.
@@ -114,6 +116,7 @@ class TransformersTrainer:
     enable_jit_checkpoint: bool = False
     output_dir: Optional[str] = None
     periodic_checkpoint_config: Optional[PeriodicCheckpointConfig] = None
+    data_connection_name: Optional[str] = None
 
     def __post_init__(self):
         """Validate configuration after initialization.
@@ -161,11 +164,24 @@ class TransformersTrainer:
             self.output_dir
             and "://" in self.output_dir
             and not self.output_dir.startswith(PVC_URI_SCHEME)
+            and not self.output_dir.startswith(S3_URI_SCHEME)
         ):
             raise ValueError(
                 f"Unsupported storage URI scheme. "
-                f"Currently only '{PVC_URI_SCHEME}' URIs are supported for automatic mounting. "
-                f"Supported formats: '{PVC_URI_SCHEME}<pvc-name>/<path>' or local filesystem paths."
+                f"Currently only '{PVC_URI_SCHEME}' and '{S3_URI_SCHEME}' URIs are supported. "
+                f"Supported formats: '{PVC_URI_SCHEME}<pvc-name>/<path>', "
+                f"'{S3_URI_SCHEME}<bucket>/<path>', or local filesystem paths."
+            )
+
+        # Validate S3 output_dir requires data_connection_name
+        if (
+            self.output_dir
+            and self.output_dir.startswith(S3_URI_SCHEME)
+            and not self.data_connection_name
+        ):
+            raise ValueError(
+                "data_connection_name is required when output_dir uses s3:// scheme. "
+                "Please provide the name of the Kubernetes secret containing S3 credentials."
             )
 
         # Auto-enable JIT checkpoint if output_dir is provided

@@ -26,3 +26,11 @@ PVC_URI_SCHEME = "pvc://"
 CHECKPOINT_MOUNT_PATH = "/mnt/kubeflow-checkpoints"
 CHECKPOINT_VOLUME_NAME = "checkpoint-storage"
 CHECKPOINT_INCOMPLETE_MARKER = "checkpoint-is-incomplete.txt"
+
+# Ephemeral volume for cloud storage checkpoint staging
+CHECKPOINT_EPHEMERAL_VOLUME_NAME = "checkpoint-staging-volume"
+CHECKPOINT_EPHEMERAL_MOUNT_PATH = "/mnt/checkpoint-staging"
+CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
+
+# Cloud storage URI schemes
+S3_URI_SCHEME = "s3://"

@@ -29,12 +29,15 @@ class ContainerOverride:
         name: Name of the container to override (must exist in TrainingRuntime).
         env: Environment variables to add/merge with the container.
              Each dict should have 'name' and 'value' or 'valueFrom' keys.
+        env_from: Environment variables from ConfigMaps or Secrets to add to the container.
+                  Each dict should have 'configMapRef' or 'secretRef' key.
         volume_mounts: Volume mounts to add/merge with the container.
                       Each dict should have 'name' and 'mountPath' keys at minimum.
     """
 
     name: str
     env: Optional[list[dict]] = None
+    env_from: Optional[list[dict]] = None
     volume_mounts: Optional[list[dict]] = None
 
     def __post_init__(self):
@@ -66,6 +69,19 @@ class ContainerOverride:
                         raise ValueError(
                             f"env 'valueFrom' must contain one of: {', '.join(valid_keys)}"
                         )
+
+        if self.env_from is not None:
+            if not isinstance(self.env_from, list):
+                raise ValueError("env_from must be a list of dictionaries")
+            for env_from_entry in self.env_from:
+                if not isinstance(env_from_entry, dict):
+                    raise ValueError("Each env_from entry must be a dictionary")
+                # env_from must have configMapRef or secretRef
+                valid_keys = {"configMapRef", "secretRef"}
+                if not any(key in env_from_entry for key in valid_keys):
+                    raise ValueError(
+                        f"Each env_from entry must contain one of: {', '.join(valid_keys)}"
+                    )
 
         if self.volume_mounts is not None:
             if not isinstance(self.volume_mounts, list):
@@ -374,6 +390,8 @@ class PodTemplateOverrides:
                         container_dict = {"name": container.name}
                         if container.env:
                             container_dict["env"] = container.env
+                        if container.env_from:
+                            container_dict["envFrom"] = container.env_from
                         if container.volume_mounts:
                             container_dict["volumeMounts"] = container.volume_mounts
                         spec_dict["initContainers"].append(container_dict)
@@ -384,6 +402,8 @@ class PodTemplateOverrides:
                         container_dict = {"name": container.name}
                         if container.env:
                             container_dict["env"] = container.env
+                        if container.env_from:
+                            container_dict["envFrom"] = container.env_from
                         if container.volume_mounts:
                             container_dict["volumeMounts"] = container.volume_mounts
                         spec_dict["containers"].append(container_dict)
