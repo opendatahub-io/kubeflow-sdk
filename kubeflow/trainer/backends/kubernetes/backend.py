@@ -629,7 +629,7 @@ class KubernetesBackend(RuntimeBackend):
                 trainer.output_dir, pod_template_overrides
             )
 
-            # If S3 output_dir, mount credentials and inject ephemeral staging volume
+            # If S3 output_dir, validate the data connection secret exists
             from kubeflow.trainer.rhai.constants import S3_URI_SCHEME
 
             if (
@@ -642,10 +642,6 @@ class KubernetesBackend(RuntimeBackend):
                     self.core_api,
                     trainer.data_connection_name,
                     self.namespace,
-                )
-
-                pod_template_overrides = rhai_utils.inject_checkpoint_staging_volume(
-                    pod_template_overrides
                 )
 
         # Build the Trainer.

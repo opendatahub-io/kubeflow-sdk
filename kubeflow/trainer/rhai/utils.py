@@ -10,6 +10,10 @@ from kubeflow.trainer.rhai import (
     transformers,
 )
 from kubeflow.trainer.rhai.constants import (
+    CHECKPOINT_EPHEMERAL_MOUNT_PATH,
+    CHECKPOINT_EPHEMERAL_STORAGE_CLASS,
+    CHECKPOINT_EPHEMERAL_VOLUME_NAME,
+    CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
     PVC_URI_SCHEME,
@@ -87,6 +91,16 @@ def merge_progression_annotations(
 def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
     """
     Parse output_dir URI and return resolved path and volume mount specs.
+
+    For PVC URIs (pvc://), returns a resolved local path and PVC volume specs.
+    For S3 URIs (s3://), returns the local staging path and ephemeral volume specs.
+
+    Args:
+        output_dir: Output directory URI (pvc://, s3://, or local path).
+
+    Returns:
+        Tuple of (resolved_path, volume_specs) where volume_specs contains
+        'volume' and 'volumeMount' dicts for Kubernetes, or None if no mounting needed.
     """
     if not output_dir:
         return None, None
@@ -122,24 +136,31 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
         return resolved_path, {"volume": volume_spec, "volumeMount": volume_mount_spec}
 
     if output_dir.startswith(S3_URI_SCHEME):
-        # Parse S3 URI: s3://bucket/path
-        uri_path = output_dir[len(S3_URI_SCHEME) :]
-        parts = uri_path.split("/", 1)
-        bucket_name = parts[0]
-
-        if not bucket_name:
-            raise ValueError(
-                f"Invalid S3 URI: '{output_dir}'. "
-                f"Bucket name cannot be empty. Expected format: '{S3_URI_SCHEME}<bucket>/<path>'"
-            )
-
-        s3_path = parts[1] if len(parts) > 1 else ""
-
-        return output_dir, {
-            "type": "s3",
-            "bucket": bucket_name,
-            "path": s3_path,
+        # Build ephemeral volume spec for S3 checkpoint staging
+        # This volume is used as temporary local storage before uploading to S3
+        volume_spec = {
+            "name": CHECKPOINT_EPHEMERAL_VOLUME_NAME,
+            "ephemeral": {
+                "volumeClaimTemplate": {
+                    "spec": {
+                        "accessModes": ["ReadWriteOnce"],
+                        "storageClassName": CHECKPOINT_EPHEMERAL_STORAGE_CLASS,
+                        "resources": {
+                            "requests": {
+                                "storage": CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
+                            }
+                        },
+                    }
+                }
+            },
         }
+        volume_mount_spec = {
+            "name": CHECKPOINT_EPHEMERAL_VOLUME_NAME,
+            "mountPath": CHECKPOINT_EPHEMERAL_MOUNT_PATH,
+        }
+
+        # Return local staging path (training writes here, then uploads to S3)
+        return CHECKPOINT_EPHEMERAL_MOUNT_PATH, {"volume": volume_spec, "volumeMount": volume_mount_spec}
 
     return output_dir, None
 
@@ -149,14 +170,20 @@ def apply_output_dir_uri_to_pod_overrides(
     pod_template_overrides: Optional[list],
 ) -> tuple[str, list]:
     """
-    Process output_dir URI and apply PVC mounting to pod template overrides.
+    Process output_dir URI and apply volume mounting to pod template overrides.
+
+    Handles both PVC URIs (mounts PVC) and S3 URIs (mounts ephemeral staging volume).
+
+    Args:
+        output_dir: Output directory URI (pvc://, s3://, or local path).
+        pod_template_overrides: Existing pod template overrides list.
+
+    Returns:
+        Tuple of (resolved_output_dir, updated_pod_template_overrides).
     """
     resolved_output_dir, volume_mount_specs = parse_output_dir_uri(output_dir)
 
-    if volume_mount_specs is None or volume_mount_specs.get("type") == "s3":
-        return resolved_output_dir, pod_template_overrides or []
-
-    # If no PVC mounting needed return none
+    # If no volume mounting needed, return as-is
     if volume_mount_specs is None:
         return resolved_output_dir, pod_template_overrides or []
 
@@ -262,67 +289,3 @@ def get_s3_credential_env_vars(
     return env_vars
 
 
-def inject_checkpoint_staging_volume(
-    pod_template_overrides: Optional[list],
-) -> list:
-    """Inject an ephemeral volume for cloud storage checkpoint staging.
-
-    This volume is used as temporary local storage before uploading
-    checkpoints to cloud storage (S3, Azure, GCS, etc.).
-
-    Args:
-        pod_template_overrides: Existing pod template overrides list.
-
-    Returns:
-        Updated pod_template_overrides with ephemeral volume.
-    """
-    from kubeflow.trainer.rhai.constants import (
-        CHECKPOINT_EPHEMERAL_MOUNT_PATH,
-        CHECKPOINT_EPHEMERAL_VOLUME_NAME,
-        CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
-    )
-
-    if pod_template_overrides is None:
-        pod_template_overrides = []
-
-    # Ephemeral volume spec (uses cluster default storage class)
-    # Use IoK8sApimachineryPkgApiResourceQuantity for proper pydantic validation
-    volume_spec = {
-        "name": CHECKPOINT_EPHEMERAL_VOLUME_NAME,
-        "ephemeral": {
-            "volumeClaimTemplate": {
-                "spec": {
-                    "accessModes": ["ReadWriteOnce"],
-                    "resources": {
-                        "requests": {
-                            "storage": models.IoK8sApimachineryPkgApiResourceQuantity(
-                                CHECKPOINT_EPHEMERAL_VOLUME_SIZE
-                            ),
-                        }
-                    },
-                }
-            }
-        },
-    }
-
-    volume_mount_spec = {
-        "name": CHECKPOINT_EPHEMERAL_VOLUME_NAME,
-        "mountPath": CHECKPOINT_EPHEMERAL_MOUNT_PATH,
-    }
-
-    # Build the pod template override dict directly
-    override_dict = {
-        "targetJobs": [{"name": constants.NODE}],
-        "spec": {
-            "volumes": [volume_spec],
-            "containers": [
-                {
-                    "name": constants.NODE,
-                    "volumeMounts": [volume_mount_spec],
-                }
-            ],
-        },
-    }
-
-    pod_template_overrides.append(override_dict)
-    return pod_template_overrides
