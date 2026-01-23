@@ -629,21 +629,6 @@ class KubernetesBackend(RuntimeBackend):
                 trainer.output_dir, pod_template_overrides
             )
 
-            # If S3 output_dir, validate the data connection secret exists
-            from kubeflow.trainer.rhai.constants import S3_URI_SCHEME
-
-            if (
-                trainer.output_dir.startswith(S3_URI_SCHEME)
-                and hasattr(trainer, "data_connection_name")
-                and trainer.data_connection_name
-            ):
-                # Validate the secret exists before mounting
-                rhai_utils.validate_secret_exists(
-                    self.core_api,
-                    trainer.data_connection_name,
-                    self.namespace,
-                )
-
         # Build the Trainer.
         trainer_cr = models.TrainerV1alpha1Trainer()
 
@@ -682,19 +667,11 @@ class KubernetesBackend(RuntimeBackend):
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
 
-        # Add S3 credential env vars to trainer_cr if using S3 output_dir
-        if (
-            is_rhai_trainer
-            and hasattr(trainer, "output_dir")
-            and trainer.output_dir
-            and trainer.output_dir.startswith(S3_URI_SCHEME)
-            and hasattr(trainer, "data_connection_name")
-            and trainer.data_connection_name
-        ):
-            s3_env_vars = rhai_utils.get_s3_credential_env_vars(trainer.data_connection_name)
-            if trainer_cr.env is None:
-                trainer_cr.env = []
-            trainer_cr.env.extend(s3_env_vars)
+        # Inject S3 credentials if using S3 output_dir
+        if is_rhai_trainer:
+            trainer_cr = rhai_utils.inject_s3_credentials(
+                trainer, trainer_cr, self.core_api, self.namespace
+            )
 
         trainjob_spec = models.TrainerV1alpha1TrainJobSpec(
             runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),

@@ -21,10 +21,10 @@ import pytest
 from kubeflow.trainer.rhai.constants import (
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
-    S3_CREDENTIAL_KEYS,
 )
 from kubeflow.trainer.rhai.utils import (
     get_s3_credential_env_vars,
+    inject_s3_credentials,
     parse_output_dir_uri,
     validate_secret_exists,
 )
@@ -169,47 +169,80 @@ def test_parse_output_dir_uri_with_s3(test_case):
     # S3 URIs return local staging path (training writes here before uploading to S3)
     assert resolved_path == CHECKPOINT_MOUNT_PATH
 
-    # Verify volume specs structure
-    assert volume_specs is not None
-    assert "volume" in volume_specs
-    assert "volumeMount" in volume_specs
+    # Expected volume specs structure (storageClassName not set - uses cluster default)
+    expected_volume_specs = {
+        "volume": {
+            "name": CHECKPOINT_VOLUME_NAME,
+            "ephemeral": {
+                "volumeClaimTemplate": {
+                    "spec": {
+                        "accessModes": ["ReadWriteOnce"],
+                        "resources": {"requests": {"storage": "50Gi"}},
+                    }
+                }
+            },
+        },
+        "volumeMount": {
+            "name": CHECKPOINT_VOLUME_NAME,
+            "mountPath": CHECKPOINT_MOUNT_PATH,
+            "readOnly": False,
+        },
+    }
 
-    # Verify ephemeral volume spec
-    volume_spec = volume_specs["volume"]
-    assert volume_spec["name"] == CHECKPOINT_VOLUME_NAME
-    assert "ephemeral" in volume_spec
-    assert "volumeClaimTemplate" in volume_spec["ephemeral"]
+    # Convert Quantity object to string for comparison (access actual_instance)
+    actual_storage = volume_specs["volume"]["ephemeral"]["volumeClaimTemplate"]["spec"][
+        "resources"
+    ]["requests"]["storage"]
+    volume_specs["volume"]["ephemeral"]["volumeClaimTemplate"]["spec"]["resources"]["requests"][
+        "storage"
+    ] = actual_storage.actual_instance
 
-    # Verify volumeClaimTemplate spec
-    vct_spec = volume_spec["ephemeral"]["volumeClaimTemplate"]["spec"]
-    assert vct_spec["accessModes"] == ["ReadWriteOnce"]
-    assert "resources" in vct_spec
-    # Note: storageClassName is not set - uses cluster default
-
-    # Verify volumeMount spec
-    volume_mount_spec = volume_specs["volumeMount"]
-    assert volume_mount_spec["name"] == CHECKPOINT_VOLUME_NAME
-    assert volume_mount_spec["mountPath"] == CHECKPOINT_MOUNT_PATH
+    assert volume_specs == expected_volume_specs
 
     print("test execution complete")
 
 
 def test_get_s3_credential_env_vars():
-    """Test get_s3_credential_env_vars returns EnvVar objects for all S3 credential keys."""
+    """Test get_s3_credential_env_vars returns EnvVar objects for all keys in secret."""
     print("Executing test: get_s3_credential_env_vars")
 
+    # Mock the CoreV1Api and secret
+    mock_core_api = MagicMock()
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        "AWS_ACCESS_KEY_ID": "base64encodedvalue1",
+        "AWS_SECRET_ACCESS_KEY": "base64encodedvalue2",
+        "AWS_DEFAULT_REGION": "base64encodedvalue3",
+        "AWS_S3_ENDPOINT": "base64encodedvalue4",
+        "AWS_SESSION_TOKEN": "base64encodedvalue5",  # Extra key to test dynamic fetching
+    }
+    mock_core_api.read_namespaced_secret.return_value = mock_secret
+
     secret_name = "my-s3-secret"
-    env_vars = get_s3_credential_env_vars(secret_name)
+    namespace = "default"
+    env_vars = get_s3_credential_env_vars(mock_core_api, secret_name, namespace)
 
-    assert len(env_vars) == len(S3_CREDENTIAL_KEYS)
+    # Verify the secret was read
+    mock_core_api.read_namespaced_secret.assert_called_once_with(
+        name=secret_name, namespace=namespace
+    )
 
-    for env_var, expected_key in zip(env_vars, S3_CREDENTIAL_KEYS):
-        assert env_var.name == expected_key
-        assert env_var.value_from is not None
-        assert env_var.value_from.secret_key_ref is not None
-        assert env_var.value_from.secret_key_ref.name == secret_name
-        assert env_var.value_from.secret_key_ref.key == expected_key
-        assert env_var.value_from.secret_key_ref.optional is True
+    # Convert to list of dicts for easier comparison
+    actual = [
+        {
+            "name": env.name,
+            "secretName": env.value_from.secret_key_ref.name,
+            "secretKey": env.value_from.secret_key_ref.key,
+        }
+        for env in env_vars
+    ]
+
+    expected = [
+        {"name": key, "secretName": secret_name, "secretKey": key} for key in mock_secret.data
+    ]
+
+    assert actual == expected
+    assert len(env_vars) == 5  # All 5 keys from the mock secret
 
     print("test execution complete")
 
@@ -246,6 +279,94 @@ def test_validate_secret_exists_not_found():
     assert "missing-secret" in str(exc_info.value)
     assert "test-ns" in str(exc_info.value)
     assert "not found" in str(exc_info.value)
+
+    print("test execution complete")
+
+
+def test_inject_s3_credentials_with_s3_output_dir():
+    """Test inject_s3_credentials injects credentials when using S3 output_dir."""
+    print("Executing test: inject_s3_credentials_with_s3_output_dir")
+
+    mock_core_api = MagicMock()
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        "AWS_ACCESS_KEY_ID": "key1",
+        "AWS_SECRET_ACCESS_KEY": "key2",
+        "AWS_DEFAULT_REGION": "key3",
+        "AWS_S3_ENDPOINT": "key4",
+    }
+    mock_core_api.read_namespaced_secret.return_value = mock_secret
+
+    # Create a mock trainer with S3 output_dir
+    mock_trainer = MagicMock()
+    mock_trainer.output_dir = "s3://my-bucket/checkpoints"
+    mock_trainer.data_connection_name = "my-s3-secret"
+
+    # Create a mock trainer_cr with no existing env vars
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = None
+
+    result = inject_s3_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
+
+    # Should read the secret twice (once for validation, once for getting keys)
+    assert mock_core_api.read_namespaced_secret.call_count == 2
+    mock_core_api.read_namespaced_secret.assert_called_with(
+        name="my-s3-secret", namespace="default"
+    )
+
+    # Should add all keys from the secret as env vars
+    assert result.env is not None
+    assert len(result.env) == len(mock_secret.data)
+
+    print("test execution complete")
+
+
+def test_inject_s3_credentials_without_s3_output_dir():
+    """Test inject_s3_credentials does nothing when not using S3 output_dir."""
+    print("Executing test: inject_s3_credentials_without_s3_output_dir")
+
+    mock_core_api = MagicMock()
+
+    # Create a mock trainer with PVC output_dir
+    mock_trainer = MagicMock()
+    mock_trainer.output_dir = "pvc://my-pvc/checkpoints"
+    mock_trainer.data_connection_name = None
+
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = []
+
+    result = inject_s3_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
+
+    # Should NOT call validate_secret_exists
+    mock_core_api.read_namespaced_secret.assert_not_called()
+
+    # Should return trainer_cr unchanged
+    assert result.env == []
+
+    print("test execution complete")
+
+
+def test_inject_s3_credentials_without_data_connection_name():
+    """Test inject_s3_credentials does nothing when data_connection_name is missing."""
+    print("Executing test: inject_s3_credentials_without_data_connection_name")
+
+    mock_core_api = MagicMock()
+
+    # Create a mock trainer with S3 output_dir but no data_connection_name
+    mock_trainer = MagicMock()
+    mock_trainer.output_dir = "s3://my-bucket/checkpoints"
+    mock_trainer.data_connection_name = None
+
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = []
+
+    result = inject_s3_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
+
+    # Should NOT call validate_secret_exists
+    mock_core_api.read_namespaced_secret.assert_not_called()
+
+    # Should return trainer_cr unchanged
+    assert result.env == []
 
     print("test execution complete")
 

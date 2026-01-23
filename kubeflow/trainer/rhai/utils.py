@@ -15,7 +15,6 @@ from kubeflow.trainer.rhai.constants import (
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
     PVC_URI_SCHEME,
-    S3_CREDENTIAL_KEYS,
     S3_URI_SCHEME,
 )
 from kubeflow.trainer.types import types
@@ -258,33 +257,41 @@ def apply_output_dir_uri_to_pod_overrides(
 
 
 def get_s3_credential_env_vars(
+    core_api: "client.CoreV1Api",
     secret_name: str,
+    namespace: str,
 ) -> list[models.IoK8sApiCoreV1EnvVar]:
-    """Get environment variables for S3 credentials from a Kubernetes secret.
+    """Get environment variables for all keys in a Kubernetes secret.
 
-    Uses valueFrom with secretKeyRef to load specific keys from the secret as environment
-    variables. This exposes keys like AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
-    Keys that don't exist in the secret are marked as optional.
+    Dynamically reads all keys from the secret and creates environment variables
+    with secretKeyRef for each key. This allows supporting any S3-compatible storage
+    credentials without hardcoding specific key names.
 
     Args:
+        core_api: Kubernetes CoreV1Api client.
         secret_name: The name of the K8s secret containing storage credentials.
+        namespace: Namespace containing the secret.
 
     Returns:
-        List of EnvVar objects with secretKeyRef for each S3 credential key.
+        List of EnvVar objects with secretKeyRef for each key in the secret.
     """
+    # Read the secret to get all available keys
+    secret = core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
+
     env_vars = []
-    for key in S3_CREDENTIAL_KEYS:
-        env_var = models.IoK8sApiCoreV1EnvVar(
-            name=key,
-            value_from=models.IoK8sApiCoreV1EnvVarSource(
-                secret_key_ref=models.IoK8sApiCoreV1SecretKeySelector(
-                    name=secret_name,
-                    key=key,
-                    optional=True,  # Don't fail if key doesn't exist in secret
-                )
-            ),
-        )
-        env_vars.append(env_var)
+    # secret.data contains all the keys in the secret
+    if secret.data:
+        for key in secret.data:
+            env_var = models.IoK8sApiCoreV1EnvVar(
+                name=key,
+                value_from=models.IoK8sApiCoreV1EnvVarSource(
+                    secret_key_ref=models.IoK8sApiCoreV1SecretKeySelector(
+                        name=secret_name,
+                        key=key,
+                    )
+                ),
+            )
+            env_vars.append(env_var)
 
     return env_vars
 
@@ -302,7 +309,7 @@ def validate_secret_exists(
         namespace: Namespace to check in.
 
     Raises:
-        ValueError: If secret does not exist.
+        ValueError: If secret does not exist or user lacks permission.
     """
     from kubernetes.client.rest import ApiException
 
@@ -315,4 +322,52 @@ def validate_secret_exists(
                 "Please create the Data Connection secret or verify the "
                 "data_connection_name is correct."
             ) from e
+        if e.status == 403:
+            raise ValueError(
+                f"Permission denied when accessing secret '{secret_name}' in namespace "
+                f"'{namespace}'. Please ensure your service account has permission to "
+                "read secrets, or contact your cluster administrator."
+            ) from e
         raise
+
+
+def inject_s3_credentials(
+    trainer: RHAITrainer,
+    trainer_cr: "models.TrainerV1alpha1Trainer",
+    core_api: "client.CoreV1Api",
+    namespace: str,
+) -> "models.TrainerV1alpha1Trainer":
+    """Inject S3 credentials into trainer CR if using S3 output_dir.
+
+    Validates the data connection secret exists and appends S3 credential
+    environment variables to the trainer CR.
+
+    Args:
+        trainer: RHAI trainer instance with data_connection_name attribute.
+        trainer_cr: Trainer custom resource to inject env vars into.
+        core_api: Kubernetes CoreV1Api client.
+        namespace: Namespace to validate secret in.
+
+    Returns:
+        The trainer CR (with S3 credentials injected if applicable).
+    """
+    # Check if trainer is using S3 output_dir with data connection
+    if (
+        not hasattr(trainer, "output_dir")
+        or not trainer.output_dir
+        or not trainer.output_dir.startswith(S3_URI_SCHEME)
+        or not hasattr(trainer, "data_connection_name")
+        or not trainer.data_connection_name
+    ):
+        return trainer_cr
+
+    # Validate the secret exists and get all credential env vars
+    validate_secret_exists(core_api, trainer.data_connection_name, namespace)
+
+    # Add all keys from the data connection secret as env vars
+    s3_env_vars = get_s3_credential_env_vars(core_api, trainer.data_connection_name, namespace)
+    if trainer_cr.env is None:
+        trainer_cr.env = []
+    trainer_cr.env.extend(s3_env_vars)
+
+    return trainer_cr

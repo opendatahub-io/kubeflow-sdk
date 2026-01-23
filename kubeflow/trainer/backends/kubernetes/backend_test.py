@@ -1299,9 +1299,9 @@ def test_delete_job(kubernetes_backend, test_case):
     print("test execution complete")
 
 
-def test_train_with_s3_output_dir_validates_secret(kubernetes_backend):
-    """Test train with S3 output_dir validates the data connection secret exists."""
-    print("Executing test: train with S3 output_dir validates secret")
+def test_train_with_s3_output_dir_calls_inject_s3_credentials(kubernetes_backend):
+    """Test train with S3 output_dir calls inject_s3_credentials helper."""
+    print("Executing test: train with S3 output_dir calls inject_s3_credentials")
 
     from kubeflow.trainer.rhai import TransformersTrainer
 
@@ -1323,16 +1323,19 @@ def test_train_with_s3_output_dir_validates_secret(kubernetes_backend):
         ),
     )
 
-    # Mock validate_secret_exists to track if it's called
-    with patch("kubeflow.trainer.rhai.utils.validate_secret_exists") as mock_validate_secret:
+    # Mock inject_s3_credentials to track if it's called
+    with patch("kubeflow.trainer.rhai.utils.inject_s3_credentials") as mock_inject_s3_credentials:
+        # Make mock return the trainer_cr unchanged
+        mock_inject_s3_credentials.side_effect = lambda t, cr, api, ns: cr
+
         kubernetes_backend.train(trainer=trainer, runtime=runtime)
 
-        # Verify validate_secret_exists was called with correct args
-        mock_validate_secret.assert_called_once_with(
-            kubernetes_backend.core_api,
-            "my-s3-secret",
-            kubernetes_backend.namespace,
-        )
+        # Verify inject_s3_credentials was called with correct args
+        mock_inject_s3_credentials.assert_called_once()
+        call_args = mock_inject_s3_credentials.call_args
+        assert call_args[0][0] == trainer  # trainer
+        assert call_args[0][2] == kubernetes_backend.core_api  # core_api
+        assert call_args[0][3] == kubernetes_backend.namespace  # namespace
 
     print("test execution complete")
 
@@ -1341,8 +1344,9 @@ def test_train_with_s3_output_dir_adds_credential_env_vars(kubernetes_backend):
     """Test train with S3 output_dir adds S3 credential env vars to trainer_cr."""
     print("Executing test: train with S3 output_dir adds S3 credential env vars")
 
+    from unittest.mock import MagicMock
+
     from kubeflow.trainer.rhai import TransformersTrainer
-    from kubeflow.trainer.rhai.constants import S3_CREDENTIAL_KEYS
 
     def dummy_train():
         pass
@@ -1362,8 +1366,22 @@ def test_train_with_s3_output_dir_adds_credential_env_vars(kubernetes_backend):
         ),
     )
 
-    # Mock validate_secret_exists to not actually call K8s API
-    with patch("kubeflow.trainer.rhai.utils.validate_secret_exists"):
+    # Mock the secret with sample S3 credentials
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        "AWS_ACCESS_KEY_ID": "key1",
+        "AWS_SECRET_ACCESS_KEY": "key2",
+        "AWS_DEFAULT_REGION": "key3",
+        "AWS_S3_ENDPOINT": "key4",
+    }
+
+    # Mock validate_secret_exists and the secret read
+    with (
+        patch("kubeflow.trainer.rhai.utils.validate_secret_exists"),
+        patch.object(
+            kubernetes_backend.core_api, "read_namespaced_secret", return_value=mock_secret
+        ),
+    ):
         kubernetes_backend.train(trainer=trainer, runtime=runtime)
 
     # Verify the TrainJob was created with S3 env vars
@@ -1372,14 +1390,15 @@ def test_train_with_s3_output_dir_adds_credential_env_vars(kubernetes_backend):
     trainjob_body = call_args[0][4]  # 5th positional argument is the body dict
     trainer_env = trainjob_body["spec"]["trainer"]["env"]
 
-    # Check that all S3 credential keys are present as env vars with secretKeyRef
+    # Check that all keys from the mock secret are present as env vars with secretKeyRef
     env_names = [env["name"] for env in trainer_env]
-    for key in S3_CREDENTIAL_KEYS:
+    for key in mock_secret.data:
         assert key in env_names, f"Expected {key} in trainer env vars"
 
     # Verify they use secretKeyRef with the correct secret name
+    expected_keys = set(mock_secret.data)
     for env in trainer_env:
-        if env["name"] in S3_CREDENTIAL_KEYS:
+        if env["name"] in expected_keys:
             assert "valueFrom" in env
             assert "secretKeyRef" in env["valueFrom"]
             assert env["valueFrom"]["secretKeyRef"]["name"] == "my-s3-secret"
