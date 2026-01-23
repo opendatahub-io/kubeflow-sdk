@@ -188,6 +188,7 @@ job_id = client.train(trainer=CustomTrainer(func=train_fn))
 | **Kubeflow Model Registry** | ✅ **Available** | v0.3.0+         | Manage model artifacts, versions and ML artifacts metadata            |
 | **Kubeflow Pipelines**      | 🚧 Planned       | TBD             | Build, run, and track AI workflows                                    |
 | **Kubeflow Spark Operator** | 🚧 Planned       | TBD             | Manage Spark applications for data processing and feature engineering |
+| **Feast**                   | 🚧 Planned       | TBD             | Feature store for machine learning                                    |
 
 ## Community
 

@@ -17,6 +17,7 @@ classifiers = [
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
   "Topic :: Scientific/Engineering",
@@ -44,6 +45,14 @@ hub = [
 ]
 
 [dependency-groups]
+docs = [
+  "sphinx>=7.0",
+  "furo>=2024.0",
+  "sphinx-autodoc-typehints>=2.0",
+  "sphinx-copybutton>=0.5",
+  "myst-parser>=3.0",
+  "sphinx-design>=0.6",
+]
 dev = [
   "kubeflow[hub]",
   "pytest>=7.0",
@@ -117,6 +126,7 @@ ignore = [
   "B006",  # mutable-argument-default
   "UP007", # Use X | Y instead of Union[X, Y] (requires Python 3.10+)
   "UP045", # Use X | None instead of Optional[X] (requires Python 3.10+)
+  "E501",  # Embedded HTML/SVG has long lines
 ]
 
 

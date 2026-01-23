@@ -112,3 +112,20 @@ install-dev: uv uv-venv ruff  ## Install uv, create .venv, sync deps.
 	@echo "Syncing dependencies with uv..."
 	@uv sync
 	@echo "Environment is ready."
+
+## Documentation
+
+.PHONY: docs
+docs:  ## Build documentation
+	@uv sync --group docs
+	@uv run sphinx-build -b html docs/source docs/_build/html
+
+.PHONY: docs-clean
+docs-clean:  ## Clean documentation build
+	@rm -rf docs/_build
+
+.PHONY: docs-serve
+docs-serve:  ## Build and serve docs with live reload
+	@uv sync --group docs
+	@uv pip install sphinx-autobuild
+	@uv run sphinx-autobuild docs/source docs/_build/html
