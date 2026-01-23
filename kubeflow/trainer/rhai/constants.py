@@ -29,7 +29,6 @@ CHECKPOINT_INCOMPLETE_MARKER = "checkpoint-is-incomplete.txt"
 
 # Ephemeral volume for cloud storage checkpoint staging (for S3)
 CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
-CHECKPOINT_EPHEMERAL_STORAGE_CLASS = "default"
 
 # Cloud storage URI schemes
 S3_URI_SCHEME = "s3://"

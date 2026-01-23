@@ -19,7 +19,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from kubeflow.trainer.rhai.constants import (
-    CHECKPOINT_EPHEMERAL_STORAGE_CLASS,
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
     S3_CREDENTIAL_KEYS,
@@ -184,8 +183,8 @@ def test_parse_output_dir_uri_with_s3(test_case):
     # Verify volumeClaimTemplate spec
     vct_spec = volume_spec["ephemeral"]["volumeClaimTemplate"]["spec"]
     assert vct_spec["accessModes"] == ["ReadWriteOnce"]
-    assert vct_spec["storageClassName"] == CHECKPOINT_EPHEMERAL_STORAGE_CLASS
     assert "resources" in vct_spec
+    # Note: storageClassName is not set - uses cluster default
 
     # Verify volumeMount spec
     volume_mount_spec = volume_specs["volumeMount"]

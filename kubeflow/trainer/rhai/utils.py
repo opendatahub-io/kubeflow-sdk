@@ -11,7 +11,6 @@ from kubeflow.trainer.rhai import (
     transformers,
 )
 from kubeflow.trainer.rhai.constants import (
-    CHECKPOINT_EPHEMERAL_STORAGE_CLASS,
     CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
@@ -147,7 +146,6 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
 
         volume_spec = {
             "accessModes": ["ReadWriteOnce"],
-            "storageClassName": CHECKPOINT_EPHEMERAL_STORAGE_CLASS,
             "resources": volume_resources,
         }
 
