@@ -158,6 +158,7 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
         volume_mount_spec = {
             "name": CHECKPOINT_VOLUME_NAME,
             "mountPath": CHECKPOINT_MOUNT_PATH,
+            "readOnly": False,
         }
 
         # Return local staging path (training writes here, then uploads to S3)

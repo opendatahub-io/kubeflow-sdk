@@ -1298,7 +1298,10 @@ def test_honest_progress_reporting(test_case):
 
 
 def _mock_get_jit_checkpoint_injection_code(
-    output_dir=None, storage_uri=None, periodic_checkpoint_config=None, enable_jit_checkpoint=False
+    output_dir=None,
+    cloud_remote_storage_uri=None,
+    periodic_checkpoint_config=None,
+    enable_jit_checkpoint=False,
 ):
     """Mock implementation of get_jit_checkpoint_injection_code that doesn't require torch."""
     parts = []
@@ -2141,28 +2144,28 @@ def test_build_checkpoint_code_with_s3_storage_uri():
 
     code = _build_checkpoint_code(trainer)
 
-    # Verify storage_uri is included in the generated code
+    # Verify cloud_remote_storage_uri is included in the generated code
     assert code != ""
-    assert "storage_uri" in code
+    assert "cloud_remote_storage_uri" in code
     assert "s3://my-bucket/checkpoints" in code
 
     print("test execution complete")
 
 
 def test_get_jit_checkpoint_injection_code_with_storage_uri():
-    """Test get_jit_checkpoint_injection_code includes storage_uri in config."""
-    print("Executing test: get_jit_checkpoint_injection_code with storage_uri")
+    """Test get_jit_checkpoint_injection_code includes cloud_remote_storage_uri in config."""
+    print("Executing test: get_jit_checkpoint_injection_code with cloud_remote_storage_uri")
 
     from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
     checkpoint_code = get_jit_checkpoint_injection_code(
         output_dir="/mnt/kubeflow-checkpoints",
-        storage_uri="s3://my-bucket/model-checkpoints",
+        cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
         enable_jit_checkpoint=True,
     )
 
-    # Verify storage_uri is in the generated config
-    assert "storage_uri" in checkpoint_code
+    # Verify cloud_remote_storage_uri is in the generated config
+    assert "cloud_remote_storage_uri" in checkpoint_code
     assert "s3://my-bucket/model-checkpoints" in checkpoint_code
 
     print("test execution complete")

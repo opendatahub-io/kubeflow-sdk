@@ -87,13 +87,17 @@ class TransformersTrainer:
         periodic_checkpoint_config: Optional configuration for periodic checkpointing.
                                    See PeriodicCheckpointConfig for available options.
         data_connection_name: Name of the Kubernetes secret containing S3 credentials.
-                              Required when output_dir uses s3:// scheme.
+                              Required when output_dir uses s3:// scheme. To find or create
+                              a data connection: in the RHOAI dashboard, navigate to your
+                              Data Science project, go to the Connections tab, and either
+                              copy an existing connection's resource name or create a new
+                              S3-compatible connection.
 
     Raises:
         ValueError: If metrics_port is not in range 1024-65535.
         ValueError: If metrics_poll_interval_seconds is not in range 5-300.
         ValueError: If func is not callable.
-        ValueError: If output_dir uses unsupported URI scheme (only pvc:// is supported).
+        ValueError: If output_dir uses unsupported URI scheme (only pvc:// and s3:// are supported).
     """
 
     # Core training function (same as CustomTrainer)
@@ -159,7 +163,7 @@ class TransformersTrainer:
                 f"metrics_poll_interval_seconds must be in range 5-300, "
                 f"got {self.metrics_poll_interval_seconds}"
             )
-        # Only allow pvc:// or paths without URI schemes
+        # Only allow pvc://, s3://, or paths without URI schemes
         if (
             self.output_dir
             and "://" in self.output_dir
@@ -951,8 +955,6 @@ def get_trainer_cr_from_transformers_trainer(
 
 def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
     """Generate checkpoint injection code for the trainer."""
-    from kubeflow.trainer.rhai.constants import S3_URI_SCHEME
-
     # Only inject if JIT or periodic checkpoint is enabled
     if not trainer.enable_jit_checkpoint and not trainer.periodic_checkpoint_config:
         return ""
@@ -977,14 +979,14 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
     resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
 
     # Check if using S3 storage
-    storage_uri = None
+    cloud_remote_storage_uri = None
     if trainer.output_dir and trainer.output_dir.startswith(S3_URI_SCHEME):
-        storage_uri = trainer.output_dir
+        cloud_remote_storage_uri = trainer.output_dir
 
     # Generate checkpoint injection code
     return get_jit_checkpoint_injection_code(
         output_dir=resolved_output_dir,
-        storage_uri=storage_uri,
+        cloud_remote_storage_uri=cloud_remote_storage_uri,
         periodic_checkpoint_config=periodic_config_dict,
         enable_jit_checkpoint=trainer.enable_jit_checkpoint,
     )
@@ -992,7 +994,7 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
 
 def get_jit_checkpoint_injection_code(
     output_dir: Optional[str] = None,
-    storage_uri: Optional[str] = None,
+    cloud_remote_storage_uri: Optional[str] = None,
     periodic_checkpoint_config: Optional[dict] = None,
     enable_jit_checkpoint: bool = False,
 ) -> str:
@@ -1005,8 +1007,8 @@ def get_jit_checkpoint_injection_code(
     if output_dir:
         config_dict["output_dir"] = output_dir
 
-    if storage_uri:
-        config_dict["storage_uri"] = storage_uri
+    if cloud_remote_storage_uri:
+        config_dict["cloud_remote_storage_uri"] = cloud_remote_storage_uri
 
     if periodic_checkpoint_config:
         if "save_strategy" in periodic_checkpoint_config:
