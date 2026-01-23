@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 
 from kubeflow_trainer_api import models
+from kubernetes import client
 
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import (
@@ -19,7 +20,6 @@ from kubeflow.trainer.rhai.constants import (
     S3_URI_SCHEME,
 )
 from kubeflow.trainer.types import types
-from kubernetes import client
 
 logger = logging.getLogger(__name__)
 
@@ -148,16 +148,12 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
         volume_spec = {
             "accessModes": ["ReadWriteOnce"],
             "storageClassName": CHECKPOINT_EPHEMERAL_STORAGE_CLASS,
-            "resources": volume_resources
+            "resources": volume_resources,
         }
 
         volume = {
             "name": CHECKPOINT_VOLUME_NAME,
-            "ephemeral": {
-                "volumeClaimTemplate": {
-                "spec": volume_spec
-                }
-            },
+            "ephemeral": {"volumeClaimTemplate": {"spec": volume_spec}},
         }
         volume_mount_spec = {
             "name": CHECKPOINT_VOLUME_NAME,

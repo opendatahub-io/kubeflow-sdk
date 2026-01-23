@@ -981,7 +981,6 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
     if trainer.output_dir and trainer.output_dir.startswith(S3_URI_SCHEME):
         storage_uri = trainer.output_dir
 
-
     # Generate checkpoint injection code
     return get_jit_checkpoint_injection_code(
         output_dir=resolved_output_dir,

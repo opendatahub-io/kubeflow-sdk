@@ -1297,3 +1297,91 @@ def test_delete_job(kubernetes_backend, test_case):
     except Exception as e:
         assert type(e) is test_case.expected_error
     print("test execution complete")
+
+
+def test_train_with_s3_output_dir_validates_secret(kubernetes_backend):
+    """Test train with S3 output_dir validates the data connection secret exists."""
+    print("Executing test: train with S3 output_dir validates secret")
+
+    from kubeflow.trainer.rhai import TransformersTrainer
+
+    def dummy_train():
+        pass
+
+    trainer = TransformersTrainer(
+        func=dummy_train,
+        output_dir="s3://my-bucket/checkpoints",
+        data_connection_name="my-s3-secret",
+    )
+
+    runtime = types.Runtime(
+        name="torch",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:latest",
+        ),
+    )
+
+    # Mock validate_secret_exists to track if it's called
+    with patch("kubeflow.trainer.rhai.utils.validate_secret_exists") as mock_validate_secret:
+        kubernetes_backend.train(trainer=trainer, runtime=runtime)
+
+        # Verify validate_secret_exists was called with correct args
+        mock_validate_secret.assert_called_once_with(
+            kubernetes_backend.core_api,
+            "my-s3-secret",
+            kubernetes_backend.namespace,
+        )
+
+    print("test execution complete")
+
+
+def test_train_with_s3_output_dir_adds_credential_env_vars(kubernetes_backend):
+    """Test train with S3 output_dir adds S3 credential env vars to trainer_cr."""
+    print("Executing test: train with S3 output_dir adds S3 credential env vars")
+
+    from kubeflow.trainer.rhai import TransformersTrainer
+    from kubeflow.trainer.rhai.constants import S3_CREDENTIAL_KEYS
+
+    def dummy_train():
+        pass
+
+    trainer = TransformersTrainer(
+        func=dummy_train,
+        output_dir="s3://my-bucket/checkpoints",
+        data_connection_name="my-s3-secret",
+    )
+
+    runtime = types.Runtime(
+        name="torch",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:latest",
+        ),
+    )
+
+    # Mock validate_secret_exists to not actually call K8s API
+    with patch("kubeflow.trainer.rhai.utils.validate_secret_exists"):
+        kubernetes_backend.train(trainer=trainer, runtime=runtime)
+
+    # Verify the TrainJob was created with S3 env vars
+    # The mock is called with positional args: (group, version, namespace, plural, body_dict)
+    call_args = kubernetes_backend.custom_api.create_namespaced_custom_object.call_args
+    trainjob_body = call_args[0][4]  # 5th positional argument is the body dict
+    trainer_env = trainjob_body["spec"]["trainer"]["env"]
+
+    # Check that all S3 credential keys are present as env vars with secretKeyRef
+    env_names = [env["name"] for env in trainer_env]
+    for key in S3_CREDENTIAL_KEYS:
+        assert key in env_names, f"Expected {key} in trainer env vars"
+
+    # Verify they use secretKeyRef with the correct secret name
+    for env in trainer_env:
+        if env["name"] in S3_CREDENTIAL_KEYS:
+            assert "valueFrom" in env
+            assert "secretKeyRef" in env["valueFrom"]
+            assert env["valueFrom"]["secretKeyRef"]["name"] == "my-s3-secret"
+
+    print("test execution complete")

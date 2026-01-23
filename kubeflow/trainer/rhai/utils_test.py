@@ -14,10 +14,21 @@
 
 """Tests for RHAI utils functions."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
-from kubeflow.trainer.rhai.constants import CHECKPOINT_MOUNT_PATH, CHECKPOINT_VOLUME_NAME
-from kubeflow.trainer.rhai.utils import parse_output_dir_uri
+from kubeflow.trainer.rhai.constants import (
+    CHECKPOINT_EPHEMERAL_STORAGE_CLASS,
+    CHECKPOINT_MOUNT_PATH,
+    CHECKPOINT_VOLUME_NAME,
+    S3_CREDENTIAL_KEYS,
+)
+from kubeflow.trainer.rhai.utils import (
+    get_s3_credential_env_vars,
+    parse_output_dir_uri,
+    validate_secret_exists,
+)
 from kubeflow.trainer.test.common import SUCCESS, TestCase
 
 
@@ -129,6 +140,113 @@ def test_parse_output_dir_uri_with_pvc(test_case):
     assert volume_mount_spec["name"] == CHECKPOINT_VOLUME_NAME
     assert volume_mount_spec["mountPath"] == CHECKPOINT_MOUNT_PATH
     assert volume_mount_spec["readOnly"] is False
+
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="s3 uri - returns staging path and ephemeral volume specs",
+            expected_status=SUCCESS,
+            config={"output_dir": "s3://my-bucket/checkpoints"},
+        ),
+        TestCase(
+            name="s3 uri with nested path - returns staging path",
+            expected_status=SUCCESS,
+            config={"output_dir": "s3://bucket/models/llm/v1"},
+        ),
+    ],
+)
+def test_parse_output_dir_uri_with_s3(test_case):
+    """Test parse_output_dir_uri correctly parses S3 URIs and returns ephemeral volume specs."""
+    print(f"Executing test: {test_case.name}")
+
+    resolved_path, volume_specs = parse_output_dir_uri(test_case.config["output_dir"])
+
+    assert test_case.expected_status == SUCCESS
+
+    # S3 URIs return local staging path (training writes here before uploading to S3)
+    assert resolved_path == CHECKPOINT_MOUNT_PATH
+
+    # Verify volume specs structure
+    assert volume_specs is not None
+    assert "volume" in volume_specs
+    assert "volumeMount" in volume_specs
+
+    # Verify ephemeral volume spec
+    volume_spec = volume_specs["volume"]
+    assert volume_spec["name"] == CHECKPOINT_VOLUME_NAME
+    assert "ephemeral" in volume_spec
+    assert "volumeClaimTemplate" in volume_spec["ephemeral"]
+
+    # Verify volumeClaimTemplate spec
+    vct_spec = volume_spec["ephemeral"]["volumeClaimTemplate"]["spec"]
+    assert vct_spec["accessModes"] == ["ReadWriteOnce"]
+    assert vct_spec["storageClassName"] == CHECKPOINT_EPHEMERAL_STORAGE_CLASS
+    assert "resources" in vct_spec
+
+    # Verify volumeMount spec
+    volume_mount_spec = volume_specs["volumeMount"]
+    assert volume_mount_spec["name"] == CHECKPOINT_VOLUME_NAME
+    assert volume_mount_spec["mountPath"] == CHECKPOINT_MOUNT_PATH
+
+    print("test execution complete")
+
+
+def test_get_s3_credential_env_vars():
+    """Test get_s3_credential_env_vars returns EnvVar objects for all S3 credential keys."""
+    print("Executing test: get_s3_credential_env_vars")
+
+    secret_name = "my-s3-secret"
+    env_vars = get_s3_credential_env_vars(secret_name)
+
+    assert len(env_vars) == len(S3_CREDENTIAL_KEYS)
+
+    for env_var, expected_key in zip(env_vars, S3_CREDENTIAL_KEYS):
+        assert env_var.name == expected_key
+        assert env_var.value_from is not None
+        assert env_var.value_from.secret_key_ref is not None
+        assert env_var.value_from.secret_key_ref.name == secret_name
+        assert env_var.value_from.secret_key_ref.key == expected_key
+        assert env_var.value_from.secret_key_ref.optional is True
+
+    print("test execution complete")
+
+
+def test_validate_secret_exists_success():
+    """Test validate_secret_exists passes when secret exists."""
+    print("Executing test: validate_secret_exists_success")
+
+    mock_core_api = MagicMock()
+    mock_core_api.read_namespaced_secret.return_value = MagicMock()
+
+    # Should not raise
+    validate_secret_exists(mock_core_api, "my-secret", "default")
+
+    mock_core_api.read_namespaced_secret.assert_called_once_with(
+        name="my-secret", namespace="default"
+    )
+
+    print("test execution complete")
+
+
+def test_validate_secret_exists_not_found():
+    """Test validate_secret_exists raises ValueError when secret not found."""
+    print("Executing test: validate_secret_exists_not_found")
+
+    from kubernetes.client.rest import ApiException
+
+    mock_core_api = MagicMock()
+    mock_core_api.read_namespaced_secret.side_effect = ApiException(status=404)
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_secret_exists(mock_core_api, "missing-secret", "test-ns")
+
+    assert "missing-secret" in str(exc_info.value)
+    assert "test-ns" in str(exc_info.value)
+    assert "not found" in str(exc_info.value)
 
     print("test execution complete")
 
