@@ -3,6 +3,7 @@ from typing import Optional
 
 from kubeflow_trainer_api import models
 from kubernetes import client
+from kubernetes.client.rest import ApiException
 
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import (
@@ -311,8 +312,6 @@ def validate_secret_exists(
     Raises:
         ValueError: If secret does not exist or user lacks permission.
     """
-    from kubernetes.client.rest import ApiException
-
     try:
         core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
     except ApiException as e:
@@ -371,3 +370,42 @@ def inject_s3_credentials(
     trainer_cr.env.extend(s3_env_vars)
 
     return trainer_cr
+
+
+def setup_rhai_trainer_storage(
+    trainer: RHAITrainer,
+    trainer_cr: "models.TrainerV1alpha1Trainer",
+    pod_template_overrides: Optional[list],
+    core_api: "client.CoreV1Api",
+    namespace: str,
+) -> tuple[str | None, "models.TrainerV1alpha1Trainer", list]:
+    """Setup RHAI trainer storage: volume mounts and S3 credentials.
+
+    This is a consolidated helper that:
+    1. Parses output_dir URI and applies volume mounting to pod template overrides
+    2. Injects S3 credentials into trainer CR if using S3 output_dir
+
+    Args:
+        trainer: RHAI trainer instance.
+        trainer_cr: Trainer custom resource to inject env vars into.
+        pod_template_overrides: Existing pod template overrides list.
+        core_api: Kubernetes CoreV1Api client.
+        namespace: Namespace for secret validation.
+
+    Returns:
+        Tuple of (resolved_output_dir, updated_trainer_cr, updated_pod_template_overrides).
+    """
+    resolved_output_dir = None
+
+    # Apply output_dir URI parsing and volume mounting
+    if hasattr(trainer, "output_dir") and trainer.output_dir:
+        resolved_output_dir, pod_template_overrides = apply_output_dir_uri_to_pod_overrides(
+            trainer.output_dir, pod_template_overrides
+        )
+    else:
+        pod_template_overrides = pod_template_overrides or []
+
+    # Inject S3 credentials if applicable
+    trainer_cr = inject_s3_credentials(trainer, trainer_cr, core_api, namespace)
+
+    return resolved_output_dir, trainer_cr, pod_template_overrides

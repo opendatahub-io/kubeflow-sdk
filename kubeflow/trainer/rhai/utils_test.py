@@ -26,6 +26,7 @@ from kubeflow.trainer.rhai.utils import (
     get_s3_credential_env_vars,
     inject_s3_credentials,
     parse_output_dir_uri,
+    setup_rhai_trainer_storage,
     validate_secret_exists,
 )
 from kubeflow.trainer.test.common import SUCCESS, TestCase
@@ -367,6 +368,107 @@ def test_inject_s3_credentials_without_data_connection_name():
 
     # Should return trainer_cr unchanged
     assert result.env == []
+
+    print("test execution complete")
+
+
+def test_setup_rhai_trainer_storage_with_s3():
+    """Test setup_rhai_trainer_storage handles S3 output_dir with volume mounts and credentials."""
+    print("Executing test: setup_rhai_trainer_storage_with_s3")
+
+    mock_core_api = MagicMock()
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        "AWS_ACCESS_KEY_ID": "key1",
+        "AWS_SECRET_ACCESS_KEY": "key2",
+    }
+    mock_core_api.read_namespaced_secret.return_value = mock_secret
+
+    # Create a mock trainer with S3 output_dir
+    mock_trainer = MagicMock()
+    mock_trainer.output_dir = "s3://my-bucket/checkpoints"
+    mock_trainer.data_connection_name = "my-s3-secret"
+
+    # Create a mock trainer_cr with no existing env vars
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = None
+
+    resolved_dir, result_cr, result_overrides = setup_rhai_trainer_storage(
+        mock_trainer, mock_trainer_cr, None, mock_core_api, "default"
+    )
+
+    # Should return staging path for S3
+    assert resolved_dir == CHECKPOINT_MOUNT_PATH
+
+    # Should have pod_template_overrides with ephemeral volume
+    assert result_overrides is not None
+    assert len(result_overrides) > 0
+
+    # Should add S3 credential env vars
+    assert result_cr.env is not None
+    assert len(result_cr.env) == 2  # 2 keys in mock secret
+
+    print("test execution complete")
+
+
+def test_setup_rhai_trainer_storage_with_pvc():
+    """Test setup_rhai_trainer_storage handles PVC output_dir without S3 credentials."""
+    print("Executing test: setup_rhai_trainer_storage_with_pvc")
+
+    mock_core_api = MagicMock()
+
+    # Create a mock trainer with PVC output_dir
+    mock_trainer = MagicMock()
+    mock_trainer.output_dir = "pvc://my-pvc/checkpoints"
+    mock_trainer.data_connection_name = None
+
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = []
+
+    resolved_dir, result_cr, result_overrides = setup_rhai_trainer_storage(
+        mock_trainer, mock_trainer_cr, None, mock_core_api, "default"
+    )
+
+    # Should return mounted path for PVC
+    assert resolved_dir == f"{CHECKPOINT_MOUNT_PATH}/checkpoints"
+
+    # Should have pod_template_overrides with PVC volume
+    assert result_overrides is not None
+    assert len(result_overrides) > 0
+
+    # Should NOT call K8s API for S3 credentials
+    mock_core_api.read_namespaced_secret.assert_not_called()
+
+    # Env should be unchanged
+    assert result_cr.env == []
+
+    print("test execution complete")
+
+
+def test_setup_rhai_trainer_storage_no_output_dir():
+    """Test setup_rhai_trainer_storage handles trainer without output_dir."""
+    print("Executing test: setup_rhai_trainer_storage_no_output_dir")
+
+    mock_core_api = MagicMock()
+
+    # Create a mock trainer without output_dir
+    mock_trainer = MagicMock(spec=[])  # No output_dir attribute
+
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = []
+
+    resolved_dir, result_cr, result_overrides = setup_rhai_trainer_storage(
+        mock_trainer, mock_trainer_cr, None, mock_core_api, "default"
+    )
+
+    # Should return None for resolved_dir
+    assert resolved_dir is None
+
+    # Should return empty list for overrides
+    assert result_overrides == []
+
+    # Should NOT call K8s API
+    mock_core_api.read_namespaced_secret.assert_not_called()
 
     print("test execution complete")
 
