@@ -369,7 +369,17 @@ def inject_cloud_credentials(
     )
     if trainer_cr.env is None:
         trainer_cr.env = []
-    trainer_cr.env.extend(cloud_env_vars)
+
+    # Check for duplicate env var names (K8s rejects duplicate names)
+    existing_names = {env.name for env in trainer_cr.env}
+    for cloud_env in cloud_env_vars:
+        if cloud_env.name in existing_names:
+            raise ValueError(
+                f"Environment variable '{cloud_env.name}' from data connection secret "
+                f"'{trainer.data_connection_name}' conflicts with an existing env var. "
+                "Please remove the duplicate from your trainer configuration."
+            )
+        trainer_cr.env.append(cloud_env)
 
     return trainer_cr
 

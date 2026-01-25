@@ -373,6 +373,35 @@ def test_inject_cloud_credentials_without_data_connection_name():
     print("test execution complete")
 
 
+def test_inject_cloud_credentials_duplicate_env_var():
+    """Test inject_cloud_credentials raises error on duplicate env var names."""
+    print("Executing test: inject_cloud_credentials_duplicate_env_var")
+
+    mock_core_api = MagicMock()
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        "AWS_ACCESS_KEY_ID": "key1",
+        "AWS_SECRET_ACCESS_KEY": "key2",
+    }
+    mock_core_api.read_namespaced_secret.return_value = mock_secret
+
+    # Create a mock trainer with S3 output_dir
+    mock_trainer = MagicMock()
+    mock_trainer.output_dir = "s3://my-bucket/checkpoints"
+    mock_trainer.data_connection_name = "my-s3-secret"
+
+    # Create a mock trainer_cr with existing env var that conflicts
+    existing_env = MagicMock()
+    existing_env.name = "AWS_ACCESS_KEY_ID"  # Same name as in secret
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = [existing_env]
+
+    with pytest.raises(ValueError, match=r"AWS_ACCESS_KEY_ID.*conflicts"):
+        inject_cloud_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
+
+    print("test execution complete")
+
+
 def test_setup_rhai_trainer_storage_with_s3():
     """Test setup_rhai_trainer_storage handles S3 output_dir with volume mounts and credentials."""
     print("Executing test: setup_rhai_trainer_storage_with_s3")
