@@ -661,7 +661,8 @@ class KubernetesBackend(RuntimeBackend):
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
 
-        # Setup RHAI trainer storage (volume mounts and S3 credentials)
+        # Setup RHAI trainer storage: parse output_dir for volume mounts (PVC/S3)
+        # and inject cloud storage credentials from data connection secret
         if is_rhai_trainer:
             _, trainer_cr, pod_template_overrides = rhai_utils.setup_rhai_trainer_storage(
                 trainer, trainer_cr, pod_template_overrides, self.core_api, self.namespace

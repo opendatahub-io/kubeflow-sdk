@@ -257,7 +257,7 @@ def apply_output_dir_uri_to_pod_overrides(
     return resolved_output_dir, pod_template_overrides
 
 
-def get_s3_credential_env_vars(
+def get_cloud_credential_env_vars(
     core_api: "client.CoreV1Api",
     secret_name: str,
     namespace: str,
@@ -265,8 +265,8 @@ def get_s3_credential_env_vars(
     """Get environment variables for all keys in a Kubernetes secret.
 
     Dynamically reads all keys from the secret and creates environment variables
-    with secretKeyRef for each key. This allows supporting any S3-compatible storage
-    credentials without hardcoding specific key names.
+    with secretKeyRef for each key. This allows supporting any cloud storage
+    credentials (S3, Azure, etc.) without hardcoding specific key names.
 
     Args:
         core_api: Kubernetes CoreV1Api client.
@@ -330,16 +330,16 @@ def validate_secret_exists(
         raise
 
 
-def inject_s3_credentials(
+def inject_cloud_credentials(
     trainer: RHAITrainer,
     trainer_cr: "models.TrainerV1alpha1Trainer",
     core_api: "client.CoreV1Api",
     namespace: str,
 ) -> "models.TrainerV1alpha1Trainer":
-    """Inject S3 credentials into trainer CR if using S3 output_dir.
+    """Inject cloud storage credentials into trainer CR if using cloud output_dir.
 
-    Validates the data connection secret exists and appends S3 credential
-    environment variables to the trainer CR.
+    Validates the data connection secret exists and appends cloud storage credential
+    environment variables to the trainer CR. Supports S3, Azure, etc.
 
     Args:
         trainer: RHAI trainer instance with data_connection_name attribute.
@@ -364,10 +364,12 @@ def inject_s3_credentials(
     validate_secret_exists(core_api, trainer.data_connection_name, namespace)
 
     # Add all keys from the data connection secret as env vars
-    s3_env_vars = get_s3_credential_env_vars(core_api, trainer.data_connection_name, namespace)
+    cloud_env_vars = get_cloud_credential_env_vars(
+        core_api, trainer.data_connection_name, namespace
+    )
     if trainer_cr.env is None:
         trainer_cr.env = []
-    trainer_cr.env.extend(s3_env_vars)
+    trainer_cr.env.extend(cloud_env_vars)
 
     return trainer_cr
 
@@ -405,7 +407,7 @@ def setup_rhai_trainer_storage(
     else:
         pod_template_overrides = pod_template_overrides or []
 
-    # Inject S3 credentials if applicable
-    trainer_cr = inject_s3_credentials(trainer, trainer_cr, core_api, namespace)
+    # Inject cloud storage credentials if applicable
+    trainer_cr = inject_cloud_credentials(trainer, trainer_cr, core_api, namespace)
 
     return resolved_output_dir, trainer_cr, pod_template_overrides

@@ -23,8 +23,8 @@ from kubeflow.trainer.rhai.constants import (
     CHECKPOINT_VOLUME_NAME,
 )
 from kubeflow.trainer.rhai.utils import (
-    get_s3_credential_env_vars,
-    inject_s3_credentials,
+    get_cloud_credential_env_vars,
+    inject_cloud_credentials,
     parse_output_dir_uri,
     setup_rhai_trainer_storage,
     validate_secret_exists,
@@ -203,9 +203,9 @@ def test_parse_output_dir_uri_with_s3(test_case):
     print("test execution complete")
 
 
-def test_get_s3_credential_env_vars():
-    """Test get_s3_credential_env_vars returns EnvVar objects for all keys in secret."""
-    print("Executing test: get_s3_credential_env_vars")
+def test_get_cloud_credential_env_vars():
+    """Test get_cloud_credential_env_vars returns EnvVar objects for all keys in secret."""
+    print("Executing test: get_cloud_credential_env_vars")
 
     # Mock the CoreV1Api and secret
     mock_core_api = MagicMock()
@@ -221,7 +221,7 @@ def test_get_s3_credential_env_vars():
 
     secret_name = "my-s3-secret"
     namespace = "default"
-    env_vars = get_s3_credential_env_vars(mock_core_api, secret_name, namespace)
+    env_vars = get_cloud_credential_env_vars(mock_core_api, secret_name, namespace)
 
     # Verify the secret was read
     mock_core_api.read_namespaced_secret.assert_called_once_with(
@@ -284,9 +284,9 @@ def test_validate_secret_exists_not_found():
     print("test execution complete")
 
 
-def test_inject_s3_credentials_with_s3_output_dir():
-    """Test inject_s3_credentials injects credentials when using S3 output_dir."""
-    print("Executing test: inject_s3_credentials_with_s3_output_dir")
+def test_inject_cloud_credentials_with_s3_output_dir():
+    """Test inject_cloud_credentials injects credentials when using S3 output_dir."""
+    print("Executing test: inject_cloud_credentials_with_s3_output_dir")
 
     mock_core_api = MagicMock()
     mock_secret = MagicMock()
@@ -307,7 +307,7 @@ def test_inject_s3_credentials_with_s3_output_dir():
     mock_trainer_cr = MagicMock()
     mock_trainer_cr.env = None
 
-    result = inject_s3_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
+    result = inject_cloud_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
 
     # Should read the secret twice (once for validation, once for getting keys)
     assert mock_core_api.read_namespaced_secret.call_count == 2
@@ -322,9 +322,9 @@ def test_inject_s3_credentials_with_s3_output_dir():
     print("test execution complete")
 
 
-def test_inject_s3_credentials_without_s3_output_dir():
-    """Test inject_s3_credentials does nothing when not using S3 output_dir."""
-    print("Executing test: inject_s3_credentials_without_s3_output_dir")
+def test_inject_cloud_credentials_without_s3_output_dir():
+    """Test inject_cloud_credentials does nothing when not using S3 output_dir."""
+    print("Executing test: inject_cloud_credentials_without_s3_output_dir")
 
     mock_core_api = MagicMock()
 
@@ -336,7 +336,7 @@ def test_inject_s3_credentials_without_s3_output_dir():
     mock_trainer_cr = MagicMock()
     mock_trainer_cr.env = []
 
-    result = inject_s3_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
+    result = inject_cloud_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
 
     # Should NOT call validate_secret_exists
     mock_core_api.read_namespaced_secret.assert_not_called()
@@ -347,9 +347,9 @@ def test_inject_s3_credentials_without_s3_output_dir():
     print("test execution complete")
 
 
-def test_inject_s3_credentials_without_data_connection_name():
-    """Test inject_s3_credentials does nothing when data_connection_name is missing."""
-    print("Executing test: inject_s3_credentials_without_data_connection_name")
+def test_inject_cloud_credentials_without_data_connection_name():
+    """Test inject_cloud_credentials does nothing when data_connection_name is missing."""
+    print("Executing test: inject_cloud_credentials_without_data_connection_name")
 
     mock_core_api = MagicMock()
 
@@ -361,7 +361,7 @@ def test_inject_s3_credentials_without_data_connection_name():
     mock_trainer_cr = MagicMock()
     mock_trainer_cr.env = []
 
-    result = inject_s3_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
+    result = inject_cloud_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
 
     # Should NOT call validate_secret_exists
     mock_core_api.read_namespaced_secret.assert_not_called()
