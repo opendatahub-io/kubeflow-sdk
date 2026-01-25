@@ -32,11 +32,3 @@ CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
 
 # Cloud storage URI schemes
 S3_URI_SCHEME = "s3://"
-
-# S3 credential environment variable keys (used in data connection secrets)
-S3_CREDENTIAL_KEYS = [
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_DEFAULT_REGION",
-    "AWS_S3_ENDPOINT",
-]

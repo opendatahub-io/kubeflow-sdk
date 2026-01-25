@@ -380,7 +380,7 @@ def setup_rhai_trainer_storage(
     pod_template_overrides: Optional[list],
     core_api: "client.CoreV1Api",
     namespace: str,
-) -> tuple[str | None, "models.TrainerV1alpha1Trainer", list]:
+) -> tuple[Optional[str], "models.TrainerV1alpha1Trainer", list]:
     """Setup RHAI trainer storage: volume mounts and S3 credentials.
 
     This is a consolidated helper that:
