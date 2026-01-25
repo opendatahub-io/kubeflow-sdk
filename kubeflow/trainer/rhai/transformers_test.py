@@ -23,6 +23,7 @@ from kubeflow.trainer.rhai.transformers import (
     PeriodicCheckpointConfig,
     TransformersTrainer,
     _build_checkpoint_code,
+    get_jit_checkpoint_injection_code,
     get_transformers_instrumentation_wrapper,
 )
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
@@ -2155,8 +2156,6 @@ def test_build_checkpoint_code_with_s3_storage_uri():
 def test_get_jit_checkpoint_injection_code_with_storage_uri():
     """Test get_jit_checkpoint_injection_code includes cloud_remote_storage_uri in config."""
     print("Executing test: get_jit_checkpoint_injection_code with cloud_remote_storage_uri")
-
-    from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
     checkpoint_code = get_jit_checkpoint_injection_code(
         output_dir="/mnt/kubeflow-checkpoints",

@@ -16,6 +16,7 @@
 
 from unittest.mock import MagicMock
 
+from kubernetes.client.rest import ApiException
 import pytest
 
 from kubeflow.trainer.rhai.constants import (
@@ -268,8 +269,6 @@ def test_validate_secret_exists_success():
 def test_validate_secret_exists_not_found():
     """Test validate_secret_exists raises ValueError when secret not found."""
     print("Executing test: validate_secret_exists_not_found")
-
-    from kubernetes.client.rest import ApiException
 
     mock_core_api = MagicMock()
     mock_core_api.read_namespaced_secret.side_effect = ApiException(status=404)
