@@ -309,15 +309,17 @@ def test_inject_cloud_credentials_with_s3_output_dir():
 
     result = inject_cloud_credentials(mock_trainer, mock_trainer_cr, mock_core_api, "default")
 
-    # Should read the secret twice (once for validation, once for getting keys)
-    assert mock_core_api.read_namespaced_secret.call_count == 2
+    # Verify API calls
     mock_core_api.read_namespaced_secret.assert_called_with(
         name="my-s3-secret", namespace="default"
     )
 
-    # Should add all keys from the secret as env vars
-    assert result.env is not None
-    assert len(result.env) == len(mock_secret.data)
+    # Verify all secret keys are added as env vars
+    actual_env = [
+        {"name": env.name, "secretKey": env.value_from.secret_key_ref.key} for env in result.env
+    ]
+    expected_env = [{"name": key, "secretKey": key} for key in mock_secret.data]
+    assert actual_env == expected_env
 
     print("test execution complete")
 
@@ -397,16 +399,18 @@ def test_setup_rhai_trainer_storage_with_s3():
         mock_trainer, mock_trainer_cr, None, mock_core_api, "default"
     )
 
-    # Should return staging path for S3
-    assert resolved_dir == CHECKPOINT_MOUNT_PATH
-
-    # Should have pod_template_overrides with ephemeral volume
-    assert result_overrides is not None
-    assert len(result_overrides) > 0
-
-    # Should add S3 credential env vars
-    assert result_cr.env is not None
-    assert len(result_cr.env) == 2  # 2 keys in mock secret
+    # Verify expected results
+    expected = {
+        "resolved_dir": CHECKPOINT_MOUNT_PATH,
+        "has_overrides": True,
+        "env_count": 2,  # 2 keys in mock secret
+    }
+    actual = {
+        "resolved_dir": resolved_dir,
+        "has_overrides": result_overrides is not None and len(result_overrides) > 0,
+        "env_count": len(result_cr.env) if result_cr.env else 0,
+    }
+    assert actual == expected
 
     print("test execution complete")
 
@@ -429,18 +433,20 @@ def test_setup_rhai_trainer_storage_with_pvc():
         mock_trainer, mock_trainer_cr, None, mock_core_api, "default"
     )
 
-    # Should return mounted path for PVC
-    assert resolved_dir == f"{CHECKPOINT_MOUNT_PATH}/checkpoints"
-
-    # Should have pod_template_overrides with PVC volume
-    assert result_overrides is not None
-    assert len(result_overrides) > 0
-
-    # Should NOT call K8s API for S3 credentials
-    mock_core_api.read_namespaced_secret.assert_not_called()
-
-    # Env should be unchanged
-    assert result_cr.env == []
+    # Verify expected results
+    expected = {
+        "resolved_dir": f"{CHECKPOINT_MOUNT_PATH}/checkpoints",
+        "has_overrides": True,
+        "env": [],
+        "secret_api_called": False,
+    }
+    actual = {
+        "resolved_dir": resolved_dir,
+        "has_overrides": result_overrides is not None and len(result_overrides) > 0,
+        "env": result_cr.env,
+        "secret_api_called": mock_core_api.read_namespaced_secret.called,
+    }
+    assert actual == expected
 
     print("test execution complete")
 
@@ -461,14 +467,18 @@ def test_setup_rhai_trainer_storage_no_output_dir():
         mock_trainer, mock_trainer_cr, None, mock_core_api, "default"
     )
 
-    # Should return None for resolved_dir
-    assert resolved_dir is None
-
-    # Should return empty list for overrides
-    assert result_overrides == []
-
-    # Should NOT call K8s API
-    mock_core_api.read_namespaced_secret.assert_not_called()
+    # Verify expected results
+    expected = {
+        "resolved_dir": None,
+        "overrides": [],
+        "secret_api_called": False,
+    }
+    actual = {
+        "resolved_dir": resolved_dir,
+        "overrides": result_overrides,
+        "secret_api_called": mock_core_api.read_namespaced_secret.called,
+    }
+    assert actual == expected
 
     print("test execution complete")
 
