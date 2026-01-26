@@ -257,7 +257,7 @@ def apply_output_dir_uri_to_pod_overrides(
     return resolved_output_dir, pod_template_overrides
 
 
-def get_cloud_credential_env_vars(
+def get_cloud_storage_credential_env_vars(
     core_api: "client.CoreV1Api",
     secret_name: str,
     namespace: str,
@@ -330,7 +330,7 @@ def validate_secret_exists(
         raise
 
 
-def inject_cloud_credentials(
+def inject_cloud_storage_credentials(
     trainer: RHAITrainer,
     trainer_cr: "models.TrainerV1alpha1Trainer",
     core_api: "client.CoreV1Api",
@@ -364,7 +364,7 @@ def inject_cloud_credentials(
     validate_secret_exists(core_api, trainer.data_connection_name, namespace)
 
     # Add all keys from the data connection secret as env vars
-    cloud_env_vars = get_cloud_credential_env_vars(
+    cloud_env_vars = get_cloud_storage_credential_env_vars(
         core_api, trainer.data_connection_name, namespace
     )
     if trainer_cr.env is None:
@@ -418,6 +418,6 @@ def setup_rhai_trainer_storage(
         pod_template_overrides = pod_template_overrides or []
 
     # Inject cloud storage credentials if applicable
-    trainer_cr = inject_cloud_credentials(trainer, trainer_cr, core_api, namespace)
+    trainer_cr = inject_cloud_storage_credentials(trainer, trainer_cr, core_api, namespace)
 
     return resolved_output_dir, trainer_cr, pod_template_overrides
