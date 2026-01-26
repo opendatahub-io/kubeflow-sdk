@@ -2,6 +2,8 @@ import logging
 from typing import Optional
 
 from kubeflow_trainer_api import models
+from kubernetes import client
+from kubernetes.client.rest import ApiException
 
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import (
@@ -10,9 +12,11 @@ from kubeflow.trainer.rhai import (
     transformers,
 )
 from kubeflow.trainer.rhai.constants import (
+    CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
     PVC_URI_SCHEME,
+    S3_URI_SCHEME,
 )
 from kubeflow.trainer.types import types
 
@@ -85,6 +89,16 @@ def merge_progression_annotations(
 def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
     """
     Parse output_dir URI and return resolved path and volume mount specs.
+
+    For PVC URIs (pvc://), returns a resolved local path and PVC volume specs.
+    For S3 URIs (s3://), returns the local staging path and ephemeral volume specs.
+
+    Args:
+        output_dir: Output directory URI (pvc://, s3://, or local path).
+
+    Returns:
+        Tuple of (resolved_path, volume_specs) where volume_specs contains
+        'volume' and 'volumeMount' dicts for Kubernetes, or None if no mounting needed.
     """
     if not output_dir:
         return None, None
@@ -119,6 +133,35 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
 
         return resolved_path, {"volume": volume_spec, "volumeMount": volume_mount_spec}
 
+    if output_dir.startswith(S3_URI_SCHEME):
+        # Build ephemeral volume spec for S3 checkpoint staging
+        # This volume is used as temporary local storage before uploading to S3
+        volume_resources = {
+            "requests": {
+                "storage": models.IoK8sApimachineryPkgApiResourceQuantity(
+                    CHECKPOINT_EPHEMERAL_VOLUME_SIZE
+                ),
+            }
+        }
+
+        volume_spec = {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": volume_resources,
+        }
+
+        volume = {
+            "name": CHECKPOINT_VOLUME_NAME,
+            "ephemeral": {"volumeClaimTemplate": {"spec": volume_spec}},
+        }
+        volume_mount_spec = {
+            "name": CHECKPOINT_VOLUME_NAME,
+            "mountPath": CHECKPOINT_MOUNT_PATH,
+            "readOnly": False,
+        }
+
+        # Return local staging path (training writes here, then uploads to S3)
+        return CHECKPOINT_MOUNT_PATH, {"volume": volume, "volumeMount": volume_mount_spec}
+
     return output_dir, None
 
 
@@ -127,11 +170,20 @@ def apply_output_dir_uri_to_pod_overrides(
     pod_template_overrides: Optional[list],
 ) -> tuple[str, list]:
     """
-    Process output_dir URI and apply PVC mounting to pod template overrides.
+    Process output_dir URI and apply volume mounting to pod template overrides.
+
+    Handles both PVC URIs (mounts PVC) and S3 URIs (mounts ephemeral staging volume).
+
+    Args:
+        output_dir: Output directory URI (pvc://, s3://, or local path).
+        pod_template_overrides: Existing pod template overrides list.
+
+    Returns:
+        Tuple of (resolved_output_dir, updated_pod_template_overrides).
     """
     resolved_output_dir, volume_mount_specs = parse_output_dir_uri(output_dir)
 
-    # If no PVC mounting needed return none
+    # If no volume mounting needed, return as-is
     if volume_mount_specs is None:
         return resolved_output_dir, pod_template_overrides or []
 
@@ -203,3 +255,152 @@ def apply_output_dir_uri_to_pod_overrides(
     trainer_container_dict["volumeMounts"].append(volume_mount_specs["volumeMount"])
 
     return resolved_output_dir, pod_template_overrides
+
+
+def get_cloud_storage_credential_env_vars(
+    core_api: "client.CoreV1Api",
+    data_connection_name: str,
+    namespace: str,
+) -> list[models.IoK8sApiCoreV1EnvVar]:
+    """Get environment variables for all keys in a Data Connection secret.
+
+    Dynamically reads all keys from the Data Connection secret and creates
+    environment variables with secretKeyRef for each key. This allows supporting
+    any cloud storage credentials (S3, Azure, etc.) without hardcoding specific
+    key names.
+
+    Args:
+        core_api: Kubernetes CoreV1Api client.
+        data_connection_name: The name of the Data Connection (K8s secret).
+        namespace: Namespace containing the secret.
+
+    Returns:
+        List of EnvVar objects with secretKeyRef for each key in the secret.
+
+    Raises:
+        ValueError: If the secret does not exist or user lacks permission to read it.
+    """
+    try:
+        secret = core_api.read_namespaced_secret(name=data_connection_name, namespace=namespace)
+    except ApiException as e:
+        if e.status == 404:
+            raise ValueError(
+                f"Unable to add credentials for Data Connection '{data_connection_name}': "
+                f"secret '{data_connection_name}' not found in namespace '{namespace}'. "
+                "Please verify the Data Connection exists in your project."
+            ) from e
+        if e.status == 403:
+            raise ValueError(
+                f"Unable to add credentials for Data Connection '{data_connection_name}': "
+                f"permission denied reading secret '{data_connection_name}' in namespace "
+                f"'{namespace}'. Please ensure your service account has permission to "
+                "read secrets, or contact your cluster administrator."
+            ) from e
+        raise
+
+    env_vars = []
+    # secret.data contains all the keys in the secret
+    if secret.data:
+        for key in secret.data:
+            env_var = models.IoK8sApiCoreV1EnvVar(
+                name=key,
+                value_from=models.IoK8sApiCoreV1EnvVarSource(
+                    secret_key_ref=models.IoK8sApiCoreV1SecretKeySelector(
+                        name=data_connection_name,
+                        key=key,
+                    )
+                ),
+            )
+            env_vars.append(env_var)
+
+    return env_vars
+
+
+def inject_cloud_storage_credentials(
+    trainer: RHAITrainer,
+    trainer_cr: "models.TrainerV1alpha1Trainer",
+    core_api: "client.CoreV1Api",
+    namespace: str,
+) -> "models.TrainerV1alpha1Trainer":
+    """Inject cloud storage credentials into trainer CR if using cloud output_dir.
+
+    Validates the data connection secret exists and appends cloud storage credential
+    environment variables to the trainer CR. Supports S3, Azure, etc.
+
+    Args:
+        trainer: RHAI trainer instance with data_connection_name attribute.
+        trainer_cr: Trainer custom resource to inject env vars into.
+        core_api: Kubernetes CoreV1Api client.
+        namespace: Namespace to validate secret in.
+
+    Returns:
+        The trainer CR (with S3 credentials injected if applicable).
+    """
+    # Check if trainer is using S3 output_dir with data connection
+    if (
+        not hasattr(trainer, "output_dir")
+        or not trainer.output_dir
+        or not trainer.output_dir.startswith(S3_URI_SCHEME)
+        or not hasattr(trainer, "data_connection_name")
+        or not trainer.data_connection_name
+    ):
+        return trainer_cr
+
+    # Get all keys from the data connection secret as env vars
+    cloud_env_vars = get_cloud_storage_credential_env_vars(
+        core_api, trainer.data_connection_name, namespace
+    )
+    if trainer_cr.env is None:
+        trainer_cr.env = []
+
+    # Check for duplicate env var names (K8s rejects duplicate names)
+    existing_names = {env.name for env in trainer_cr.env}
+    for cloud_env in cloud_env_vars:
+        if cloud_env.name in existing_names:
+            raise ValueError(
+                f"Environment variable '{cloud_env.name}' from data connection secret "
+                f"'{trainer.data_connection_name}' conflicts with an existing env var. "
+                "Please remove the duplicate from your trainer configuration."
+            )
+        trainer_cr.env.append(cloud_env)
+
+    return trainer_cr
+
+
+def setup_rhai_trainer_storage(
+    trainer: RHAITrainer,
+    trainer_cr: "models.TrainerV1alpha1Trainer",
+    pod_template_overrides: Optional[list],
+    core_api: "client.CoreV1Api",
+    namespace: str,
+) -> tuple[Optional[str], "models.TrainerV1alpha1Trainer", list]:
+    """Setup RHAI trainer storage: volume mounts and S3 credentials.
+
+    This is a consolidated helper that:
+    1. Parses output_dir URI and applies volume mounting to pod template overrides
+    2. Injects S3 credentials into trainer CR if using S3 output_dir
+
+    Args:
+        trainer: RHAI trainer instance.
+        trainer_cr: Trainer custom resource to inject env vars into.
+        pod_template_overrides: Existing pod template overrides list.
+        core_api: Kubernetes CoreV1Api client.
+        namespace: Namespace for secret validation.
+
+    Returns:
+        Tuple of (resolved_output_dir, updated_trainer_cr, updated_pod_template_overrides).
+    """
+    resolved_output_dir = None
+
+    # Apply output_dir URI parsing and volume mounting
+    if hasattr(trainer, "output_dir") and trainer.output_dir:
+        resolved_output_dir, pod_template_overrides = apply_output_dir_uri_to_pod_overrides(
+            trainer.output_dir, pod_template_overrides
+        )
+    else:
+        pod_template_overrides = pod_template_overrides or []
+
+    # Inject cloud storage credentials if applicable
+    trainer_cr = inject_cloud_storage_credentials(trainer, trainer_cr, core_api, namespace)
+
+    return resolved_output_dir, trainer_cr, pod_template_overrides

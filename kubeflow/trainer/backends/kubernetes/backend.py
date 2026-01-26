@@ -685,12 +685,6 @@ class KubernetesBackend(RuntimeBackend):
         # Check if trainer is RHAI trainer
         is_rhai_trainer = trainer and isinstance(trainer, get_args(RHAITrainer))
 
-        # Parse RHAI trainer output_dir to setup pod template overrides (volume mounts)
-        if is_rhai_trainer and hasattr(trainer, "output_dir") and trainer.output_dir:
-            _, pod_template_overrides = rhai_utils.apply_output_dir_uri_to_pod_overrides(
-                trainer.output_dir, pod_template_overrides
-            )
-
         # Build the Trainer.
         trainer_cr = models.TrainerV1alpha1Trainer()
 
@@ -728,6 +722,13 @@ class KubernetesBackend(RuntimeBackend):
                 trainer_cr.command = trainer_overrides["command"]
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
+
+        # Setup RHAI trainer storage: parse output_dir for volume mounts (PVC/S3)
+        # and inject cloud storage credentials from data connection secret
+        if is_rhai_trainer:
+            _, trainer_cr, pod_template_overrides = rhai_utils.setup_rhai_trainer_storage(
+                trainer, trainer_cr, pod_template_overrides, self.core_api, self.namespace
+            )
 
         trainjob_spec = models.TrainerV1alpha1TrainJobSpec(
             runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),

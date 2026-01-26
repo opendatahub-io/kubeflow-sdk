@@ -21,8 +21,14 @@ ANNOTATION_METRICS_PORT = "trainer.opendatahub.io/metrics-port"
 ANNOTATION_METRICS_POLL_INTERVAL = "trainer.opendatahub.io/metrics-poll-interval"
 ANNOTATION_TRAINER_STATUS = "trainer.opendatahub.io/trainerStatus"
 
-# Checkpointing storage constants
+# Checkpointing storage constants (for PVC)
 PVC_URI_SCHEME = "pvc://"
 CHECKPOINT_MOUNT_PATH = "/mnt/kubeflow-checkpoints"
 CHECKPOINT_VOLUME_NAME = "checkpoint-storage"
 CHECKPOINT_INCOMPLETE_MARKER = "checkpoint-is-incomplete.txt"
+
+# Ephemeral volume for cloud storage checkpoint staging (for S3)
+CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
+
+# Cloud storage URI schemes
+S3_URI_SCHEME = "s3://"

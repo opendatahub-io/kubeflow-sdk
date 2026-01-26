@@ -23,6 +23,7 @@ from kubeflow.trainer.rhai.transformers import (
     PeriodicCheckpointConfig,
     TransformersTrainer,
     _build_checkpoint_code,
+    get_jit_checkpoint_injection_code,
     get_transformers_instrumentation_wrapper,
 )
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
@@ -1298,7 +1299,10 @@ def test_honest_progress_reporting(test_case):
 
 
 def _mock_get_jit_checkpoint_injection_code(
-    output_dir=None, periodic_checkpoint_config=None, enable_jit_checkpoint=False
+    output_dir=None,
+    cloud_remote_storage_uri=None,
+    periodic_checkpoint_config=None,
+    enable_jit_checkpoint=False,
 ):
     """Mock implementation of get_jit_checkpoint_injection_code that doesn't require torch."""
     parts = []
@@ -2103,6 +2107,67 @@ def test_auto_resume_user_override():
             del sys.modules["transformers.trainer_utils"]
         if "torch" in sys.modules:
             del sys.modules["torch"]
+
+
+def test_transformers_trainer_s3_requires_data_connection_name():
+    """Test TransformersTrainer raises error when S3 output_dir without data_connection_name."""
+    print("Executing test: S3 output_dir requires data_connection_name")
+
+    def dummy_train():
+        pass
+
+    with pytest.raises(ValueError) as exc_info:
+        TransformersTrainer(
+            func=dummy_train,
+            output_dir="s3://my-bucket/checkpoints",
+            # data_connection_name is missing
+        )
+
+    assert "data_connection_name is required" in str(exc_info.value)
+    assert "s3://" in str(exc_info.value)
+
+    print("test execution complete")
+
+
+def test_build_checkpoint_code_with_s3_storage_uri():
+    """Test _build_checkpoint_code passes storage_uri for S3 output_dir."""
+    print("Executing test: _build_checkpoint_code with S3 storage_uri")
+
+    def dummy_train():
+        pass
+
+    trainer = TransformersTrainer(
+        func=dummy_train,
+        output_dir="s3://my-bucket/checkpoints",
+        data_connection_name="my-s3-secret",
+        enable_jit_checkpoint=True,
+    )
+
+    code = _build_checkpoint_code(trainer)
+
+    # Verify cloud_remote_storage_uri is included in the generated code
+    assert code != ""
+    assert "cloud_remote_storage_uri" in code
+    assert "s3://my-bucket/checkpoints" in code
+
+    print("test execution complete")
+
+
+def test_get_jit_checkpoint_injection_code_with_storage_uri():
+    """Test get_jit_checkpoint_injection_code includes cloud_remote_storage_uri in config."""
+    print("Executing test: get_jit_checkpoint_injection_code with cloud_remote_storage_uri")
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/kubeflow-checkpoints",
+        cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    # Verify cloud_remote_storage_uri is in the generated config
+    assert "cloud_remote_storage_uri" in checkpoint_code
+    assert "s3://my-bucket/model-checkpoints" in checkpoint_code
+
+    print("test execution complete")
 
 
 if __name__ == "__main__":
