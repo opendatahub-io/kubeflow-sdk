@@ -259,25 +259,44 @@ def apply_output_dir_uri_to_pod_overrides(
 
 def get_cloud_storage_credential_env_vars(
     core_api: "client.CoreV1Api",
-    secret_name: str,
+    data_connection_name: str,
     namespace: str,
 ) -> list[models.IoK8sApiCoreV1EnvVar]:
-    """Get environment variables for all keys in a Kubernetes secret.
+    """Get environment variables for all keys in a Data Connection secret.
 
-    Dynamically reads all keys from the secret and creates environment variables
-    with secretKeyRef for each key. This allows supporting any cloud storage
-    credentials (S3, Azure, etc.) without hardcoding specific key names.
+    Dynamically reads all keys from the Data Connection secret and creates
+    environment variables with secretKeyRef for each key. This allows supporting
+    any cloud storage credentials (S3, Azure, etc.) without hardcoding specific
+    key names.
 
     Args:
         core_api: Kubernetes CoreV1Api client.
-        secret_name: The name of the K8s secret containing storage credentials.
+        data_connection_name: The name of the Data Connection (K8s secret).
         namespace: Namespace containing the secret.
 
     Returns:
         List of EnvVar objects with secretKeyRef for each key in the secret.
+
+    Raises:
+        ValueError: If the secret does not exist or user lacks permission to read it.
     """
-    # Read the secret to get all available keys
-    secret = core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
+    try:
+        secret = core_api.read_namespaced_secret(name=data_connection_name, namespace=namespace)
+    except ApiException as e:
+        if e.status == 404:
+            raise ValueError(
+                f"Unable to add credentials for Data Connection '{data_connection_name}': "
+                f"secret '{data_connection_name}' not found in namespace '{namespace}'. "
+                "Please verify the Data Connection exists in your project."
+            ) from e
+        if e.status == 403:
+            raise ValueError(
+                f"Unable to add credentials for Data Connection '{data_connection_name}': "
+                f"permission denied reading secret '{data_connection_name}' in namespace "
+                f"'{namespace}'. Please ensure your service account has permission to "
+                "read secrets, or contact your cluster administrator."
+            ) from e
+        raise
 
     env_vars = []
     # secret.data contains all the keys in the secret
@@ -287,7 +306,7 @@ def get_cloud_storage_credential_env_vars(
                 name=key,
                 value_from=models.IoK8sApiCoreV1EnvVarSource(
                     secret_key_ref=models.IoK8sApiCoreV1SecretKeySelector(
-                        name=secret_name,
+                        name=data_connection_name,
                         key=key,
                     )
                 ),
@@ -295,39 +314,6 @@ def get_cloud_storage_credential_env_vars(
             env_vars.append(env_var)
 
     return env_vars
-
-
-def validate_secret_exists(
-    core_api: "client.CoreV1Api",
-    secret_name: str,
-    namespace: str,
-) -> None:
-    """Validate that a Kubernetes secret exists.
-
-    Args:
-        core_api: Kubernetes CoreV1Api client.
-        secret_name: Name of the secret to check.
-        namespace: Namespace to check in.
-
-    Raises:
-        ValueError: If secret does not exist or user lacks permission.
-    """
-    try:
-        core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
-    except ApiException as e:
-        if e.status == 404:
-            raise ValueError(
-                f"Secret '{secret_name}' not found in namespace '{namespace}'. "
-                "Please create the Data Connection secret or verify the "
-                "data_connection_name is correct."
-            ) from e
-        if e.status == 403:
-            raise ValueError(
-                f"Permission denied when accessing secret '{secret_name}' in namespace "
-                f"'{namespace}'. Please ensure your service account has permission to "
-                "read secrets, or contact your cluster administrator."
-            ) from e
-        raise
 
 
 def inject_cloud_storage_credentials(
@@ -360,10 +346,7 @@ def inject_cloud_storage_credentials(
     ):
         return trainer_cr
 
-    # Validate the secret exists and get all credential env vars
-    validate_secret_exists(core_api, trainer.data_connection_name, namespace)
-
-    # Add all keys from the data connection secret as env vars
+    # Get all keys from the data connection secret as env vars
     cloud_env_vars = get_cloud_storage_credential_env_vars(
         core_api, trainer.data_connection_name, namespace
     )

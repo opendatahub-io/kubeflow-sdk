@@ -28,7 +28,6 @@ from kubeflow.trainer.rhai.utils import (
     inject_cloud_storage_credentials,
     parse_output_dir_uri,
     setup_rhai_trainer_storage,
-    validate_secret_exists,
 )
 from kubeflow.trainer.test.common import SUCCESS, TestCase
 
@@ -220,13 +219,13 @@ def test_get_cloud_storage_credential_env_vars():
     }
     mock_core_api.read_namespaced_secret.return_value = mock_secret
 
-    secret_name = "my-s3-secret"
+    data_connection_name = "my-s3-secret"
     namespace = "default"
-    env_vars = get_cloud_storage_credential_env_vars(mock_core_api, secret_name, namespace)
+    env_vars = get_cloud_storage_credential_env_vars(mock_core_api, data_connection_name, namespace)
 
     # Verify the secret was read
     mock_core_api.read_namespaced_secret.assert_called_once_with(
-        name=secret_name, namespace=namespace
+        name=data_connection_name, namespace=namespace
     )
 
     # Convert to list of dicts for easier comparison
@@ -240,7 +239,8 @@ def test_get_cloud_storage_credential_env_vars():
     ]
 
     expected = [
-        {"name": key, "secretName": secret_name, "secretKey": key} for key in mock_secret.data
+        {"name": key, "secretName": data_connection_name, "secretKey": key}
+        for key in mock_secret.data
     ]
 
     assert actual == expected
@@ -249,36 +249,38 @@ def test_get_cloud_storage_credential_env_vars():
     print("test execution complete")
 
 
-def test_validate_secret_exists_success():
-    """Test validate_secret_exists passes when secret exists."""
-    print("Executing test: validate_secret_exists_success")
-
-    mock_core_api = MagicMock()
-    mock_core_api.read_namespaced_secret.return_value = MagicMock()
-
-    # Should not raise
-    validate_secret_exists(mock_core_api, "my-secret", "default")
-
-    mock_core_api.read_namespaced_secret.assert_called_once_with(
-        name="my-secret", namespace="default"
-    )
-
-    print("test execution complete")
-
-
-def test_validate_secret_exists_not_found():
-    """Test validate_secret_exists raises ValueError when secret not found."""
-    print("Executing test: validate_secret_exists_not_found")
+def test_get_cloud_storage_credential_env_vars_secret_not_found():
+    """Test get_cloud_storage_credential_env_vars raises ValueError when secret not found."""
+    print("Executing test: get_cloud_storage_credential_env_vars_secret_not_found")
 
     mock_core_api = MagicMock()
     mock_core_api.read_namespaced_secret.side_effect = ApiException(status=404)
 
     with pytest.raises(ValueError) as exc_info:
-        validate_secret_exists(mock_core_api, "missing-secret", "test-ns")
+        get_cloud_storage_credential_env_vars(mock_core_api, "missing-secret", "test-ns")
 
     assert "missing-secret" in str(exc_info.value)
     assert "test-ns" in str(exc_info.value)
     assert "not found" in str(exc_info.value)
+    assert "Data Connection" in str(exc_info.value)
+
+    print("test execution complete")
+
+
+def test_get_cloud_storage_credential_env_vars_permission_denied():
+    """Test get_cloud_storage_credential_env_vars raises ValueError on RBAC error."""
+    print("Executing test: get_cloud_storage_credential_env_vars_permission_denied")
+
+    mock_core_api = MagicMock()
+    mock_core_api.read_namespaced_secret.side_effect = ApiException(status=403)
+
+    with pytest.raises(ValueError) as exc_info:
+        get_cloud_storage_credential_env_vars(mock_core_api, "my-secret", "test-ns")
+
+    assert "my-secret" in str(exc_info.value)
+    assert "test-ns" in str(exc_info.value)
+    assert "permission denied" in str(exc_info.value)
+    assert "Data Connection" in str(exc_info.value)
 
     print("test execution complete")
 
@@ -343,7 +345,7 @@ def test_inject_cloud_storage_credentials_without_s3_output_dir():
         mock_trainer, mock_trainer_cr, mock_core_api, "default"
     )
 
-    # Should NOT call validate_secret_exists
+    # Should NOT read any secrets
     mock_core_api.read_namespaced_secret.assert_not_called()
 
     # Should return trainer_cr unchanged
@@ -370,7 +372,7 @@ def test_inject_cloud_storage_credentials_without_data_connection_name():
         mock_trainer, mock_trainer_cr, mock_core_api, "default"
     )
 
-    # Should NOT call validate_secret_exists
+    # Should NOT read any secrets
     mock_core_api.read_namespaced_secret.assert_not_called()
 
     # Should return trainer_cr unchanged
