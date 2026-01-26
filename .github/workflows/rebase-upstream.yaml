@@ -190,10 +190,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ steps.merge_step.outputs.has_conflict }}" = "true" ]; then
-            TITLE="⚠️ sync: Merge upstream/${UPSTREAM_BRANCH} (HAS CONFLICTS)"
+            TITLE="⚠️ chore: Merge upstream/${UPSTREAM_BRANCH} (HAS CONFLICTS)"
             BODY="Upstream merge has conflicts that need manual resolution. Excluded path conflicts (.github, CHANGELOG, OWNERS) have been auto-resolved to midstream version. Please resolve remaining conflicts in the Files Changed tab or locally."
           else
-            TITLE="sync: Merge upstream/${UPSTREAM_BRANCH} into ${DOWNSTREAM_BRANCH}"
+            TITLE="chore: Merge upstream/${UPSTREAM_BRANCH} into ${DOWNSTREAM_BRANCH}"
             BODY="Successfully merged upstream changes. Excluded paths (.github, CHANGELOG, OWNERS) preserved from midstream."
           fi
 
