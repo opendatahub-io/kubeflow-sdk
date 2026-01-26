@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 from dataclasses import fields
 import inspect
 import os
 import textwrap
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
 from kubeflow_trainer_api import models
@@ -597,7 +598,7 @@ def get_dataset_initializer(
     """
     Get the TrainJob dataset initializer from the given config.
     """
-    if isinstance(dataset, (types.HuggingFaceDatasetInitializer, types.S3DatasetInitializer)):
+    if isinstance(dataset, types.HuggingFaceDatasetInitializer | types.S3DatasetInitializer):
         return models.TrainerV1alpha1DatasetInitializer(
             storageUri=dataset.storage_uri,
             env=get_optional_initializer_envs(dataset, required_fields={"storage_uri"}),
@@ -627,7 +628,7 @@ def get_model_initializer(
     """
     Get the TrainJob model initializer from the given config.
     """
-    if isinstance(model, (types.HuggingFaceModelInitializer, types.S3ModelInitializer)):
+    if isinstance(model, types.HuggingFaceModelInitializer | types.S3ModelInitializer):
         return models.TrainerV1alpha1ModelInitializer(
             storageUri=model.storage_uri,
             env=get_optional_initializer_envs(model, required_fields={"storage_uri"}),
