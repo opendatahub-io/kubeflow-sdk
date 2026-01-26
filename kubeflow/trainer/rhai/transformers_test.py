@@ -1303,6 +1303,8 @@ def _mock_get_jit_checkpoint_injection_code(
     cloud_remote_storage_uri=None,
     periodic_checkpoint_config=None,
     enable_jit_checkpoint=False,
+    verify_storage_access=True,
+    verify_ssl=True,
 ):
     """Mock implementation of get_jit_checkpoint_injection_code that doesn't require torch."""
     parts = []
@@ -1310,6 +1312,8 @@ def _mock_get_jit_checkpoint_injection_code(
     # Build config dict
     config_lines = ["_KUBEFLOW_CHECKPOINT_CONFIG = {"]
     config_lines.append(f'    "enable_jit": {enable_jit_checkpoint},')
+    config_lines.append(f'    "verify_storage_access": {verify_storage_access},')
+    config_lines.append(f'    "verify_ssl": {verify_ssl},')
     if output_dir:
         config_lines.append(f'    "output_dir": {repr(output_dir)},')
     if cloud_remote_storage_uri:
@@ -2203,7 +2207,7 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
                 "incomplete_markers": [],
                 "is_rank_0": True,
             },
-            expected_output="test-bucket/model-checkpoints/checkpoint-300",
+            expected_output="checkpoint-300",
         ),
         TestCase(
             name="skip incomplete checkpoint in S3",
@@ -2213,7 +2217,7 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
                 "incomplete_markers": ["checkpoint-300"],
                 "is_rank_0": True,
             },
-            expected_output="test-bucket/model-checkpoints/checkpoint-200",
+            expected_output="checkpoint-200",
         ),
         TestCase(
             name="rank 1 does not download from S3",
@@ -2263,18 +2267,35 @@ class MockS3FileSystem:
     def __init__(self, *args, **kwargs):
         pass
 
-    def info(self, path):
-        return {{"name": path, "type": "directory"}}
-
-    def glob(self, pattern):
+    def ls(self, path, detail=False):
         return [{checkpoints_list}]
 
     def exists(self, path):
 {incomplete_logic}
         return False
 
-    def get(self, src, dst, recursive=False):
+    def pipe(self, path, data):
+        pass
+
+    def cat(self, path):
+        return b"test"
+
+    def get(self, src, dst, recursive=False, callback=None):
         print(f"DOWNLOADED={{src}}")
+
+class Callback:
+    def __init__(self):
+        self.size = 0
+        self.value = 0
+
+    def set_size(self, size):
+        self.size = size
+
+    def relative_update(self, inc=1):
+        self.value += inc
+
+class callbacks:
+    Callback = Callback
 
 def filesystem(protocol, **kwargs):
     return MockS3FileSystem()
@@ -2332,6 +2353,12 @@ import types
 fsspec_module = types.ModuleType('fsspec')
 exec('''{fsspec_stub}''', fsspec_module.__dict__)
 sys.modules['fsspec'] = fsspec_module
+
+# Create fsspec.callbacks submodule
+callbacks_module = types.ModuleType('fsspec.callbacks')
+callbacks_module.Callback = fsspec_module.Callback
+sys.modules['fsspec.callbacks'] = callbacks_module
+fsspec_module.callbacks = callbacks_module
 
 # Create torch stub
 torch_module = types.ModuleType('torch')
