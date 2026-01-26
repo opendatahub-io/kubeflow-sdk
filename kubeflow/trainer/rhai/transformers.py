@@ -380,8 +380,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             is_rank_0 = state.is_world_process_zero
 
             if is_rank_0:
-                checkpoint_dirs = self.fsspec.glob(f"{self.cloud_storage_base_path}/checkpoint-*")
-                steps = sorted([int(p.split("-")[-1]) for p in checkpoint_dirs], reverse=True)
+                checkpoint_paths = self.fsspec.glob(f"{self.cloud_storage_base_path}/checkpoint-*")
+                steps = sorted(
+                    {int(p.split("checkpoint-")[1].split("/")[0]) for p in checkpoint_paths},
+                    reverse=True,
+                )
 
                 for step in steps:
                     name = f"checkpoint-{step}"
