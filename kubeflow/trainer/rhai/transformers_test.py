@@ -1312,6 +1312,8 @@ def _mock_get_jit_checkpoint_injection_code(
     config_lines.append(f'    "enable_jit": {enable_jit_checkpoint},')
     if output_dir:
         config_lines.append(f'    "output_dir": {repr(output_dir)},')
+    if cloud_remote_storage_uri:
+        config_lines.append(f'    "cloud_remote_storage_uri": {repr(cloud_remote_storage_uri)},')
     if periodic_checkpoint_config:
         if "save_strategy" in periodic_checkpoint_config:
             config_lines.append(
@@ -1601,6 +1603,15 @@ class cuda:
     def stream(stream_obj):
         return stream_obj
 
+class distributed:
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
 Tensor = object  # Stub
 """
 
@@ -1651,6 +1662,7 @@ import types
 torch_module = types.ModuleType('torch')
 exec('''{torch_stub}''', torch_module.__dict__)
 sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
 
 # Create transformers stub module
 transformers_module = types.ModuleType('transformers')
@@ -1766,6 +1778,15 @@ class cuda:
     @staticmethod
     def is_available():
         return True
+
+class distributed:
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
 """
 
     transformers_stub = """
@@ -1801,6 +1822,7 @@ import types
 torch_module = types.ModuleType('torch')
 exec('''{torch_stub}''', torch_module.__dict__)
 sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
 
 transformers_module = types.ModuleType('transformers')
 exec('''{transformers_stub}''', transformers_module.__dict__)
@@ -2166,6 +2188,216 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
     # Verify cloud_remote_storage_uri is in the generated config
     assert "cloud_remote_storage_uri" in checkpoint_code
     assert "s3://my-bucket/model-checkpoints" in checkpoint_code
+
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="download latest checkpoint from S3",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": ["checkpoint-100", "checkpoint-300", "checkpoint-200"],
+                "incomplete_markers": [],
+                "is_rank_0": True,
+            },
+            expected_output="test-bucket/model-checkpoints/checkpoint-300",
+        ),
+        TestCase(
+            name="skip incomplete checkpoint in S3",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": ["checkpoint-100", "checkpoint-300", "checkpoint-200"],
+                "incomplete_markers": ["checkpoint-300"],
+                "is_rank_0": True,
+            },
+            expected_output="test-bucket/model-checkpoints/checkpoint-200",
+        ),
+        TestCase(
+            name="rank 1 does not download from S3",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": ["checkpoint-100"],
+                "incomplete_markers": [],
+                "is_rank_0": False,
+            },
+            expected_output=None,  # No download for rank 1
+        ),
+    ],
+)
+def test_s3_download_execution(test_case, tmp_path):
+    """Integration test: S3 checkpoint download behavior.
+
+    Tests:
+    - Latest checkpoint is downloaded
+    - Incomplete checkpoints are skipped
+    - Only rank 0 downloads
+    """
+    print(f"Executing test: {test_case.name}")
+
+    import subprocess
+    import sys
+
+    from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/checkpoints",
+        cloud_remote_storage_uri="s3://test-bucket/model-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    # Create fsspec stub based on test config
+    checkpoints_list = ", ".join([f'"{cp}"' for cp in test_case.config["checkpoints"]])
+    incomplete_checks = []
+    for marker in test_case.config["incomplete_markers"]:
+        incomplete_checks.append(
+            f'        if "{marker}" in path and "checkpoint-is-incomplete.txt" in path:\n'
+            f"            return True"
+        )
+    incomplete_logic = "\n".join(incomplete_checks) if incomplete_checks else "        pass"
+
+    fsspec_stub = f"""
+class MockS3FileSystem:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def info(self, path):
+        return {{"name": path, "type": "directory"}}
+
+    def glob(self, pattern):
+        return [{checkpoints_list}]
+
+    def exists(self, path):
+{incomplete_logic}
+        return False
+
+    def get(self, src, dst, recursive=False):
+        print(f"DOWNLOADED={{src}}")
+
+def filesystem(protocol, **kwargs):
+    return MockS3FileSystem()
+"""
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 100
+        self.is_world_process_zero = True
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.model = None
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def train(self, resume_from_checkpoint=None):
+        return {"train_called": True, "resume_from": resume_from_checkpoint}
+"""
+
+    test_file = tmp_path / f"test_s3_{test_case.name.replace(' ', '_')}.py"
+    is_rank_0 = test_case.config["is_rank_0"]
+
+    test_code = f"""
+import sys
+import types
+
+# Create fsspec stub
+fsspec_module = types.ModuleType('fsspec')
+exec('''{fsspec_stub}''', fsspec_module.__dict__)
+sys.modules['fsspec'] = fsspec_module
+
+# Create torch stub
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+# Create transformers stub
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+# Execute checkpoint injection code
+{checkpoint_code}
+
+from transformers import TrainerCallback
+
+# Find JITCheckpointCallback
+callback_class = None
+for name, obj in list(globals().items()):
+    if isinstance(obj, type) and issubclass(obj, TrainerCallback) and name != 'TrainerCallback':
+        callback_class = obj
+        break
+
+if not callback_class:
+    print("ERROR: JITCheckpointCallback not found")
+    sys.exit(1)
+
+callback = callback_class(cloud_remote_storage_uri="s3://test-bucket/model-checkpoints")
+
+class MockArgs:
+    output_dir = "/mnt/checkpoints"
+
+class MockState:
+    is_world_process_zero = {is_rank_0}
+
+callback.on_init_end(MockArgs(), MockState(), None)
+
+print("TEST_COMPLETE=True")
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    output = result.stdout
+    print(f"Test output:\n{output}")
+
+    if result.returncode != 0:
+        print(f"Test stderr:\n{result.stderr}")
+
+    assert result.returncode == 0, f"Execution failed with return code {result.returncode}"
+    assert "TEST_COMPLETE=True" in output
+
+    # Verify expected download behavior
+    if test_case.expected_output:
+        assert f"DOWNLOADED={test_case.expected_output}" in output
+    else:
+        # Rank 1 should not download
+        assert "DOWNLOADED=" not in output
 
     print("test execution complete")
 

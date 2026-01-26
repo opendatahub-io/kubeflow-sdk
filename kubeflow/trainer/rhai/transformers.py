@@ -205,6 +205,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     import time
 
     import torch
+    import torch.distributed as dist
     from transformers import TrainerCallback
     from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
@@ -323,9 +324,85 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     class JITCheckpointCallback(TrainerCallback):
         """Transformers callback that integrates JIT checkpointing with trainer lifecycle."""
 
-        def __init__(self):
+        def __init__(self, cloud_remote_storage_uri=None):
             self.jit_manager = None
             self._trainer_ref = None
+            self.cloud_remote_storage_uri = cloud_remote_storage_uri
+            self.fsspec = None
+            self.cloud_storage_protocol = None
+            self.cloud_storage_base_path = None
+
+            if cloud_remote_storage_uri and "://" in cloud_remote_storage_uri:
+                import fsspec
+
+                self.cloud_storage_protocol = cloud_remote_storage_uri.split("://")[0]
+                self.cloud_storage_base_path = cloud_remote_storage_uri.split("://", 1)[1]
+                bucket = self.cloud_storage_base_path.split("/")[0]
+
+                fsspec_kwargs = {}
+                if self.cloud_storage_protocol == "s3":
+                    # AWS_S3_ENDPOINT must be explicitly passed since it's not
+                    # a standardized name like other AWS credentials
+                    endpoint_url = os.environ.get("AWS_S3_ENDPOINT")
+                    if endpoint_url:
+                        fsspec_kwargs = {
+                            "client_kwargs": {"endpoint_url": endpoint_url, "verify": False},
+                            "config_kwargs": {"signature_version": "s3v4"},
+                        }
+
+                try:
+                    # Verify connection and confirm bucket exists
+                    self.fsspec = fsspec.filesystem(self.cloud_storage_protocol, **fsspec_kwargs)
+                    self.fsspec.info(f"{self.cloud_storage_protocol}://{bucket}")
+                    print(
+                        f"[Kubeflow] Cloud storage configured: {cloud_remote_storage_uri} "
+                        f"({self.cloud_storage_protocol})",
+                        flush=True,
+                    )
+                except FileNotFoundError as e:
+                    raise RuntimeError(
+                        f"Bucket '{bucket}' not found in {self.cloud_storage_protocol} storage. "
+                        f"Please verify the bucket exists and the URI is "
+                        f"correct: {cloud_remote_storage_uri}"
+                    ) from e
+                except PermissionError as e:
+                    raise RuntimeError(
+                        f"Permission denied accessing bucket '{bucket}' "
+                        f"in {self.cloud_storage_protocol} storage. "
+                        f"Please verify your credentials are configured correctly."
+                    ) from e
+
+        def on_init_end(self, args, state, control, **kwargs):
+            """Download latest checkpoint from S3 before training (rank-0-only with barrier)."""
+            if not self.fsspec:
+                return
+
+            is_rank_0 = state.is_world_process_zero
+
+            if is_rank_0:
+                checkpoint_dirs = self.fsspec.glob(f"{self.cloud_storage_base_path}/checkpoint-*")
+                steps = sorted([int(p.split("-")[-1]) for p in checkpoint_dirs], reverse=True)
+
+                for step in steps:
+                    name = f"checkpoint-{step}"
+                    marker = f"{self.cloud_storage_base_path}/{name}/{CHECKPOINT_INCOMPLETE_MARKER}"
+                    if self.fsspec.exists(marker):
+                        continue
+
+                    print(f"[Kubeflow] Downloading checkpoint: {name}", flush=True)
+                    self.fsspec.get(
+                        f"{self.cloud_storage_base_path}/{name}", args.output_dir, recursive=True
+                    )
+                    break
+
+            # Barrier to wait for rank 0 checkpoint download to complete
+            try:
+                if dist.is_initialized():
+                    dist.barrier()
+            except Exception as e:
+                print(
+                    f"[Kubeflow] Warning: Barrier failed after checkpoint download: {e}", flush=True
+                )
 
         def on_train_begin(self, args, state, control, **kwargs):
             if self._trainer_ref is not None and self.jit_manager is None:
@@ -365,7 +442,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         """Setup monkey patch for Trainer to auto inject JIT checkpoint callback."""
         from transformers import Trainer as _TransformersTrainer
 
-        _jit_checkpoint_callback = JITCheckpointCallback()
+        _jit_checkpoint_callback = JITCheckpointCallback(
+            checkpoint_config.get("cloud_remote_storage_uri")
+        )
 
         def _find_latest_checkpoint(output_dir):
             """Find the latest checkpoint and deleting incomplete ones."""
