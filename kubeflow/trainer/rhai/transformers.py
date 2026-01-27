@@ -92,13 +92,13 @@ class TransformersTrainer:
                               Data Science project, go to the Connections tab, and either
                               copy an existing connection's resource name or create a new
                               S3-compatible connection.
-        verify_storage_access: Test cloud storage access before training starts.When enabled,
+        verify_cloud_storage_access: Test cloud storage access before training starts.When enabled,
                                writes and reads a small test file to validate that credentials,
                                permissions, and bucket access work correctly. This catches
                                configuration errors early before training begins. Default: True.
                                Only disable if experiencing false positives and you're confident
                                your storage configuration is correct.
-        checkpoint_storage_verify_ssl: Verify SSL certificates for cloud checkpoint storage
+        verify_cloud_storage_ssl: Verify SSL certificates for cloud checkpoint storage
                                        (S3, etc.). Default: True. Set to False only if using
                                        S3-compatible storage with self-signed certificates.
                                        WARNING: Disabling SSL verification is a security risk.
@@ -131,8 +131,8 @@ class TransformersTrainer:
     output_dir: Optional[str] = None
     periodic_checkpoint_config: Optional[PeriodicCheckpointConfig] = None
     data_connection_name: Optional[str] = None
-    verify_storage_access: bool = True
-    checkpoint_storage_verify_ssl: bool = True
+    verify_cloud_storage_access: bool = True
+    verify_cloud_storage_ssl: bool = True
 
     def __post_init__(self):
         """Validate configuration after initialization.
@@ -348,7 +348,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # a standardized name like other AWS credentials
                     endpoint_url = os.environ.get("AWS_S3_ENDPOINT")
                     if endpoint_url:
-                        verify_ssl = checkpoint_config.get("checkpoint_storage_verify_ssl", True)
+                        verify_ssl = checkpoint_config.get("verify_cloud_storage_ssl", True)
                         fsspec_kwargs = {
                             "client_kwargs": {"endpoint_url": endpoint_url, "verify": verify_ssl},
                         }
@@ -367,7 +367,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     self.remote_fs = fsspec.filesystem("dir", path=base_path, fs=underlying_fs)
 
                     # Verify storage access by writing/reading test file (if enabled)
-                    if checkpoint_config.get("verify_storage_access", True):
+                    if checkpoint_config.get("verify_cloud_storage_access", True):
                         test_file = ".kubeflow-access-test"
                         self.remote_fs.pipe(test_file, b"test")
                         self.remote_fs.cat(test_file)
@@ -382,10 +382,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         f"Failed to check this node has access to the storage path: "
                         f"'{cloud_remote_storage_uri}'. Error: {e}. "
                         f"If using self-signed certificates, "
-                        f"set checkpoint_storage_verify_ssl=False. "
+                        f"set verify_cloud_storage_ssl=False. "
                         f"If experiencing permission issues, check you have read and "
                         f"write permissions to '{cloud_remote_storage_uri}'. "
-                        f"This check can be disabled by setting verify_storage_access=False."
+                        f"This check can be disabled by setting verify_cloud_storage_access=False."
                     ) from e
 
         def on_init_end(self, args, state, control, **kwargs):
@@ -1141,8 +1141,8 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
         cloud_remote_storage_uri=cloud_remote_storage_uri,
         periodic_checkpoint_config=periodic_config_dict,
         enable_jit_checkpoint=trainer.enable_jit_checkpoint,
-        verify_storage_access=trainer.verify_storage_access,
-        checkpoint_storage_verify_ssl=trainer.checkpoint_storage_verify_ssl,
+        verify_cloud_storage_access=trainer.verify_cloud_storage_access,
+        verify_cloud_storage_ssl=trainer.verify_cloud_storage_ssl,
     )
 
 
@@ -1151,8 +1151,8 @@ def get_jit_checkpoint_injection_code(
     cloud_remote_storage_uri: Optional[str] = None,
     periodic_checkpoint_config: Optional[dict] = None,
     enable_jit_checkpoint: bool = False,
-    verify_storage_access: bool = True,
-    checkpoint_storage_verify_ssl: bool = True,
+    verify_cloud_storage_access: bool = True,
+    verify_cloud_storage_ssl: bool = True,
 ) -> str:
     """Generate the complete JIT checkpoint code to inject into training scripts."""
     from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
@@ -1160,8 +1160,8 @@ def get_jit_checkpoint_injection_code(
     # Build checkpoint config dict
     config_dict = {
         "enable_jit": enable_jit_checkpoint,
-        "verify_storage_access": verify_storage_access,
-        "checkpoint_storage_verify_ssl": checkpoint_storage_verify_ssl,
+        "verify_cloud_storage_access": verify_cloud_storage_access,
+        "verify_cloud_storage_ssl": verify_cloud_storage_ssl,
     }
 
     if output_dir:

@@ -1303,8 +1303,8 @@ def _mock_get_jit_checkpoint_injection_code(
     cloud_remote_storage_uri=None,
     periodic_checkpoint_config=None,
     enable_jit_checkpoint=False,
-    verify_storage_access=True,
-    checkpoint_storage_verify_ssl=True,
+    verify_cloud_storage_access=True,
+    verify_cloud_storage_ssl=True,
 ):
     """Mock implementation of get_jit_checkpoint_injection_code that doesn't require torch."""
     parts = []
@@ -1312,8 +1312,8 @@ def _mock_get_jit_checkpoint_injection_code(
     # Build config dict
     config_lines = ["_KUBEFLOW_CHECKPOINT_CONFIG = {"]
     config_lines.append(f'    "enable_jit": {enable_jit_checkpoint},')
-    config_lines.append(f'    "verify_storage_access": {verify_storage_access},')
-    config_lines.append(f'    "checkpoint_storage_verify_ssl": {checkpoint_storage_verify_ssl},')
+    config_lines.append(f'    "verify_cloud_storage_access": {verify_cloud_storage_access},')
+    config_lines.append(f'    "verify_cloud_storage_ssl": {verify_cloud_storage_ssl},')
     if output_dir:
         config_lines.append(f'    "output_dir": {repr(output_dir)},')
     if cloud_remote_storage_uri:
