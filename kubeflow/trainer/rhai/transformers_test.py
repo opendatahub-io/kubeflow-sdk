@@ -2307,9 +2307,6 @@ class MockS3FileSystem:
     def get(self, src, dst, recursive=False, callback=None):
         print(f"DOWNLOADED={{src}}")
 
-    def rm(self, path):
-        pass
-
     def rm_file(self, path):
         pass
 
