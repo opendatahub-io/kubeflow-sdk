@@ -2229,6 +2229,30 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
             },
             expected_output=None,  # No download for rank 1
         ),
+        TestCase(
+            name="empty remote storage - no checkpoints available",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": [],  # No checkpoints in storage
+                "incomplete_markers": [],
+                "is_rank_0": True,
+            },
+            expected_output=None,  # No download, message logged
+        ),
+        TestCase(
+            name="all checkpoints incomplete - none available for download",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": ["checkpoint-100", "checkpoint-200", "checkpoint-300"],
+                "incomplete_markers": [
+                    "checkpoint-100",
+                    "checkpoint-200",
+                    "checkpoint-300",
+                ],  # All incomplete
+                "is_rank_0": True,
+            },
+            expected_output=None,  # No download, message logged
+        ),
     ],
 )
 def test_s3_download_execution(test_case, tmp_path):
@@ -2282,6 +2306,12 @@ class MockS3FileSystem:
 
     def get(self, src, dst, recursive=False, callback=None):
         print(f"DOWNLOADED={{src}}")
+
+    def rm(self, path):
+        pass
+
+    def rm_file(self, path):
+        pass
 
 class Callback:
     def __init__(self):
@@ -2423,8 +2453,15 @@ print("TEST_COMPLETE=True")
     if test_case.expected_output:
         assert f"DOWNLOADED={test_case.expected_output}" in output
     else:
-        # Rank 1 should not download
+        # No download should occur (rank 1, empty storage, or all incomplete)
         assert "DOWNLOADED=" not in output
+
+        # Verify informative message for empty/incomplete cases
+        if (
+            not test_case.config["checkpoints"] or test_case.config["incomplete_markers"]
+        ) and test_case.config["is_rank_0"]:
+            # Empty storage or all incomplete - should see "No valid checkpoints" message
+            assert "No valid checkpoints found in cloud storage" in output
 
     print("test execution complete")
 

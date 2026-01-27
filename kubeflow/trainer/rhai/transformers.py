@@ -92,7 +92,7 @@ class TransformersTrainer:
                               Data Science project, go to the Connections tab, and either
                               copy an existing connection's resource name or create a new
                               S3-compatible connection.
-        verify_cloud_storage_access: Test cloud storage access before training starts.When enabled,
+        verify_cloud_storage_access: Test cloud storage access before training starts. When enabled,
                                writes and reads a small test file to validate that credentials,
                                permissions, and bucket access work correctly. This catches
                                configuration errors early before training begins. Default: True.
@@ -101,6 +101,8 @@ class TransformersTrainer:
         verify_cloud_storage_ssl: Verify SSL certificates for cloud checkpoint storage
                                        (S3, etc.). Default: True. Set to False only if using
                                        S3-compatible storage with self-signed certificates.
+                                       This parameter only applies when using a custom S3-compatible
+                                       endpoint (via AWS_S3_ENDPOINT environment variable).
                                        WARNING: Disabling SSL verification is a security risk.
 
     Raises:
@@ -371,6 +373,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         test_file = ".kubeflow-access-test"
                         self.remote_fs.pipe(test_file, b"test")
                         self.remote_fs.cat(test_file)
+                        self.remote_fs.rm_file(test_file)
 
                     print(
                         f"[Kubeflow] Cloud storage configured: {cloud_remote_storage_uri} "
@@ -454,16 +457,34 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                                     print(f"[Kubeflow] Progress: {mb_done:.1f} MB", flush=True)
                                 self.last = now
 
-                    print(f"[Kubeflow] Downloading checkpoint: {name}", flush=True)
-                    self.remote_fs.get(
-                        name, args.output_dir, recursive=True, callback=ProgressCallback()
-                    )
-                    print("[Kubeflow] Download complete", flush=True)
+                    try:
+                        print(f"[Kubeflow] Downloading checkpoint: {name}", flush=True)
+                        self.remote_fs.get(
+                            name, args.output_dir, recursive=True, callback=ProgressCallback()
+                        )
+                        print("[Kubeflow] Download complete", flush=True)
+
+                    except Exception as e:
+                        raise RuntimeError(
+                            "[Kubeflow] Checkpoint download failed for "
+                            f"'{name}' to '{args.output_dir}': {e}. "
+                            "This may be caused by network issues, insufficient permissions, "
+                            "or lack of disk space on the training node. "
+                            "Verify access to the remote storage location, ensure adequate "
+                            "free disk space, and retry the training job."
+                        ) from e
                     break
+                else:
+                    # Loop completed without break, no valid checkpoints found
+                    print(
+                        "[Kubeflow] No valid checkpoints found in cloud storage. "
+                        "Training will start from scratch.",
+                        flush=True,
+                    )
 
             # Barrier to wait for rank 0 checkpoint download to complete
             try:
-                if dist.is_initialized():
+                if hasattr(dist, "is_available") and dist.is_available() and dist.is_initialized():
                     dist.barrier()
             except Exception as e:
                 raise RuntimeError(
