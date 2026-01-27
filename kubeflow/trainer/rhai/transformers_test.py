@@ -2253,6 +2253,16 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
             },
             expected_output=None,  # No download, message logged
         ),
+        TestCase(
+            name="remote storage path does not exist yet - first training run",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": None,  # Trigger FileNotFoundError in ls()
+                "incomplete_markers": [],
+                "is_rank_0": True,
+            },
+            expected_output=None,  # No download, starts from scratch
+        ),
     ],
 )
 def test_s3_download_execution(test_case, tmp_path):
@@ -2277,7 +2287,14 @@ def test_s3_download_execution(test_case, tmp_path):
     )
 
     # Create fsspec stub based on test config
-    checkpoints_list = ", ".join([f'"{cp}"' for cp in test_case.config["checkpoints"]])
+    checkpoints = test_case.config["checkpoints"]
+    if checkpoints is None:
+        # Simulate remote storage path not existing yet
+        ls_implementation = '        raise FileNotFoundError("Remote storage path does not exist")'
+    else:
+        checkpoints_list = ", ".join([f'"{cp}"' for cp in checkpoints])
+        ls_implementation = f"        return [{checkpoints_list}]"
+
     incomplete_checks = []
     for marker in test_case.config["incomplete_markers"]:
         incomplete_checks.append(
@@ -2292,7 +2309,7 @@ class MockS3FileSystem:
         pass
 
     def ls(self, path, detail=False):
-        return [{checkpoints_list}]
+{ls_implementation}
 
     def exists(self, path):
 {incomplete_logic}
@@ -2306,6 +2323,9 @@ class MockS3FileSystem:
 
     def get(self, src, dst, recursive=False, callback=None):
         print(f"DOWNLOADED={{src}}")
+
+    def rm_file(self, path):
+        pass
 
     def rm_file(self, path):
         pass
@@ -2453,12 +2473,24 @@ print("TEST_COMPLETE=True")
         # No download should occur (rank 1, empty storage, or all incomplete)
         assert "DOWNLOADED=" not in output
 
-        # Verify informative message for empty/incomplete cases
-        if (
-            not test_case.config["checkpoints"] or test_case.config["incomplete_markers"]
-        ) and test_case.config["is_rank_0"]:
-            # Empty storage or all incomplete - should see "No valid checkpoints" message
-            assert "No valid checkpoints found in cloud storage" in output
+        # Verify informative messages based on scenario
+        if test_case.config["is_rank_0"]:
+            checkpoints = test_case.config["checkpoints"]
+
+            if checkpoints is None:
+                # FileNotFoundError case - remote storage doesn't exist yet
+                assert "No existing checkpoints found in cloud storage" in output
+                # Should only print once
+                assert output.count("Training will start from scratch") == 1
+            elif checkpoints and test_case.config["incomplete_markers"]:
+                # Has checkpoints but all are incomplete
+                assert "No valid checkpoints found in cloud storage" in output
+                # Should only print once
+                assert output.count("Training will start from scratch") == 1
+            elif not checkpoints:
+                # Empty list - ls() succeeded but no checkpoints, no message expected
+                assert "No valid checkpoints found" not in output
+                assert "No existing checkpoints found" not in output
 
     print("test execution complete")
 
