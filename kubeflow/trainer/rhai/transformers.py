@@ -23,7 +23,7 @@ from typing import Callable, Optional
 from kubeflow_trainer_api import models
 
 from kubeflow.trainer.constants import constants
-from kubeflow.trainer.rhai.constants import PVC_URI_SCHEME, S3_URI_SCHEME
+from kubeflow.trainer.rhai.constants import S3_URI_SCHEME
 from kubeflow.trainer.types import types
 
 
@@ -92,11 +92,16 @@ class TransformersTrainer:
                               Data Science project, go to the Connections tab, and either
                               copy an existing connection's resource name or create a new
                               S3-compatible connection.
-        verify_storage_access: Verify storage access by writing/reading a test file.
-                              Default: True. Can be disabled if you get false positives.
-        verify_ssl: Verify SSL certificates for S3 connections. Default: True.
-                   Set to False only if using S3-compatible storage with self-signed
-                   certificates. WARNING: Disabling SSL verification is a security risk.
+        verify_storage_access: Test cloud storage access before training starts.When enabled,
+                               writes and reads a small test file to validate that credentials,
+                               permissions, and bucket access work correctly. This catches
+                               configuration errors early before training begins. Default: True.
+                               Only disable if experiencing false positives and you're confident
+                               your storage configuration is correct.
+        checkpoint_storage_verify_ssl: Verify SSL certificates for cloud checkpoint storage
+                                       (S3, etc.). Default: True. Set to False only if using
+                                       S3-compatible storage with self-signed certificates.
+                                       WARNING: Disabling SSL verification is a security risk.
 
     Raises:
         ValueError: If metrics_port is not in range 1024-65535.
@@ -127,7 +132,7 @@ class TransformersTrainer:
     periodic_checkpoint_config: Optional[PeriodicCheckpointConfig] = None
     data_connection_name: Optional[str] = None
     verify_storage_access: bool = True
-    verify_ssl: bool = True
+    checkpoint_storage_verify_ssl: bool = True
 
     def __post_init__(self):
         """Validate configuration after initialization.
@@ -170,19 +175,13 @@ class TransformersTrainer:
                 f"metrics_poll_interval_seconds must be in range 5-300, "
                 f"got {self.metrics_poll_interval_seconds}"
             )
-        # Only allow pvc://, s3://, or paths without URI schemes
-        if (
-            self.output_dir
-            and "://" in self.output_dir
-            and not self.output_dir.startswith(PVC_URI_SCHEME)
-            and not self.output_dir.startswith(S3_URI_SCHEME)
-        ):
-            raise ValueError(
-                f"Unsupported storage URI scheme. "
-                f"Currently only '{PVC_URI_SCHEME}' and '{S3_URI_SCHEME}' URIs are supported. "
-                f"Supported formats: '{PVC_URI_SCHEME}<pvc-name>/<path>', "
-                f"'{S3_URI_SCHEME}<bucket>/<path>', or local filesystem paths."
-            )
+
+        # Normalize and validate output_dir URI
+        if self.output_dir:
+            # Import here to avoid circular import
+            from kubeflow.trainer.rhai.utils import normalize_and_validate_output_dir
+
+            self.output_dir = normalize_and_validate_output_dir(self.output_dir)
 
         # Validate S3 output_dir requires data_connection_name
         if (
@@ -341,8 +340,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if cloud_remote_storage_uri and "://" in cloud_remote_storage_uri:
                 import fsspec
 
-                protocol = cloud_remote_storage_uri.split("://")[0]
-                base_path = cloud_remote_storage_uri.split("://", 1)[1]
+                protocol, base_path = cloud_remote_storage_uri.split("://", 1)
 
                 fsspec_kwargs = {}
                 if protocol == "s3":
@@ -350,10 +348,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # a standardized name like other AWS credentials
                     endpoint_url = os.environ.get("AWS_S3_ENDPOINT")
                     if endpoint_url:
-                        verify_ssl = checkpoint_config.get("verify_ssl", True)
+                        verify_ssl = checkpoint_config.get("checkpoint_storage_verify_ssl", True)
                         fsspec_kwargs = {
                             "client_kwargs": {"endpoint_url": endpoint_url, "verify": verify_ssl},
-                            "config_kwargs": {"signature_version": "s3v4"},
                         }
 
                         # Warn when SSL verification is disabled
@@ -382,10 +379,13 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     )
                 except Exception as e:
                     raise RuntimeError(
-                        f"Cannot access storage path: {cloud_remote_storage_uri}. "
-                        f"Error: {e}. "
-                        f"If using self-signed certificates, set verify_ssl=False. "
-                        f"If experiencing permission issues, set verify_storage_access=False."
+                        f"Failed to check this node has access to the storage path: "
+                        f"'{cloud_remote_storage_uri}'. Error: {e}. "
+                        f"If using self-signed certificates, "
+                        f"set checkpoint_storage_verify_ssl=False. "
+                        f"If experiencing permission issues, check you have read and "
+                        f"write permissions to '{cloud_remote_storage_uri}'. "
+                        f"This check can be disabled by setting verify_storage_access=False."
                     ) from e
 
         def on_init_end(self, args, state, control, **kwargs):
@@ -467,7 +467,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     dist.barrier()
             except Exception as e:
                 raise RuntimeError(
-                    "[Kubeflow] Barrier synchronization failed during checkpoint download."
+                    f"[Kubeflow] Barrier synchronization failed during checkpoint "
+                    f"download: {e}. "
+                    "This typically indicates one or more training processes crashed "
+                    "or exited early. "
+                    "Check your training logs to identify which rank failed, "
+                    "verify all pods are healthy, "
+                    "and ensure distributed training is properly configured. "
+                    "Retrying the training job often resolves transient issues."
                 ) from e
 
         def on_train_begin(self, args, state, control, **kwargs):
@@ -1135,7 +1142,7 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
         periodic_checkpoint_config=periodic_config_dict,
         enable_jit_checkpoint=trainer.enable_jit_checkpoint,
         verify_storage_access=trainer.verify_storage_access,
-        verify_ssl=trainer.verify_ssl,
+        checkpoint_storage_verify_ssl=trainer.checkpoint_storage_verify_ssl,
     )
 
 
@@ -1145,7 +1152,7 @@ def get_jit_checkpoint_injection_code(
     periodic_checkpoint_config: Optional[dict] = None,
     enable_jit_checkpoint: bool = False,
     verify_storage_access: bool = True,
-    verify_ssl: bool = True,
+    checkpoint_storage_verify_ssl: bool = True,
 ) -> str:
     """Generate the complete JIT checkpoint code to inject into training scripts."""
     from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
@@ -1154,7 +1161,7 @@ def get_jit_checkpoint_injection_code(
     config_dict = {
         "enable_jit": enable_jit_checkpoint,
         "verify_storage_access": verify_storage_access,
-        "verify_ssl": verify_ssl,
+        "checkpoint_storage_verify_ssl": checkpoint_storage_verify_ssl,
     }
 
     if output_dir:

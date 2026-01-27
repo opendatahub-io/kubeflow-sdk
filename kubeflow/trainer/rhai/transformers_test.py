@@ -1304,7 +1304,7 @@ def _mock_get_jit_checkpoint_injection_code(
     periodic_checkpoint_config=None,
     enable_jit_checkpoint=False,
     verify_storage_access=True,
-    verify_ssl=True,
+    checkpoint_storage_verify_ssl=True,
 ):
     """Mock implementation of get_jit_checkpoint_injection_code that doesn't require torch."""
     parts = []
@@ -1313,7 +1313,7 @@ def _mock_get_jit_checkpoint_injection_code(
     config_lines = ["_KUBEFLOW_CHECKPOINT_CONFIG = {"]
     config_lines.append(f'    "enable_jit": {enable_jit_checkpoint},')
     config_lines.append(f'    "verify_storage_access": {verify_storage_access},')
-    config_lines.append(f'    "verify_ssl": {verify_ssl},')
+    config_lines.append(f'    "checkpoint_storage_verify_ssl": {checkpoint_storage_verify_ssl},')
     if output_dir:
         config_lines.append(f'    "output_dir": {repr(output_dir)},')
     if cloud_remote_storage_uri:
@@ -2425,6 +2425,89 @@ print("TEST_COMPLETE=True")
     else:
         # Rank 1 should not download
         assert "DOWNLOADED=" not in output
+
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="normalize S3 trailing slash",
+            expected_status=SUCCESS,
+            config={
+                "output_dir": "s3://my-bucket/checkpoints/",
+                "data_connection_name": "my-secret",
+            },
+            expected_output="s3://my-bucket/checkpoints",
+        ),
+        TestCase(
+            name="normalize S3 double slashes",
+            expected_status=SUCCESS,
+            config={
+                "output_dir": "s3://my-bucket//checkpoints",
+                "data_connection_name": "my-secret",
+            },
+            expected_output="s3://my-bucket/checkpoints",
+        ),
+        TestCase(
+            name="normalize PVC trailing slash",
+            expected_status=SUCCESS,
+            config={"output_dir": "pvc://my-pvc/path/"},
+            expected_output="pvc://my-pvc/path",
+        ),
+        TestCase(
+            name="error on missing S3 bucket",
+            expected_status=FAILED,
+            config={"output_dir": "s3://"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="error on missing PVC name",
+            expected_status=FAILED,
+            config={"output_dir": "pvc://"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="error on triple slash (missing bucket)",
+            expected_status=FAILED,
+            config={"output_dir": "s3:///prefix"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="error on unsupported scheme",
+            expected_status=FAILED,
+            config={"output_dir": "gs://bucket"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="allow local filesystem path",
+            expected_status=SUCCESS,
+            config={"output_dir": "/local/path"},
+            expected_output="/local/path",
+        ),
+    ],
+)
+def test_output_dir_normalization(test_case):
+    """Test output_dir normalization and validation."""
+    print(f"Executing test: {test_case.name}")
+
+    def dummy_train():
+        pass
+
+    try:
+        trainer = TransformersTrainer(
+            func=dummy_train,
+            output_dir=test_case.config["output_dir"],
+            data_connection_name=test_case.config.get("data_connection_name"),
+        )
+
+        assert test_case.expected_status == SUCCESS
+        assert trainer.output_dir == test_case.expected_output
+
+    except Exception as e:
+        assert test_case.expected_status == FAILED
+        assert type(e) is test_case.expected_error
 
     print("test execution complete")
 
