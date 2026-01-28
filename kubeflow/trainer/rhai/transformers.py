@@ -23,7 +23,7 @@ from typing import Callable, Optional
 from kubeflow_trainer_api import models
 
 from kubeflow.trainer.constants import constants
-from kubeflow.trainer.rhai.constants import PVC_URI_SCHEME, S3_URI_SCHEME
+from kubeflow.trainer.rhai.constants import S3_URI_SCHEME
 from kubeflow.trainer.types import types
 
 
@@ -92,6 +92,18 @@ class TransformersTrainer:
                               Data Science project, go to the Connections tab, and either
                               copy an existing connection's resource name or create a new
                               S3-compatible connection.
+        verify_cloud_storage_access: Test cloud storage access before training starts. When enabled,
+                               writes and reads a small test file to validate that credentials,
+                               permissions, and bucket access work correctly. This catches
+                               configuration errors early before training begins. Default: True.
+                               Only disable if experiencing false positives and you're confident
+                               your storage configuration is correct.
+        verify_cloud_storage_ssl: Verify SSL certificates for cloud checkpoint storage
+                                       (S3, etc.). Default: True. Set to False only if using
+                                       S3-compatible storage with self-signed certificates.
+                                       This parameter only applies when using a custom S3-compatible
+                                       endpoint (via AWS_S3_ENDPOINT environment variable).
+                                       WARNING: Disabling SSL verification is a security risk.
 
     Raises:
         ValueError: If metrics_port is not in range 1024-65535.
@@ -121,6 +133,8 @@ class TransformersTrainer:
     output_dir: Optional[str] = None
     periodic_checkpoint_config: Optional[PeriodicCheckpointConfig] = None
     data_connection_name: Optional[str] = None
+    verify_cloud_storage_access: bool = True
+    verify_cloud_storage_ssl: bool = True
 
     def __post_init__(self):
         """Validate configuration after initialization.
@@ -163,19 +177,13 @@ class TransformersTrainer:
                 f"metrics_poll_interval_seconds must be in range 5-300, "
                 f"got {self.metrics_poll_interval_seconds}"
             )
-        # Only allow pvc://, s3://, or paths without URI schemes
-        if (
-            self.output_dir
-            and "://" in self.output_dir
-            and not self.output_dir.startswith(PVC_URI_SCHEME)
-            and not self.output_dir.startswith(S3_URI_SCHEME)
-        ):
-            raise ValueError(
-                f"Unsupported storage URI scheme. "
-                f"Currently only '{PVC_URI_SCHEME}' and '{S3_URI_SCHEME}' URIs are supported. "
-                f"Supported formats: '{PVC_URI_SCHEME}<pvc-name>/<path>', "
-                f"'{S3_URI_SCHEME}<bucket>/<path>', or local filesystem paths."
-            )
+
+        # Normalize and validate output_dir URI
+        if self.output_dir:
+            # Import here to avoid circular import
+            from kubeflow.trainer.rhai.utils import normalize_and_validate_output_dir
+
+            self.output_dir = normalize_and_validate_output_dir(self.output_dir)
 
         # Validate S3 output_dir requires data_connection_name
         if (
@@ -203,8 +211,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     import signal
     import threading
     import time
+    from typing import Optional
 
     import torch
+    import torch.distributed as dist
     from transformers import TrainerCallback
     from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
@@ -323,9 +333,170 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     class JITCheckpointCallback(TrainerCallback):
         """Transformers callback that integrates JIT checkpointing with trainer lifecycle."""
 
-        def __init__(self):
+        def __init__(self, cloud_remote_storage_uri: Optional[str] = None) -> None:
             self.jit_manager = None
             self._trainer_ref = None
+            self.cloud_remote_storage_uri = cloud_remote_storage_uri
+            self.remote_fs = None
+
+            if cloud_remote_storage_uri and "://" in cloud_remote_storage_uri:
+                import fsspec
+
+                protocol, base_path = cloud_remote_storage_uri.split("://", 1)
+
+                fsspec_kwargs = {}
+                if protocol == "s3":
+                    # AWS_S3_ENDPOINT must be explicitly passed since it's not
+                    # a standardized name like other AWS credentials
+                    endpoint_url = os.environ.get("AWS_S3_ENDPOINT")
+                    if endpoint_url:
+                        verify_ssl = checkpoint_config.get("verify_cloud_storage_ssl", True)
+                        fsspec_kwargs = {
+                            "client_kwargs": {"endpoint_url": endpoint_url, "verify": verify_ssl},
+                        }
+
+                        # Warn when SSL verification is disabled
+                        if not verify_ssl:
+                            print(
+                                "[Kubeflow] WARNING: SSL certificate verification disabled. "
+                                "This should only be used with trusted S3-compatible storage.",
+                                flush=True,
+                            )
+
+                try:
+                    # Create underlying filesystem and wrap with directory fs to embed base path
+                    underlying_fs = fsspec.filesystem(protocol, **fsspec_kwargs)
+                    self.remote_fs = fsspec.filesystem("dir", path=base_path, fs=underlying_fs)
+
+                    # Verify storage access by writing/reading test file (if enabled)
+                    if checkpoint_config.get("verify_cloud_storage_access", True):
+                        test_file = ".kubeflow-access-test"
+                        self.remote_fs.pipe(test_file, b"test")
+                        self.remote_fs.cat(test_file)
+                        self.remote_fs.rm_file(test_file)
+
+                    print(
+                        f"[Kubeflow] Cloud storage configured: {cloud_remote_storage_uri} "
+                        f"({protocol})",
+                        flush=True,
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to check this node has access to the storage path: "
+                        f"'{cloud_remote_storage_uri}'. Error: {e}. "
+                        f"If using self-signed certificates, "
+                        f"set verify_cloud_storage_ssl=False. "
+                        f"If experiencing permission issues, check you have read and "
+                        f"write permissions to '{cloud_remote_storage_uri}'. "
+                        f"This check can be disabled by setting verify_cloud_storage_access=False."
+                    ) from e
+
+        def on_init_end(self, args, state, control, **kwargs):
+            """Download latest checkpoint from S3 before training (rank-0-only with barrier)."""
+            if not self.remote_fs:
+                # Return since cloud storage not configured by user
+                return
+
+            is_rank_0 = state.is_world_process_zero
+
+            if is_rank_0:
+                checkpoint_dirs = self.remote_fs.ls("", detail=False)
+                steps = sorted(
+                    [
+                        int(m.group(1))
+                        for p in checkpoint_dirs
+                        if (m := re.search(r"checkpoint-(\d+)$", p))
+                    ],
+                    reverse=True,
+                )
+
+                for step in steps:
+                    name = f"checkpoint-{step}"
+                    marker = f"{name}/{CHECKPOINT_INCOMPLETE_MARKER}"
+                    if self.remote_fs.exists(marker):
+                        continue
+
+                    # Progress callback for checkpoint download
+                    from fsspec.callbacks import Callback
+
+                    class ProgressCallback(Callback):
+                        """Download progress callback with time-based interval logging"""
+
+                        def __init__(self, interval=5):
+                            super().__init__()
+                            self.last = None
+                            self.interval = interval
+
+                        def set_size(self, size):
+                            """Called when total size is known"""
+                            super().set_size(size)
+                            mb_total = size / (1024 * 1024)
+                            print(f"[Kubeflow] Download size: {mb_total:.1f} MB", flush=True)
+                            self.last = time.time()
+
+                        def relative_update(self, inc=1):
+                            """Called as download progresses"""
+                            super().relative_update(inc)
+                            if self.last is None:
+                                return
+
+                            now = time.time()
+                            if now - self.last >= self.interval:
+                                mb_done = self.value / (1024 * 1024)
+                                mb_total = self.size / (1024 * 1024) if self.size else None
+                                if mb_total:
+                                    pct = (
+                                        int((self.value / self.size) * 100) if self.size > 0 else 0
+                                    )
+                                    print(
+                                        f"[Kubeflow] Progress: {mb_done:.1f}/{mb_total:.1f} MB "
+                                        f"({pct}%)",
+                                        flush=True,
+                                    )
+                                else:
+                                    print(f"[Kubeflow] Progress: {mb_done:.1f} MB", flush=True)
+                                self.last = now
+
+                    try:
+                        print(f"[Kubeflow] Downloading checkpoint: {name}", flush=True)
+                        self.remote_fs.get(
+                            name, args.output_dir, recursive=True, callback=ProgressCallback()
+                        )
+                        print("[Kubeflow] Download complete", flush=True)
+
+                    except Exception as e:
+                        raise RuntimeError(
+                            "[Kubeflow] Checkpoint download failed for "
+                            f"'{name}' to '{args.output_dir}': {e}. "
+                            "This may be caused by network issues, insufficient permissions, "
+                            "or lack of disk space on the training node. "
+                            "Verify access to the remote storage location, ensure adequate "
+                            "free disk space, and retry the training job."
+                        ) from e
+                    break
+                else:
+                    # Loop completed without break, no valid checkpoints found
+                    print(
+                        "[Kubeflow] No valid checkpoints found in cloud storage. "
+                        "Training will start from scratch.",
+                        flush=True,
+                    )
+
+            # Barrier to wait for rank 0 checkpoint download to complete
+            try:
+                if hasattr(dist, "is_available") and dist.is_available() and dist.is_initialized():
+                    dist.barrier()
+            except Exception as e:
+                raise RuntimeError(
+                    f"[Kubeflow] Barrier synchronization failed during checkpoint "
+                    f"download: {e}. "
+                    "This typically indicates one or more training processes crashed "
+                    "or exited early. "
+                    "Check your training logs to identify which rank failed, "
+                    "verify all pods are healthy, "
+                    "and ensure distributed training is properly configured. "
+                    "Retrying the training job often resolves transient issues."
+                ) from e
 
         def on_train_begin(self, args, state, control, **kwargs):
             if self._trainer_ref is not None and self.jit_manager is None:
@@ -365,7 +536,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         """Setup monkey patch for Trainer to auto inject JIT checkpoint callback."""
         from transformers import Trainer as _TransformersTrainer
 
-        _jit_checkpoint_callback = JITCheckpointCallback()
+        _jit_checkpoint_callback = JITCheckpointCallback(
+            checkpoint_config.get("cloud_remote_storage_uri")
+        )
 
         def _find_latest_checkpoint(output_dir):
             """Find the latest checkpoint and deleting incomplete ones."""
@@ -989,6 +1162,8 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
         cloud_remote_storage_uri=cloud_remote_storage_uri,
         periodic_checkpoint_config=periodic_config_dict,
         enable_jit_checkpoint=trainer.enable_jit_checkpoint,
+        verify_cloud_storage_access=trainer.verify_cloud_storage_access,
+        verify_cloud_storage_ssl=trainer.verify_cloud_storage_ssl,
     )
 
 
@@ -997,12 +1172,18 @@ def get_jit_checkpoint_injection_code(
     cloud_remote_storage_uri: Optional[str] = None,
     periodic_checkpoint_config: Optional[dict] = None,
     enable_jit_checkpoint: bool = False,
+    verify_cloud_storage_access: bool = True,
+    verify_cloud_storage_ssl: bool = True,
 ) -> str:
     """Generate the complete JIT checkpoint code to inject into training scripts."""
     from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
 
     # Build checkpoint config dict
-    config_dict = {"enable_jit": enable_jit_checkpoint}
+    config_dict = {
+        "enable_jit": enable_jit_checkpoint,
+        "verify_cloud_storage_access": verify_cloud_storage_access,
+        "verify_cloud_storage_ssl": verify_cloud_storage_ssl,
+    }
 
     if output_dir:
         config_dict["output_dir"] = output_dir

@@ -1,5 +1,7 @@
 import logging
+import re
 from typing import Optional
+from urllib.parse import urlparse
 
 from kubeflow_trainer_api import models
 from kubernetes import client
@@ -84,6 +86,73 @@ def merge_progression_annotations(
         return progression_annotations
     # Merge metadata_annotations last to allow users to override progression annotations
     return {**progression_annotations, **metadata_annotations}
+
+
+def normalize_and_validate_output_dir(output_dir: Optional[str]) -> Optional[str]:
+    """Normalize and validate storage URI for output_dir.
+
+    Supports:
+    - PVC URIs: pvc://<pvc-name>/<optional-path>
+    - S3 URIs: s3://<bucket>/<optional-prefix>
+    - Local filesystem paths (no scheme)
+
+    Auto-normalizes:
+    - Trailing slashes: 's3://bucket/prefix/' → 's3://bucket/prefix'
+    - Duplicate slashes: 's3://bucket//prefix' → 's3://bucket/prefix'
+
+    Args:
+        output_dir: Storage URI or local path
+
+    Returns:
+        Normalized URI, or None if input is None
+
+    Raises:
+        ValueError: If URI is invalid or uses unsupported scheme
+    """
+    if not output_dir:
+        return output_dir
+
+    parsed = urlparse(output_dir)
+
+    # If no scheme, treat as local filesystem path (return as-is)
+    if not parsed.scheme:
+        return output_dir
+
+    # Validate and normalize URI schemes
+    scheme = parsed.scheme.lower()
+
+    # Extract scheme names from constants (remove "://")
+    pvc_scheme = PVC_URI_SCHEME.replace("://", "").lower()
+    s3_scheme = S3_URI_SCHEME.replace("://", "").lower()
+
+    if scheme not in (pvc_scheme, s3_scheme):
+        raise ValueError(
+            f"Unsupported storage URI scheme '{scheme}://'. "
+            f"Only '{PVC_URI_SCHEME}' and '{S3_URI_SCHEME}' URIs are supported. "
+            f"Supported formats: '{PVC_URI_SCHEME}<pvc-name>/<path>', "
+            f"'{S3_URI_SCHEME}<bucket>/<prefix>', or local filesystem paths."
+        )
+
+    # Validate netloc (bucket/PVC name) is not empty
+    if not parsed.netloc:
+        resource_type = "bucket" if scheme == s3_scheme else "PVC name"
+        raise ValueError(
+            f"Invalid {scheme.upper()} URI: '{output_dir}'. "
+            f"Missing {resource_type}. "
+            f"Expected format: '{scheme}://<{resource_type}>/<path>'"
+        )
+
+    # Normalize path: remove duplicate slashes and trailing slash
+    path = parsed.path or ""
+    if path:
+        # Replace multiple consecutive slashes with single slash
+        path = re.sub(r"/+", "/", path)
+        # Remove trailing slash
+        path = path.rstrip("/")
+
+    # Reconstruct normalized URI
+    normalized = f"{scheme}://{parsed.netloc}{path}"
+    return normalized
 
 
 def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
