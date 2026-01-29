@@ -440,19 +440,13 @@ class KubernetesBackend(RuntimeBackend):
         events = []
         try:
             # Retrieve events from the namespace
-            event_response = self.core_api.list_namespaced_event(
+            event_response: models.IoK8sApiCoreV1EventList = self.core_api.list_namespaced_event(
                 namespace=self.namespace,
                 async_req=True,
             ).get(common_constants.DEFAULT_TIMEOUT)
 
-            # Convert to event list
-            event_list = models.IoK8sApiCoreV1EventList.from_dict(event_response.to_dict())
-
-            if not event_list:
-                return events
-
             # Filter events related to this TrainJob or its pods
-            for event in event_list.items:
+            for event in event_response.items:
                 if not (event.metadata and event.involved_object and event.first_timestamp):
                     continue
 
@@ -584,6 +578,7 @@ class KubernetesBackend(RuntimeBackend):
             ).get(common_constants.DEFAULT_TIMEOUT)
 
             # Convert Pod to the correct format.
+            # This is required to convert Pod's container resources into API object from str
             pod_list = models.IoK8sApiCoreV1PodList.from_dict(response.to_dict())
             if not pod_list:
                 return trainjob
