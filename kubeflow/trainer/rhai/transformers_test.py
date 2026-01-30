@@ -1303,6 +1303,8 @@ def _mock_get_jit_checkpoint_injection_code(
     cloud_remote_storage_uri=None,
     periodic_checkpoint_config=None,
     enable_jit_checkpoint=False,
+    verify_cloud_storage_access=True,
+    verify_cloud_storage_ssl=True,
 ):
     """Mock implementation of get_jit_checkpoint_injection_code that doesn't require torch."""
     parts = []
@@ -1310,8 +1312,12 @@ def _mock_get_jit_checkpoint_injection_code(
     # Build config dict
     config_lines = ["_KUBEFLOW_CHECKPOINT_CONFIG = {"]
     config_lines.append(f'    "enable_jit": {enable_jit_checkpoint},')
+    config_lines.append(f'    "verify_cloud_storage_access": {verify_cloud_storage_access},')
+    config_lines.append(f'    "verify_cloud_storage_ssl": {verify_cloud_storage_ssl},')
     if output_dir:
         config_lines.append(f'    "output_dir": {repr(output_dir)},')
+    if cloud_remote_storage_uri:
+        config_lines.append(f'    "cloud_remote_storage_uri": {repr(cloud_remote_storage_uri)},')
     if periodic_checkpoint_config:
         if "save_strategy" in periodic_checkpoint_config:
             config_lines.append(
@@ -1601,6 +1607,15 @@ class cuda:
     def stream(stream_obj):
         return stream_obj
 
+class distributed:
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
 Tensor = object  # Stub
 """
 
@@ -1651,6 +1666,7 @@ import types
 torch_module = types.ModuleType('torch')
 exec('''{torch_stub}''', torch_module.__dict__)
 sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
 
 # Create transformers stub module
 transformers_module = types.ModuleType('transformers')
@@ -1766,6 +1782,15 @@ class cuda:
     @staticmethod
     def is_available():
         return True
+
+class distributed:
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
 """
 
     transformers_stub = """
@@ -1801,6 +1826,7 @@ import types
 torch_module = types.ModuleType('torch')
 exec('''{torch_stub}''', torch_module.__dict__)
 sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
 
 transformers_module = types.ModuleType('transformers')
 exec('''{transformers_stub}''', transformers_module.__dict__)
@@ -2166,6 +2192,359 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
     # Verify cloud_remote_storage_uri is in the generated config
     assert "cloud_remote_storage_uri" in checkpoint_code
     assert "s3://my-bucket/model-checkpoints" in checkpoint_code
+
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="download latest checkpoint from S3",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": ["checkpoint-100", "checkpoint-300", "checkpoint-200"],
+                "incomplete_markers": [],
+                "is_rank_0": True,
+            },
+            expected_output="checkpoint-300",
+        ),
+        TestCase(
+            name="skip incomplete checkpoint in S3",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": ["checkpoint-100", "checkpoint-300", "checkpoint-200"],
+                "incomplete_markers": ["checkpoint-300"],
+                "is_rank_0": True,
+            },
+            expected_output="checkpoint-200",
+        ),
+        TestCase(
+            name="rank 1 does not download from S3",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": ["checkpoint-100"],
+                "incomplete_markers": [],
+                "is_rank_0": False,
+            },
+            expected_output=None,  # No download for rank 1
+        ),
+        TestCase(
+            name="empty remote storage - no checkpoints available",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": [],  # No checkpoints in storage
+                "incomplete_markers": [],
+                "is_rank_0": True,
+            },
+            expected_output=None,  # No download, message logged
+        ),
+        TestCase(
+            name="all checkpoints incomplete - none available for download",
+            expected_status=SUCCESS,
+            config={
+                "checkpoints": ["checkpoint-100", "checkpoint-200", "checkpoint-300"],
+                "incomplete_markers": [
+                    "checkpoint-100",
+                    "checkpoint-200",
+                    "checkpoint-300",
+                ],  # All incomplete
+                "is_rank_0": True,
+            },
+            expected_output=None,  # No download, message logged
+        ),
+    ],
+)
+def test_s3_download_execution(test_case, tmp_path):
+    """Integration test: S3 checkpoint download behavior.
+
+    Tests:
+    - Latest checkpoint is downloaded
+    - Incomplete checkpoints are skipped
+    - Only rank 0 downloads
+    """
+    print(f"Executing test: {test_case.name}")
+
+    import subprocess
+    import sys
+
+    from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/checkpoints",
+        cloud_remote_storage_uri="s3://test-bucket/model-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    # Create fsspec stub based on test config
+    checkpoints_list = ", ".join([f'"{cp}"' for cp in test_case.config["checkpoints"]])
+    incomplete_checks = []
+    for marker in test_case.config["incomplete_markers"]:
+        incomplete_checks.append(
+            f'        if "{marker}" in path and "checkpoint-is-incomplete.txt" in path:\n'
+            f"            return True"
+        )
+    incomplete_logic = "\n".join(incomplete_checks) if incomplete_checks else "        pass"
+
+    fsspec_stub = f"""
+class MockS3FileSystem:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def ls(self, path, detail=False):
+        return [{checkpoints_list}]
+
+    def exists(self, path):
+{incomplete_logic}
+        return False
+
+    def pipe(self, path, data):
+        pass
+
+    def cat(self, path):
+        return b"test"
+
+    def get(self, src, dst, recursive=False, callback=None):
+        print(f"DOWNLOADED={{src}}")
+
+    def rm(self, path):
+        pass
+
+    def rm_file(self, path):
+        pass
+
+class Callback:
+    def __init__(self):
+        self.size = 0
+        self.value = 0
+
+    def set_size(self, size):
+        self.size = size
+
+    def relative_update(self, inc=1):
+        self.value += inc
+
+class callbacks:
+    Callback = Callback
+
+def filesystem(protocol, **kwargs):
+    return MockS3FileSystem()
+"""
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 100
+        self.is_world_process_zero = True
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.model = None
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def train(self, resume_from_checkpoint=None):
+        return {"train_called": True, "resume_from": resume_from_checkpoint}
+"""
+
+    test_file = tmp_path / f"test_s3_{test_case.name.replace(' ', '_')}.py"
+    is_rank_0 = test_case.config["is_rank_0"]
+
+    test_code = f"""
+import sys
+import types
+
+# Create fsspec stub
+fsspec_module = types.ModuleType('fsspec')
+exec('''{fsspec_stub}''', fsspec_module.__dict__)
+sys.modules['fsspec'] = fsspec_module
+
+# Create fsspec.callbacks submodule
+callbacks_module = types.ModuleType('fsspec.callbacks')
+callbacks_module.Callback = fsspec_module.Callback
+sys.modules['fsspec.callbacks'] = callbacks_module
+fsspec_module.callbacks = callbacks_module
+
+# Create torch stub
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+# Create transformers stub
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+# Execute checkpoint injection code
+{checkpoint_code}
+
+from transformers import TrainerCallback
+
+# Find JITCheckpointCallback
+callback_class = None
+for name, obj in list(globals().items()):
+    if isinstance(obj, type) and issubclass(obj, TrainerCallback) and name != 'TrainerCallback':
+        callback_class = obj
+        break
+
+if not callback_class:
+    print("ERROR: JITCheckpointCallback not found")
+    sys.exit(1)
+
+callback = callback_class(cloud_remote_storage_uri="s3://test-bucket/model-checkpoints")
+
+class MockArgs:
+    output_dir = "/mnt/checkpoints"
+
+class MockState:
+    is_world_process_zero = {is_rank_0}
+
+callback.on_init_end(MockArgs(), MockState(), None)
+
+print("TEST_COMPLETE=True")
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    output = result.stdout
+    print(f"Test output:\n{output}")
+
+    if result.returncode != 0:
+        print(f"Test stderr:\n{result.stderr}")
+
+    assert result.returncode == 0, f"Execution failed with return code {result.returncode}"
+    assert "TEST_COMPLETE=True" in output
+
+    # Verify expected download behavior
+    if test_case.expected_output:
+        assert f"DOWNLOADED={test_case.expected_output}" in output
+    else:
+        # No download should occur (rank 1, empty storage, or all incomplete)
+        assert "DOWNLOADED=" not in output
+
+        # Verify informative message for empty/incomplete cases
+        if (
+            not test_case.config["checkpoints"] or test_case.config["incomplete_markers"]
+        ) and test_case.config["is_rank_0"]:
+            # Empty storage or all incomplete - should see "No valid checkpoints" message
+            assert "No valid checkpoints found in cloud storage" in output
+
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="normalize S3 trailing slash",
+            expected_status=SUCCESS,
+            config={
+                "output_dir": "s3://my-bucket/checkpoints/",
+                "data_connection_name": "my-secret",
+            },
+            expected_output="s3://my-bucket/checkpoints",
+        ),
+        TestCase(
+            name="normalize S3 double slashes",
+            expected_status=SUCCESS,
+            config={
+                "output_dir": "s3://my-bucket//checkpoints",
+                "data_connection_name": "my-secret",
+            },
+            expected_output="s3://my-bucket/checkpoints",
+        ),
+        TestCase(
+            name="normalize PVC trailing slash",
+            expected_status=SUCCESS,
+            config={"output_dir": "pvc://my-pvc/path/"},
+            expected_output="pvc://my-pvc/path",
+        ),
+        TestCase(
+            name="error on missing S3 bucket",
+            expected_status=FAILED,
+            config={"output_dir": "s3://"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="error on missing PVC name",
+            expected_status=FAILED,
+            config={"output_dir": "pvc://"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="error on triple slash (missing bucket)",
+            expected_status=FAILED,
+            config={"output_dir": "s3:///prefix"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="error on unsupported scheme",
+            expected_status=FAILED,
+            config={"output_dir": "gs://bucket"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="allow local filesystem path",
+            expected_status=SUCCESS,
+            config={"output_dir": "/local/path"},
+            expected_output="/local/path",
+        ),
+    ],
+)
+def test_output_dir_normalization(test_case):
+    """Test output_dir normalization and validation."""
+    print(f"Executing test: {test_case.name}")
+
+    def dummy_train():
+        pass
+
+    try:
+        trainer = TransformersTrainer(
+            func=dummy_train,
+            output_dir=test_case.config["output_dir"],
+            data_connection_name=test_case.config.get("data_connection_name"),
+        )
+
+        assert test_case.expected_status == SUCCESS
+        assert trainer.output_dir == test_case.expected_output
+
+    except Exception as e:
+        assert test_case.expected_status == FAILED
+        assert type(e) is test_case.expected_error
 
     print("test execution complete")
 
