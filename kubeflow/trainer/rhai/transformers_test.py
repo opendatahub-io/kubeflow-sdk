@@ -2442,6 +2442,7 @@ callback = callback_class(cloud_remote_storage_uri="s3://test-bucket/model-check
 
 class MockArgs:
     output_dir = "/mnt/checkpoints"
+    local_process_index = 0 if {is_rank_0} else 1
 
 class MockState:
     is_world_process_zero = {is_rank_0}
