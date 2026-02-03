@@ -14,7 +14,6 @@ from kubeflow.trainer.rhai import (
     transformers,
 )
 from kubeflow.trainer.rhai.constants import (
-    CHECKPOINT_EPHEMERAL_VOLUME_SIZE,
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
     PVC_URI_SCHEME,
@@ -203,24 +202,31 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
         return resolved_path, {"volume": volume_spec, "volumeMount": volume_mount_spec}
 
     if output_dir.startswith(S3_URI_SCHEME):
-        # Build ephemeral volume spec for S3 checkpoint staging
+        # # Build ephemeral volume spec for S3 checkpoint staging
+        # # This volume is used as temporary local storage before uploading to S3
+        # volume_resources = {
+        #     "requests": {
+        #         "storage": models.IoK8sApimachineryPkgApiResourceQuantity(
+        #             CHECKPOINT_EPHEMERAL_VOLUME_SIZE
+        #         ),
+        #     }
+        # }
+        #
+        # volume_spec = {
+        #     "accessModes": ["ReadWriteOnce"],
+        #     "resources": volume_resources,
+        # }
+        #
+        # volume = {
+        #     "name": CHECKPOINT_VOLUME_NAME,
+        #     "ephemeral": {"volumeClaimTemplate": {"spec": volume_spec}},
+        # }
+
+        # Build emptyDir volume spec for S3 checkpoint staging
         # This volume is used as temporary local storage before uploading to S3
-        volume_resources = {
-            "requests": {
-                "storage": models.IoK8sApimachineryPkgApiResourceQuantity(
-                    CHECKPOINT_EPHEMERAL_VOLUME_SIZE
-                ),
-            }
-        }
-
-        volume_spec = {
-            "accessModes": ["ReadWriteOnce"],
-            "resources": volume_resources,
-        }
-
         volume = {
             "name": CHECKPOINT_VOLUME_NAME,
-            "ephemeral": {"volumeClaimTemplate": {"spec": volume_spec}},
+            "emptyDir": {},
         }
         volume_mount_spec = {
             "name": CHECKPOINT_VOLUME_NAME,

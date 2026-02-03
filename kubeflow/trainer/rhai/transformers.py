@@ -423,27 +423,31 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             class TransferProgressCallback(Callback):
                 """Progress callback with time-based interval logging for uploads/downloads"""
 
+                operation_name: str
+                last: Optional[float]
+                interval: int
+
                 def __init__(self, operation_name: str, interval: int = 1):
                     super().__init__()
                     self.operation_name = operation_name
                     self.last = None
                     self.interval = interval
 
-                def set_size(self, size):
+                def set_size(self, size: int):
                     """Called when total size is known"""
                     super().set_size(size)
+                    self.last = time.time()
                     if size > 0:
                         mb_total = size / (1024 * 1024)
                         print(
                             f"[Kubeflow] {self.operation_name} size: {mb_total:.1f} MB", flush=True
                         )
-                    self.last = time.time()
 
-                def relative_update(self, inc=1):
+                def relative_update(self, inc: int = 1):
                     """Called as transfer progresses"""
                     super().relative_update(inc)
                     if self.last is None:
-                        return
+                        self.last = time.time()
 
                     now = time.time()
                     if now - self.last >= self.interval:
@@ -462,14 +466,17 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             return TransferProgressCallback(operation)
 
         def on_init_end(self, args, state, control, **kwargs):
-            """Download latest checkpoint from S3 before training (rank-0-only with barrier)."""
+            """
+            Download latest checkpoint from S3 before
+            training (local-rank-0-only with barrier).
+            """
             if not self.remote_fs:
                 # Return since cloud storage not configured by user
                 return
 
-            is_rank_0 = state.is_world_process_zero
+            is_local_rank_0 = args.local_process_index == 0
 
-            if is_rank_0:
+            if is_local_rank_0:
                 try:
                     checkpoint_dirs = self.remote_fs.ls("", detail=False)
                 except FileNotFoundError:
@@ -526,19 +533,25 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             flush=True,
                         )
 
-            # Barrier to wait for rank 0 checkpoint download to complete
+            # Barrier to wait for local rank 0 checkpoint download to complete
             self._wait_for_all_ranks("download")
 
         def on_save(self, args, state, control, **kwargs):
-            """Upload checkpoint to S3 synchronously after it's saved locally (rank-0-only)."""
+            """
+            Upload checkpoint to S3 synchronously after it's
+            saved locally (local-rank-0-only).
+            """
             if not self.remote_fs:
                 # S3 storage not configured, skip upload
                 return
 
-            is_rank_0 = state.is_world_process_zero
+            # Barrier before staging checkpoint to ensure all ranks finished saving their files
+            self._wait_for_all_ranks("save")
 
-            # Only rank 0 uploads to S3, but all ranks must wait at barrier
-            if is_rank_0:
+            is_local_rank_0 = args.local_process_index == 0
+
+            # Only local rank 0 uploads to S3, but all ranks must wait at barrier
+            if is_local_rank_0:
                 current_step = state.global_step
                 checkpoint_name = f"{PREFIX_CHECKPOINT_DIR}-{current_step}"
                 checkpoint_path = os.path.join(args.output_dir, checkpoint_name)
@@ -622,7 +635,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             "permission changes. Verify S3 connectivity and retry the training job."
                         ) from e
 
-            # Barrier to wait for rank 0 checkpoint upload to complete
+            # Barrier to wait for local rank 0 checkpoint upload to complete
             self._wait_for_all_ranks("upload")
 
         def on_train_begin(self, args, state, control, **kwargs):
@@ -664,8 +677,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if not self.remote_fs:
                 return
 
-            is_rank_0 = state.is_world_process_zero
-            if is_rank_0:
+            is_local_rank_0 = args.local_process_index == 0
+            if is_local_rank_0:
                 staging_dir = os.path.join(args.output_dir, CHECKPOINT_STAGING_DIR)
                 if os.path.exists(staging_dir):
                     try:
