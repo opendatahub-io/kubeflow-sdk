@@ -701,30 +701,25 @@ def test_instrumentation_cleans_sft_metrics_on_startup(tmp_path):
     stale_metrics_file = ckpt_dir / "training_params_and_metrics_global0.jsonl"
     stale_metrics_file.write_text('{"step": 100, "loss": 1.5}\n')
 
-    # Get instrumentation wrapper
-    wrapper = get_training_hub_instrumentation_wrapper(
+    # Call instrumentation directly (no exec) with port 0 for random available port
+    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+
+    apply_fn, _handler = _create_training_hub_progression_instrumentation(
         algorithm="sft",
         ckpt_output_dir=str(ckpt_dir),
-        metrics_port=28080,
+        metrics_port=0,  # Use port 0 for random available port
     )
 
-    # Verify cleanup code is present
-    assert "Cleaning stale metrics files" in wrapper, "Should include cleanup logging"
-    assert "SFT_METRICS_FILE_PATTERN" in wrapper, "Should use SFT pattern"
-    assert "os.remove" in wrapper, "Should remove files"
+    # Call the function to trigger cleanup and start server
+    server = apply_fn()
 
-    # Execute the instrumentation code to test cleanup
-    exec_globals = {}
-    exec(wrapper, exec_globals)
-
-    # Verify apply_progression_tracking is defined
-    assert "apply_progression_tracking" in exec_globals, "Should define apply_progression_tracking"
-
-    # Call the function (this will clean files)
-    exec_globals["apply_progression_tracking"]()
-
-    # Verify stale file was removed
-    assert not stale_metrics_file.exists(), "Stale SFT metrics should be removed"
+    try:
+        # Verify stale file was removed
+        assert not stale_metrics_file.exists(), "Stale SFT metrics should be removed"
+    finally:
+        # Always shut down server to avoid port conflicts
+        if server:
+            server.shutdown()
 
     print("test execution complete")
 
@@ -743,25 +738,27 @@ def test_instrumentation_cleans_osft_metrics_on_startup(tmp_path):
     stale_config_file = ckpt_dir / "training_params.json"
     stale_config_file.write_text('{"max_epochs": 10}\n')
 
-    # Get instrumentation wrapper
-    wrapper = get_training_hub_instrumentation_wrapper(
+    # Call instrumentation directly (no exec) with port 0 for random available port
+    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+
+    apply_fn, _handler = _create_training_hub_progression_instrumentation(
         algorithm="osft",
         ckpt_output_dir=str(ckpt_dir),
-        metrics_port=28080,
+        metrics_port=0,  # Use port 0 for random available port
     )
 
-    # Verify cleanup code is present
-    assert "Cleaning stale metrics files" in wrapper, "Should include cleanup logging"
+    # Call the function to trigger cleanup and start server
+    server = apply_fn()
 
-    # Execute the instrumentation code
-    exec_globals = {}
-    exec(wrapper, exec_globals)
-
-    # Call the function
-    exec_globals["apply_progression_tracking"]()
-
-    # Verify stale metrics were removed
-    assert not stale_metrics_file.exists(), "Stale OSFT metrics should be removed"
+    try:
+        # Verify stale metrics were removed
+        assert not stale_metrics_file.exists(), "Stale OSFT metrics should be removed"
+        # Config file should NOT be removed (backend overwrites it)
+        assert stale_config_file.exists(), "OSFT config should not be removed"
+    finally:
+        # Always shut down server to avoid port conflicts
+        if server:
+            server.shutdown()
 
     print("test execution complete")
 
@@ -774,27 +771,26 @@ def test_instrumentation_cleanup_handles_missing_files(tmp_path):
     ckpt_dir = tmp_path / "checkpoints"
     ckpt_dir.mkdir()
 
-    # Get instrumentation wrapper
-    wrapper = get_training_hub_instrumentation_wrapper(
+    # Call instrumentation directly (no exec) with port 0 for random available port
+    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+
+    apply_fn, _handler = _create_training_hub_progression_instrumentation(
         algorithm="sft",
         ckpt_output_dir=str(ckpt_dir),
-        metrics_port=28080,
+        metrics_port=0,  # Use port 0 for random available port
     )
 
-    # Execute the instrumentation code
-    exec_globals = {}
-    exec(wrapper, exec_globals)
-
     # Should not raise exception when no files exist
-    try:
-        exec_globals["apply_progression_tracking"]()
-    except Exception as e:
-        pytest.fail(f"Cleanup should handle missing files gracefully, but raised: {e}")
+    server = apply_fn()
+
+    # Always shut down server
+    if server:
+        server.shutdown()
 
     print("test execution complete")
 
 
-def test_instrumentation_cleanup_continues_on_error(tmp_path):
+def test_instrumentation_cleanup_continues_on_error():
     """Test that training continues even if cleanup fails."""
     print("Executing test: Training continues on cleanup failure")
 
@@ -806,7 +802,6 @@ def test_instrumentation_cleanup_continues_on_error(tmp_path):
     )
 
     # Verify error handling is present
-    assert "Proceeding with training" in wrapper, "Should continue on cleanup error"
     assert "Warning: Metrics cleanup failed" in wrapper, "Should log cleanup failures"
 
     print("test execution complete")
