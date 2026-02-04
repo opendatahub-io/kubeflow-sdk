@@ -491,6 +491,54 @@ def _create_training_hub_progression_instrumentation(
 
     def apply_progression_tracking():
         """Start HTTP server for metrics in background thread."""
+        # Clean stale metrics files from previous runs
+        # Since backends restart training from step 0 without checkpoint resumption,
+        # old metrics files should be deleted to avoid showing stale/incorrect progress
+        try:
+            print("[Kubeflow] Cleaning stale metrics files", flush=True)
+
+            # Determine file patterns based on algorithm
+            if algorithm == "sft":
+                patterns = [SFT_METRICS_FILE_PATTERN]
+            elif algorithm == "osft":
+                # All ranks
+                patterns = [
+                    OSFT_METRICS_FILE_RANK0.replace("_0.jsonl", "_*.jsonl"),
+                ]
+            else:
+                patterns = []
+
+            # Delete matching files
+            files_removed = 0
+            for pattern in patterns:
+                full_pattern = os.path.join(ckpt_output_dir, pattern)
+                for file_path in glob.glob(full_pattern):
+                    try:
+                        os.remove(file_path)
+                        files_removed += 1
+                        print(
+                            f"[Kubeflow] Removed stale metrics file: {os.path.basename(file_path)}",
+                            flush=True,
+                        )
+                    except Exception as e:
+                        filename = os.path.basename(file_path)
+                        print(
+                            f"[Kubeflow] Warning: Could not remove {filename}: {e}",
+                            flush=True,
+                        )
+
+            if files_removed > 0:
+                print(f"[Kubeflow] Cleaned {files_removed} stale metrics file(s)", flush=True)
+            else:
+                print("[Kubeflow] No stale metrics files found", flush=True)
+
+        except Exception as e:
+            print(
+                f"[Kubeflow] Warning: Metrics cleanup failed: {e}. Proceeding with training.",
+                flush=True,
+            )
+
+        # Start HTTP server for metrics
         try:
             server = http.server.HTTPServer(("0.0.0.0", metrics_port), TrainingHubMetricsHandler)
 
