@@ -516,27 +516,20 @@ def _create_training_hub_progression_instrumentation(
                     try:
                         os.remove(file_path)
                         files_removed += 1
-                        print(
-                            f"[Kubeflow] Removed stale metrics file: {os.path.basename(file_path)}",
-                            flush=True,
-                        )
-                    except Exception as e:
                         filename = os.path.basename(file_path)
-                        print(
-                            f"[Kubeflow] Warning: Could not remove {filename}: {e}",
-                            flush=True,
-                        )
+                        print(f"[Kubeflow] Removed stale metrics file: {filename}", flush=True)
+                    except OSError as e:
+                        filename = os.path.basename(file_path)
+                        print(f"[Kubeflow] Warning: Could not remove {filename}: {e}", flush=True)
 
             if files_removed > 0:
-                print(f"[Kubeflow] Cleaned {files_removed} stale metrics file(s)", flush=True)
+                file_word = "files" if files_removed != 1 else "file"
+                print(f"[Kubeflow] Cleaned {files_removed} stale metrics {file_word}", flush=True)
             else:
                 print("[Kubeflow] No stale metrics files found", flush=True)
 
-        except Exception as e:
-            print(
-                f"[Kubeflow] Warning: Metrics cleanup failed: {e}. Proceeding with training.",
-                flush=True,
-            )
+        except OSError as e:
+            print(f"[Kubeflow] Warning: Metrics cleanup failed: {e}", flush=True)
 
         # Start HTTP server for metrics
         try:
