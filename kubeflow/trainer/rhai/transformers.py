@@ -393,7 +393,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         def _wait_for_all_ranks(self, operation: str) -> None:
             """Wait for all distributed ranks to reach this point.
-
             Args:
                 operation: Description of the operation (e.g., "download", "upload")
             """
@@ -412,64 +411,57 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     "Retrying the training job often resolves transient issues."
                 ) from e
 
-        def _cloud_storage_progress_callback(self, operation: str):
-            """Create a progress callback for checkpoint transfer operations.
+        def _calculate_local_dir_size(self, path: str) -> int:
+            """Calculate total size of local directory."""
+            import contextlib
 
-            Args:
-                operation: Operation name ("Upload" or "Download") for logging
-            """
+            total = 0
+            for root, _, files in os.walk(path):
+                for f in files:
+                    with contextlib.suppress(OSError, FileNotFoundError):
+                        total += os.path.getsize(os.path.join(root, f))
+            return total
+
+        def _cloud_storage_progress_callback(self, operation: str, total_size: int):
+            """Create progress callback with byte-level tracking via branched()."""
             from fsspec.callbacks import Callback
 
-            class TransferProgressCallback(Callback):
-                """Progress callback with time-based interval logging for uploads/downloads"""
-
-                operation_name: str
-                last: Optional[float]
-                interval: int
-
-                def __init__(self, operation_name: str, interval: int = 1):
+            class ProgressCallback(Callback):
+                def __init__(self, name, total_size):
                     super().__init__()
-                    self.operation_name = operation_name
-                    self.last = None
-                    self.interval = interval
-
-                def set_size(self, size: int):
-                    """Called when total size is known"""
-                    super().set_size(size)
+                    self.name = name
+                    self.total_size = total_size
                     self.last = time.time()
-                    if size > 0:
-                        mb_total = size / (1024 * 1024)
-                        print(
-                            f"[Kubeflow] {self.operation_name} size: {mb_total:.1f} MB", flush=True
-                        )
+                    self.value = 0
+                    print(
+                        f"[Kubeflow] {name} size: {total_size / (1024 * 1024):.1f} MB", flush=True
+                    )
 
-                def relative_update(self, inc: int = 1):
-                    """Called as transfer progresses"""
-                    super().relative_update(inc)
-                    if self.last is None:
-                        self.last = time.time()
+                def branched(self, path_1, path_2, **kwargs):
+                    """Return child callback that accumulates bytes to parent."""
+                    parent = self
 
-                    now = time.time()
-                    if now - self.last >= self.interval:
-                        mb_done = self.value / (1024 * 1024)
-                        mb_total = self.size / (1024 * 1024) if self.size else None
-                        if mb_total:
-                            pct = int((self.value / self.size) * 100) if self.size > 0 else 0
-                            print(
-                                f"[Kubeflow] Progress: {mb_done:.1f}/{mb_total:.1f} MB ({pct}%)",
-                                flush=True,
-                            )
-                        else:
-                            print(f"[Kubeflow] Progress: {mb_done:.1f} MB", flush=True)
-                        self.last = now
+                    class Child(Callback):
+                        def relative_update(self, inc=1):
+                            super().relative_update(inc)
+                            parent.value += inc
+                            if time.time() - parent.last >= 1:
+                                mb = parent.value / (1024 * 1024)
+                                pct = int((parent.value / parent.total_size) * 100)
+                                print(
+                                    f"[Kubeflow] Progress: {mb:.1f}"
+                                    f"/{parent.total_size / (1024 * 1024):.1f} MB ({pct}%)",
+                                    flush=True,
+                                )
+                                parent.last = time.time()
 
-            return TransferProgressCallback(operation)
+                    kwargs["callback"] = Child()
+                    return kwargs["callback"]
+
+            return ProgressCallback(operation, total_size)
 
         def on_init_end(self, args, state, control, **kwargs):
-            """
-            Download latest checkpoint from S3 before
-            training (local-rank-0-only with barrier).
-            """
+            """Download latest checkpoint from S3 (local rank 0)."""
             if not self.remote_fs:
                 # Return since cloud storage not configured by user
                 return
@@ -505,11 +497,13 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
                     try:
                         print(f"[Kubeflow] Downloading checkpoint: {name}", flush=True)
+                        # Calculate remote directory size
+                        remote_size = self.remote_fs.du(name, total=True, maxdepth=None)
                         self.remote_fs.get(
                             name,
                             args.output_dir,
                             recursive=True,
-                            callback=self._cloud_storage_progress_callback("Download"),
+                            callback=self._cloud_storage_progress_callback("Download", remote_size),
                         )
                         print("[Kubeflow] Download complete", flush=True)
 
@@ -537,10 +531,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             self._wait_for_all_ranks("download")
 
         def on_save(self, args, state, control, **kwargs):
-            """
-            Upload checkpoint to S3 synchronously after it's
-            saved locally (local-rank-0-only).
-            """
+            """Upload checkpoint to S3 (local rank 0)."""
             if not self.remote_fs:
                 # S3 storage not configured, skip upload
                 return
@@ -549,11 +540,17 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             self._wait_for_all_ranks("save")
 
             is_local_rank_0 = args.local_process_index == 0
+            is_global_rank_0 = state.is_world_process_zero
+
+            # Define checkpoint paths (needed by both local_rank_0 and global_rank_0)
+            current_step = state.global_step
+            checkpoint_name = f"{PREFIX_CHECKPOINT_DIR}-{current_step}"
+            incomplete_marker_path = f"{checkpoint_name}/{CHECKPOINT_INCOMPLETE_MARKER}"
+            staging_checkpoint_path = None  # Initialize for cleanup later
 
             # Only local rank 0 uploads to S3, but all ranks must wait at barrier
+            upload_exception = None
             if is_local_rank_0:
-                current_step = state.global_step
-                checkpoint_name = f"{PREFIX_CHECKPOINT_DIR}-{current_step}"
                 checkpoint_path = os.path.join(args.output_dir, checkpoint_name)
 
                 # Verify checkpoint exists
@@ -578,65 +575,80 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         shutil.move(checkpoint_path, staging_checkpoint_path)
 
                         # S3 operations: create sentinel, upload, delete sentinel
-                        incomplete_marker_path = f"{checkpoint_name}/{CHECKPOINT_INCOMPLETE_MARKER}"
-
-                        print(
-                            f"[Kubeflow] Creating .incomplete marker in S3: {checkpoint_name}",
-                            flush=True,
-                        )
-                        self.remote_fs.pipe(
-                            incomplete_marker_path,
-                            f"Upload started at step {current_step}".encode(),
-                        )
+                        if is_global_rank_0:
+                            print(
+                                f"[Kubeflow] Creating .incomplete marker in S3: {checkpoint_name}",
+                                flush=True,
+                            )
+                            self.remote_fs.pipe(
+                                incomplete_marker_path,
+                                f"Upload started at step {current_step}".encode(),
+                            )
 
                         print(
                             f"[Kubeflow] Starting synchronous upload to S3: {checkpoint_name}",
                             flush=True,
                         )
+                        # Calculate local directory size
+                        local_size = self._calculate_local_dir_size(staging_checkpoint_path)
+
                         # fsspec.put() with recursive=True uploads entire directory
-                        # Upload to root ("") so fsspec places checkpoint-N at correct level
-                        # (avoids double nesting: checkpoint-N/checkpoint-N/)
                         # s3fs retries operations 5 times automatically on failure
                         # gcsfs retries 6 times, adlfs retries 3 times
                         self.remote_fs.put(
                             staging_checkpoint_path,
                             "",  # Maintain same local checkpoint structure in remote
                             recursive=True,
-                            callback=self._cloud_storage_progress_callback("Upload"),
+                            callback=self._cloud_storage_progress_callback("Upload", local_size),
                         )
 
                         print(f"[Kubeflow] Upload complete: {checkpoint_name}", flush=True)
 
-                        # Delete .incomplete sentinel (marks upload complete)
-                        self.remote_fs.rm_file(incomplete_marker_path)
-                        print(
-                            f"[Kubeflow] Removed .incomplete marker: {checkpoint_name}", flush=True
-                        )
-
-                        # Delete local staging checkpoint to free disk space (non-fatal if fails)
-                        try:
-                            shutil.rmtree(staging_checkpoint_path)
-                            print(
-                                f"[Kubeflow] Deleted local staging checkpoint: {checkpoint_name}",
-                                flush=True,
-                            )
-                        except Exception as cleanup_error:
-                            print(
-                                f"[Kubeflow] Warning: Failed to delete local staging checkpoint "
-                                f"{checkpoint_name}: {cleanup_error}. "
-                                "Upload succeeded, but local cleanup failed.",
-                                flush=True,
-                            )
-
                     except Exception as e:
-                        raise RuntimeError(
+                        upload_exception = RuntimeError(
                             f"[Kubeflow] Checkpoint upload failed for {checkpoint_name}: {e}. "
                             "This may be caused by network issues, S3 outage, or "
                             "permission changes. Verify S3 connectivity and retry the training job."
-                        ) from e
+                        )
 
-            # Barrier to wait for local rank 0 checkpoint upload to complete
+            # Barrier to wait for all local rank 0 upload to complete
             self._wait_for_all_ranks("upload")
+
+            # Raise upload exception after barrier to ensure all ranks see the failure
+            if upload_exception is not None:
+                raise upload_exception from upload_exception.__cause__
+
+            if is_global_rank_0:
+                # Delete .incomplete sentinel (marks upload complete)
+                try:
+                    self.remote_fs.rm_file(incomplete_marker_path)
+                    print(f"[Kubeflow] Removed .incomplete marker: {checkpoint_name}", flush=True)
+                except Exception as e:
+                    # Log warning but don't fail - checkpoint upload succeeded
+                    # Stale marker will cause this checkpoint to be skipped on resume
+                    print(
+                        f"[Kubeflow] Warning: Failed to remove .incomplete marker for "
+                        f"{checkpoint_name}: {e}. Checkpoint uploaded successfully but may be "
+                        f"skipped during resume. Consider manually removing: "
+                        f"{incomplete_marker_path}",
+                        flush=True,
+                    )
+
+            if is_local_rank_0 and staging_checkpoint_path is not None:
+                # Delete local staging checkpoint to free disk space
+                try:
+                    shutil.rmtree(staging_checkpoint_path)
+                    print(
+                        f"[Kubeflow] Deleted local staging checkpoint: {checkpoint_name}",
+                        flush=True,
+                    )
+                except Exception as cleanup_error:
+                    print(
+                        f"[Kubeflow] Warning: Failed to delete local staging checkpoint "
+                        f"{checkpoint_name}: {cleanup_error}. "
+                        "Upload succeeded, but local cleanup failed.",
+                        flush=True,
+                    )
 
         def on_train_begin(self, args, state, control, **kwargs):
             if self._trainer_ref is not None and self.jit_manager is None:
@@ -673,7 +685,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 control.should_training_stop = True
 
         def on_train_end(self, args, state, control, **kwargs):
-            """Clean up staging directory after training completes."""
+            """Clean up staging directory after training."""
             if not self.remote_fs:
                 return
 
@@ -683,12 +695,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 if os.path.exists(staging_dir):
                     try:
                         shutil.rmtree(staging_dir)
-                        print(f"[Kubeflow] Deleted staging directory: {staging_dir}", flush=True)
+                        print("[Kubeflow] Deleted staging directory", flush=True)
                     except Exception as e:
-                        print(
-                            f"[Kubeflow] Warning: Failed to delete staging directory: {e}",
-                            flush=True,
-                        )
+                        print(f"[Kubeflow] Warning: Staging cleanup failed: {e}", flush=True)
 
     def apply_checkpointing():
         """Setup monkey patch for Trainer to auto inject JIT checkpoint callback."""

@@ -148,7 +148,7 @@ def test_parse_output_dir_uri_with_pvc(test_case):
     "test_case",
     [
         TestCase(
-            name="s3 uri - returns staging path and ephemeral volume specs",
+            name="s3 uri - returns staging path and emptyDir volume specs",
             expected_status=SUCCESS,
             config={"output_dir": "s3://my-bucket/checkpoints"},
         ),
@@ -160,7 +160,7 @@ def test_parse_output_dir_uri_with_pvc(test_case):
     ],
 )
 def test_parse_output_dir_uri_with_s3(test_case):
-    """Test parse_output_dir_uri correctly parses S3 URIs and returns ephemeral volume specs."""
+    """Test parse_output_dir_uri correctly parses S3 URIs and returns emptyDir volume specs."""
     print(f"Executing test: {test_case.name}")
 
     resolved_path, volume_specs = parse_output_dir_uri(test_case.config["output_dir"])
@@ -170,18 +170,11 @@ def test_parse_output_dir_uri_with_s3(test_case):
     # S3 URIs return local staging path (training writes here before uploading to S3)
     assert resolved_path == CHECKPOINT_MOUNT_PATH
 
-    # Expected volume specs structure (storageClassName not set - uses cluster default)
+    # Expected volume specs structure (using emptyDir for temporary staging)
     expected_volume_specs = {
         "volume": {
             "name": CHECKPOINT_VOLUME_NAME,
-            "ephemeral": {
-                "volumeClaimTemplate": {
-                    "spec": {
-                        "accessModes": ["ReadWriteOnce"],
-                        "resources": {"requests": {"storage": "50Gi"}},
-                    }
-                }
-            },
+            "emptyDir": {},
         },
         "volumeMount": {
             "name": CHECKPOINT_VOLUME_NAME,
@@ -189,14 +182,6 @@ def test_parse_output_dir_uri_with_s3(test_case):
             "readOnly": False,
         },
     }
-
-    # Convert Quantity object to string for comparison (access actual_instance)
-    actual_storage = volume_specs["volume"]["ephemeral"]["volumeClaimTemplate"]["spec"][
-        "resources"
-    ]["requests"]["storage"]
-    volume_specs["volume"]["ephemeral"]["volumeClaimTemplate"]["spec"]["resources"]["requests"][
-        "storage"
-    ] = actual_storage.actual_instance
 
     assert volume_specs == expected_volume_specs
 

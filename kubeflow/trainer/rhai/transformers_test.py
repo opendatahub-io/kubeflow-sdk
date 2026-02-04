@@ -2324,6 +2324,10 @@ class MockS3FileSystem:
     def get(self, src, dst, recursive=False, callback=None):
         print(f"DOWNLOADED={{src}}")
 
+    def du(self, path, total=True, maxdepth=None):
+        # Return mock size (1 MB)
+        return 1024 * 1024
+
     def rm_file(self, path):
         pass
 
