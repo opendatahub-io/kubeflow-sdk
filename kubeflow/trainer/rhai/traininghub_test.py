@@ -309,6 +309,7 @@ def test_instrumentation_constants_embedded():
     # Verify constants are defined in the wrapper
     assert 'SFT_METRICS_FILE_PATTERN = "training_params_and_metrics_global*.jsonl"' in wrapper
     assert 'SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"' in wrapper
+    assert 'OSFT_METRICS_FILE_PATTERN = "training_metrics_*.jsonl"' in wrapper
     assert 'OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"' in wrapper
     assert 'OSFT_CONFIG_FILE = "training_params.json"' in wrapper
 
@@ -694,12 +695,18 @@ def test_instrumentation_cleans_sft_metrics_on_startup(tmp_path):
     """Test that SFT metrics files are cleaned before training starts."""
     print("Executing test: SFT metrics cleanup on startup")
 
-    # Create stale metrics files
+    # Create stale metrics files for multiple ranks (distributed training scenario)
     ckpt_dir = tmp_path / "checkpoints"
     ckpt_dir.mkdir()
 
-    stale_metrics_file = ckpt_dir / "training_params_and_metrics_global0.jsonl"
-    stale_metrics_file.write_text('{"step": 100, "loss": 1.5}\n')
+    stale_metrics_file_rank0 = ckpt_dir / "training_params_and_metrics_global0.jsonl"
+    stale_metrics_file_rank0.write_text('{"step": 100, "loss": 1.5}\n')
+
+    stale_metrics_file_rank1 = ckpt_dir / "training_params_and_metrics_global1.jsonl"
+    stale_metrics_file_rank1.write_text('{"step": 100, "loss": 1.4}\n')
+
+    stale_metrics_file_rank2 = ckpt_dir / "training_params_and_metrics_global2.jsonl"
+    stale_metrics_file_rank2.write_text('{"step": 100, "loss": 1.3}\n')
 
     # Call instrumentation directly (no exec) with port 0 for random available port
     from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
@@ -714,8 +721,10 @@ def test_instrumentation_cleans_sft_metrics_on_startup(tmp_path):
     server = apply_fn()
 
     try:
-        # Verify stale file was removed
-        assert not stale_metrics_file.exists(), "Stale SFT metrics should be removed"
+        # Verify all stale files from all ranks were removed
+        assert not stale_metrics_file_rank0.exists(), "Stale SFT metrics rank 0 should be removed"
+        assert not stale_metrics_file_rank1.exists(), "Stale SFT metrics rank 1 should be removed"
+        assert not stale_metrics_file_rank2.exists(), "Stale SFT metrics rank 2 should be removed"
     finally:
         # Always shut down server to avoid port conflicts
         if server:
@@ -728,12 +737,18 @@ def test_instrumentation_cleans_osft_metrics_on_startup(tmp_path):
     """Test that OSFT metrics files are cleaned before training starts."""
     print("Executing test: OSFT metrics cleanup on startup")
 
-    # Create stale metrics files
+    # Create stale metrics files for multiple ranks (distributed training scenario)
     ckpt_dir = tmp_path / "checkpoints"
     ckpt_dir.mkdir()
 
-    stale_metrics_file = ckpt_dir / "training_metrics_0.jsonl"
-    stale_metrics_file.write_text('{"step": 50, "loss": 1.2}\n')
+    stale_metrics_file_rank0 = ckpt_dir / "training_metrics_0.jsonl"
+    stale_metrics_file_rank0.write_text('{"step": 50, "loss": 1.2}\n')
+
+    stale_metrics_file_rank1 = ckpt_dir / "training_metrics_1.jsonl"
+    stale_metrics_file_rank1.write_text('{"step": 50, "loss": 1.1}\n')
+
+    stale_metrics_file_rank2 = ckpt_dir / "training_metrics_2.jsonl"
+    stale_metrics_file_rank2.write_text('{"step": 50, "loss": 1.0}\n')
 
     stale_config_file = ckpt_dir / "training_params.json"
     stale_config_file.write_text('{"max_epochs": 10}\n')
@@ -751,8 +766,10 @@ def test_instrumentation_cleans_osft_metrics_on_startup(tmp_path):
     server = apply_fn()
 
     try:
-        # Verify stale metrics were removed
-        assert not stale_metrics_file.exists(), "Stale OSFT metrics should be removed"
+        # Verify all stale metrics from all ranks were removed
+        assert not stale_metrics_file_rank0.exists(), "Stale OSFT metrics rank 0 should be removed"
+        assert not stale_metrics_file_rank1.exists(), "Stale OSFT metrics rank 1 should be removed"
+        assert not stale_metrics_file_rank2.exists(), "Stale OSFT metrics rank 2 should be removed"
         # Config file should NOT be removed (backend overwrites it)
         assert stale_config_file.exists(), "OSFT config should not be removed"
     finally:
