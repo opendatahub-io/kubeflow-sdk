@@ -18,6 +18,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  security-events: write
 
 jobs:
   sync:
@@ -228,3 +229,29 @@ jobs:
               --title "$TITLE" \
               --body "$BODY"
           fi
+
+      - name: Run Snyk to check for vulnerabilities
+        if: steps.diffcheck.outputs.has_changes == 'true'
+        uses: snyk/actions/python@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --sarif-file-output=snyk-sync-results.sarif --severity-threshold=high
+
+      - name: Check Snyk SARIF
+        id: check-sarif
+        if: always() && steps.diffcheck.outputs.has_changes == 'true'
+        run: |
+          if [ -f "snyk-sync-results.sarif" ]; then
+            echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Snyk Audit to Security Tab
+        if: always() && steps.check-sarif.outputs.sarif_exists == 'true'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'snyk-sync-results.sarif'
+          category: midstream-snyk-audit
