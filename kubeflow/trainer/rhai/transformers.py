@@ -14,11 +14,12 @@
 
 """TransformersTrainer for HuggingFace Transformers and TRL with auto-instrumentation."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import inspect
 import os
 import textwrap
-from typing import Callable, Optional
+from typing import Optional
 
 from kubeflow_trainer_api import models
 
@@ -861,7 +862,7 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
 
                 for key, value in logs.items():
                     metric_value = None
-                    if isinstance(value, (int, float)):
+                    if isinstance(value, int | float):
                         metric_value = value
                     else:
                         # Try to extract scalar from torch tensor (graceful degradation)
