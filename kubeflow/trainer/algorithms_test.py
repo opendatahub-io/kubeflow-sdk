@@ -14,6 +14,8 @@
 
 """Tests for training algorithms registry."""
 
+import ast
+
 import pytest
 
 from kubeflow.trainer.algorithms import (
@@ -224,10 +226,13 @@ def test_get_algorithm_spec(test_case):
 
         # For error cases, verify error message contains expected information
         error_message = str(e)
-        assert "Unsupported training algorithm" in error_message
 
-        # For non-empty algorithm names, verify the name is in the error
-        if test_case.config["algorithm"]:
+        # Empty string gets caught by input validation, not unsupported algorithm check
+        if test_case.config["algorithm"] == "":
+            assert "must be a non-empty string" in error_message
+        else:
+            # Non-empty invalid algorithm names
+            assert "Unsupported training algorithm" in error_message
             assert test_case.config["algorithm"] in error_message
 
     print("test execution complete")
@@ -459,7 +464,7 @@ def test_pod_metadata_serializable():
         assert len(metadata_repr) > 0
 
         # Verify metadata can be eval'd back (sanity check)
-        metadata_evaled = eval(metadata_repr)
+        metadata_evaled = ast.literal_eval(metadata_repr)
         assert metadata_evaled == metadata
 
     print("test execution complete")
