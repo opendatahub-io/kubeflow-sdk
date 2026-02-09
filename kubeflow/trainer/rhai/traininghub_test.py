@@ -14,6 +14,9 @@
 
 """Tests for TrainingHubTrainer and instrumentation wrapper generation."""
 
+import os
+from unittest.mock import patch
+
 import pytest
 
 from kubeflow.trainer.constants import constants
@@ -717,18 +720,26 @@ def test_instrumentation_cleans_sft_metrics_on_startup(tmp_path):
         metrics_port=0,  # Use port 0 for random available port
     )
 
-    # Call the function to trigger cleanup and start server
-    server = apply_fn()
+    # Set JOB_COMPLETION_INDEX=0 to simulate primary pod (required for cleanup)
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0"}):
+        # Call the function to trigger cleanup and start server
+        server = apply_fn()
 
-    try:
-        # Verify all stale files from all ranks were removed
-        assert not stale_metrics_file_rank0.exists(), "Stale SFT metrics rank 0 should be removed"
-        assert not stale_metrics_file_rank1.exists(), "Stale SFT metrics rank 1 should be removed"
-        assert not stale_metrics_file_rank2.exists(), "Stale SFT metrics rank 2 should be removed"
-    finally:
-        # Always shut down server to avoid port conflicts
-        if server:
-            server.shutdown()
+        try:
+            # Verify all stale files from all ranks were removed
+            assert not stale_metrics_file_rank0.exists(), (
+                "Stale SFT metrics rank 0 should be removed"
+            )
+            assert not stale_metrics_file_rank1.exists(), (
+                "Stale SFT metrics rank 1 should be removed"
+            )
+            assert not stale_metrics_file_rank2.exists(), (
+                "Stale SFT metrics rank 2 should be removed"
+            )
+        finally:
+            # Always shut down server to avoid port conflicts
+            if server:
+                server.shutdown()
 
     print("test execution complete")
 
@@ -762,20 +773,28 @@ def test_instrumentation_cleans_osft_metrics_on_startup(tmp_path):
         metrics_port=0,  # Use port 0 for random available port
     )
 
-    # Call the function to trigger cleanup and start server
-    server = apply_fn()
+    # Set JOB_COMPLETION_INDEX=0 to simulate primary pod (required for cleanup)
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0"}):
+        # Call the function to trigger cleanup and start server
+        server = apply_fn()
 
-    try:
-        # Verify all stale metrics from all ranks were removed
-        assert not stale_metrics_file_rank0.exists(), "Stale OSFT metrics rank 0 should be removed"
-        assert not stale_metrics_file_rank1.exists(), "Stale OSFT metrics rank 1 should be removed"
-        assert not stale_metrics_file_rank2.exists(), "Stale OSFT metrics rank 2 should be removed"
-        # Config file should NOT be removed (backend overwrites it)
-        assert stale_config_file.exists(), "OSFT config should not be removed"
-    finally:
-        # Always shut down server to avoid port conflicts
-        if server:
-            server.shutdown()
+        try:
+            # Verify all stale metrics from all ranks were removed
+            assert not stale_metrics_file_rank0.exists(), (
+                "Stale OSFT metrics rank 0 should be removed"
+            )
+            assert not stale_metrics_file_rank1.exists(), (
+                "Stale OSFT metrics rank 1 should be removed"
+            )
+            assert not stale_metrics_file_rank2.exists(), (
+                "Stale OSFT metrics rank 2 should be removed"
+            )
+            # Config file should NOT be removed (backend overwrites it)
+            assert stale_config_file.exists(), "OSFT config should not be removed"
+        finally:
+            # Always shut down server to avoid port conflicts
+            if server:
+                server.shutdown()
 
     print("test execution complete")
 
@@ -797,12 +816,14 @@ def test_instrumentation_cleanup_handles_missing_files(tmp_path):
         metrics_port=0,  # Use port 0 for random available port
     )
 
-    # Should not raise exception when no files exist
-    server = apply_fn()
+    # Set JOB_COMPLETION_INDEX=0 to simulate primary pod (required for cleanup)
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0"}):
+        # Should not raise exception when no files exist
+        server = apply_fn()
 
-    # Always shut down server
-    if server:
-        server.shutdown()
+        # Always shut down server
+        if server:
+            server.shutdown()
 
     print("test execution complete")
 
