@@ -28,6 +28,54 @@ class AlgorithmSpec:
     metrics_file_patterns: Iterable[str]
     validate: Callable[[Any], None]
 
+    def __post_init__(self):
+        """Validate the AlgorithmSpec at creation time.
+
+        This fails fast when adding a new algorithm to the registry, catching
+        configuration errors during development rather than at runtime.
+
+        Raises:
+            ValueError: If any required field is invalid.
+        """
+        # Validate name
+        if not self.name or not isinstance(self.name, str):
+            raise ValueError(f"Algorithm name must be a non-empty string, got: {self.name!r}")
+
+        if self.name != self.name.lower():
+            raise ValueError(
+                f"Algorithm name must be lowercase, got: {self.name!r}. "
+                f"Use {self.name.lower()!r} instead."
+            )
+
+        # Validate metrics_file_patterns
+        if not self.metrics_file_patterns:
+            raise ValueError(f"Algorithm '{self.name}' must have at least one metrics_file_pattern")
+
+        # Convert to list to check contents
+        patterns_list = list(self.metrics_file_patterns)
+        if not patterns_list:
+            raise ValueError(
+                f"Algorithm '{self.name}' metrics_file_patterns is empty after conversion to list"
+            )
+
+        for i, pattern in enumerate(patterns_list):
+            if not isinstance(pattern, str):
+                raise ValueError(
+                    f"Algorithm '{self.name}' pattern {i} must be a string, "
+                    f"got {type(pattern).__name__}: {pattern!r}"
+                )
+            if not pattern:
+                raise ValueError(
+                    f"Algorithm '{self.name}' has empty string in patterns at index {i}"
+                )
+
+        # Validate validate function
+        if not callable(self.validate):
+            raise ValueError(
+                f"Algorithm '{self.name}' validate must be callable, "
+                f"got {type(self.validate).__name__}"
+            )
+
 
 def _no_op_validate(config: Any) -> None:
     """Default no-op validation function.
@@ -71,7 +119,7 @@ def get_algorithm_spec(name: str) -> AlgorithmSpec:
         The AlgorithmSpec for the requested algorithm.
 
     Raises:
-        ValueError: If the algorithm name is not supported.
+        ValueError: If the algorithm name is not supported or invalid.
 
     Examples:
         >>> spec = get_algorithm_spec("sft")
@@ -85,6 +133,12 @@ def get_algorithm_spec(name: str) -> AlgorithmSpec:
             ...
         ValueError: Unsupported training algorithm: 'unknown'. Supported algorithms: osft, sft
     """
+    # Input validation
+    if not name or not isinstance(name, str):
+        raise ValueError(
+            f"Algorithm name must be a non-empty string, got: {name!r} ({type(name).__name__})"
+        )
+
     if name not in ALGORITHMS:
         supported = ", ".join(sorted(ALGORITHMS.keys()))
         raise ValueError(
@@ -92,3 +146,50 @@ def get_algorithm_spec(name: str) -> AlgorithmSpec:
         )
 
     return ALGORITHMS[name]
+
+
+def get_algorithm_pod_metadata(name: str) -> dict:
+    """Get algorithm metadata dict for pod injection.
+
+    This builds a complete metadata dict containing all information needed by
+    pod-injected code, derived from the centralized AlgorithmSpec.
+
+    The metadata is automatically derived from the AlgorithmSpec:
+    - metrics_file_pattern: First pattern from spec.metrics_file_patterns
+    - metrics_file_rank0: Derived by replacing '*' with '0' in the pattern
+
+    Args:
+        name: The algorithm identifier (e.g., "sft", "osft").
+
+    Returns:
+        Dict containing:
+            - name: Algorithm name
+            - metrics_file_pattern: Glob pattern for metrics files
+            - metrics_file_rank0: Specific filename for rank 0 metrics
+
+    Raises:
+        ValueError: If the algorithm name is not supported.
+
+    Examples:
+        >>> metadata = get_algorithm_pod_metadata("sft")
+        >>> metadata["name"]
+        'sft'
+        >>> metadata["metrics_file_rank0"]
+        'training_params_and_metrics_global0.jsonl'
+    """
+    # get_algorithm_spec() validates the name parameter
+    spec = get_algorithm_spec(name)
+
+    # Derive metadata from the spec - no algorithm branching needed!
+    # AlgorithmSpec.__post_init__ ensures patterns are non-empty
+    patterns = list(spec.metrics_file_patterns)
+    pattern = patterns[0]
+
+    # Derive rank0 file by replacing wildcard with 0
+    rank0_file = pattern.replace("*", "0")
+
+    return {
+        "name": name,
+        "metrics_file_pattern": pattern,
+        "metrics_file_rank0": rank0_file,
+    }

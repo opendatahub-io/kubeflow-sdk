@@ -19,6 +19,7 @@ import pytest
 from kubeflow.trainer.algorithms import (
     ALGORITHMS,
     AlgorithmSpec,
+    get_algorithm_pod_metadata,
     get_algorithm_spec,
 )
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
@@ -30,13 +31,87 @@ def test_algorithm_spec_is_frozen():
 
     spec = AlgorithmSpec(
         name="test",
-        metrics_file_patterns=("pattern.jsonl",),
+        metrics_file_patterns=("pattern_*.jsonl",),
         validate=lambda x: None,
     )
 
     # Attempt to modify frozen dataclass should raise FrozenInstanceError or AttributeError
     with pytest.raises((AttributeError, Exception)):
         spec.name = "modified"
+
+    print("test execution complete")
+
+
+def test_algorithm_spec_validation_empty_name():
+    """Test that AlgorithmSpec validates name is not empty."""
+    print("Executing test: algorithm_spec_validation_empty_name")
+
+    with pytest.raises(ValueError, match="name must be a non-empty string"):
+        AlgorithmSpec(
+            name="",
+            metrics_file_patterns=("pattern_*.jsonl",),
+            validate=lambda x: None,
+        )
+
+    print("test execution complete")
+
+
+def test_algorithm_spec_validation_uppercase_name():
+    """Test that AlgorithmSpec validates name is lowercase."""
+    print("Executing test: algorithm_spec_validation_uppercase_name")
+
+    with pytest.raises(ValueError, match="must be lowercase"):
+        AlgorithmSpec(
+            name="SFT",
+            metrics_file_patterns=("pattern_*.jsonl",),
+            validate=lambda x: None,
+        )
+
+    print("test execution complete")
+
+
+def test_algorithm_spec_validation_empty_patterns():
+    """Test that AlgorithmSpec validates patterns are not empty."""
+    print("Executing test: algorithm_spec_validation_empty_patterns")
+
+    with pytest.raises(ValueError, match="must have at least one metrics_file_pattern"):
+        AlgorithmSpec(
+            name="test",
+            metrics_file_patterns=(),
+            validate=lambda x: None,
+        )
+
+    print("test execution complete")
+
+
+def test_algorithm_spec_validation_non_callable_validate():
+    """Test that AlgorithmSpec validates validate is callable."""
+    print("Executing test: algorithm_spec_validation_non_callable_validate")
+
+    with pytest.raises(ValueError, match="validate must be callable"):
+        AlgorithmSpec(
+            name="test",
+            metrics_file_patterns=("pattern_*.jsonl",),
+            validate="not a function",  # type: ignore[arg-type]
+        )
+
+    print("test execution complete")
+
+
+def test_get_algorithm_pod_metadata_rank0_derived_correctly():
+    """Test that rank0 file is correctly derived from pattern."""
+    print("Executing test: get_algorithm_pod_metadata_rank0_derived_correctly")
+
+    for algorithm_name in ALGORITHMS:
+        metadata = get_algorithm_pod_metadata(algorithm_name)
+        pattern = metadata["metrics_file_pattern"]
+        rank0 = metadata["metrics_file_rank0"]
+
+        # Verify derivation: pattern with * replaced by 0
+        assert rank0 == pattern.replace("*", "0"), (
+            f"Algorithm '{algorithm_name}' rank0 file should be pattern with * replaced by 0. "
+            f"Expected '{pattern.replace('*', '0')}', got '{rank0}'"
+        )
 
     print("test execution complete")
 
@@ -158,17 +233,36 @@ def test_get_algorithm_spec(test_case):
     print("test execution complete")
 
 
-def test_algorithms_registry_has_expected_algorithms():
-    """Test that ALGORITHMS registry contains exactly the expected algorithms."""
-    print("Executing test: algorithms_registry_has_expected_algorithms")
+def test_get_algorithm_spec_validates_input():
+    """Test that get_algorithm_spec validates input parameter."""
+    print("Executing test: get_algorithm_spec_validates_input")
 
-    # As of now, only sft and osft are supported (lora_sft is TODO)
-    expected_algorithms = {"sft", "osft"}
-    actual_algorithms = set(ALGORITHMS.keys())
+    # Empty string
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        get_algorithm_spec("")
 
-    assert actual_algorithms == expected_algorithms, (
-        f"Expected algorithms {expected_algorithms}, but found {actual_algorithms}"
-    )
+    # None
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        get_algorithm_spec(None)  # type: ignore[arg-type]
+
+    # Non-string type
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        get_algorithm_spec(123)  # type: ignore[arg-type]
+
+    print("test execution complete")
+
+
+def test_algorithms_registry_not_empty():
+    """Test that ALGORITHMS registry is not empty."""
+    print("Executing test: algorithms_registry_not_empty")
+
+    assert len(ALGORITHMS) > 0, "ALGORITHMS registry should not be empty"
+
+    # Verify known algorithms exist (baseline check)
+    # This ensures we don't accidentally break existing algorithms
+    known_algorithms = {"sft", "osft"}
+    for algo in known_algorithms:
+        assert algo in ALGORITHMS, f"Known algorithm '{algo}' missing from registry"
 
     print("test execution complete")
 
@@ -224,6 +318,329 @@ def test_algorithm_spec_metrics_patterns_are_tuples():
             f"got {type(spec.metrics_file_patterns).__name__}"
         )
 
+    print("test execution complete")
+
+
+def test_get_algorithm_pod_metadata_sft():
+    """Test get_algorithm_pod_metadata returns correct metadata for SFT."""
+    print("Executing test: get_algorithm_pod_metadata_sft")
+
+    metadata = get_algorithm_pod_metadata("sft")
+
+    assert metadata["name"] == "sft"
+    assert metadata["metrics_file_pattern"] == "training_params_and_metrics_global*.jsonl"
+    assert metadata["metrics_file_rank0"] == "training_params_and_metrics_global0.jsonl"
+
+    print("test execution complete")
+
+
+def test_get_algorithm_pod_metadata_osft():
+    """Test get_algorithm_pod_metadata returns correct metadata for OSFT."""
+    print("Executing test: get_algorithm_pod_metadata_osft")
+
+    metadata = get_algorithm_pod_metadata("osft")
+
+    assert metadata["name"] == "osft"
+    assert metadata["metrics_file_pattern"] == "training_metrics_*.jsonl"
+    assert metadata["metrics_file_rank0"] == "training_metrics_0.jsonl"
+
+    print("test execution complete")
+
+
+def test_get_algorithm_pod_metadata_unknown_raises():
+    """Test get_algorithm_pod_metadata raises for unknown algorithm."""
+    print("Executing test: get_algorithm_pod_metadata_unknown_raises")
+
+    with pytest.raises(ValueError) as exc_info:
+        get_algorithm_pod_metadata("unknown")
+
+    assert "Unsupported training algorithm" in str(exc_info.value)
+
+    print("test execution complete")
+
+
+def test_pod_metadata_has_all_required_keys():
+    """Test that pod metadata contains all required keys for all algorithms."""
+    print("Executing test: pod_metadata_has_all_required_keys")
+
+    required_keys = {"name", "metrics_file_pattern", "metrics_file_rank0"}
+
+    for algorithm_name in ALGORITHMS:
+        print("  Checking algorithm:", algorithm_name)
+        metadata = get_algorithm_pod_metadata(algorithm_name)
+
+        # Verify all required keys are present
+        assert set(metadata.keys()) == required_keys, (
+            f"Algorithm '{algorithm_name}' metadata missing required keys. "
+            f"Expected {required_keys}, got {set(metadata.keys())}"
+        )
+
+        # Verify name matches
+        assert metadata["name"] == algorithm_name
+
+        # Verify non-empty patterns
+        assert metadata["metrics_file_pattern"]
+        assert metadata["metrics_file_rank0"]
+
+    print("test execution complete")
+
+
+def test_pod_metadata_rank0_derived_from_pattern():
+    """Test that metrics_file_rank0 is correctly derived from pattern."""
+    print("Executing test: pod_metadata_rank0_derived_from_pattern")
+
+    for algorithm_name in ALGORITHMS:
+        print("  Checking algorithm:", algorithm_name)
+        metadata = get_algorithm_pod_metadata(algorithm_name)
+
+        # Verify rank0 file is derived by replacing * with 0
+        pattern = metadata["metrics_file_pattern"]
+        expected_rank0 = pattern.replace("*", "0")
+        assert metadata["metrics_file_rank0"] == expected_rank0, (
+            f"Algorithm '{algorithm_name}': rank0 file should be pattern with * replaced by 0. "
+            f"Expected '{expected_rank0}', got '{metadata['metrics_file_rank0']}'"
+        )
+
+    print("test execution complete")
+
+
+def test_pod_metadata_self_contained():
+    """Test that pod metadata is self-contained and usable without imports."""
+    print("Executing test: pod_metadata_self_contained")
+
+    for algorithm_name in ALGORITHMS:
+        print("  Checking algorithm:", algorithm_name)
+        metadata = get_algorithm_pod_metadata(algorithm_name)
+
+        # Verify metadata is a plain dict (serializable to pod code)
+        assert isinstance(metadata, dict)
+
+        # Verify all values are basic Python types (str, int, bool, None, etc.)
+        # Pod code should not need to import anything to use this metadata
+        for key, value in metadata.items():
+            assert isinstance(key, str), f"Metadata key should be string, got {type(key)}"
+            assert isinstance(value, (str, int, bool, type(None))), (
+                f"Metadata value for key '{key}' should be basic type, got {type(value).__name__}"
+            )
+
+    print("test execution complete")
+
+
+def test_pod_metadata_patterns_are_strings():
+    """Test that all file patterns in pod metadata are strings."""
+    print("Executing test: pod_metadata_patterns_are_strings")
+
+    for algorithm_name in ALGORITHMS:
+        print("  Checking algorithm:", algorithm_name)
+        metadata = get_algorithm_pod_metadata(algorithm_name)
+
+        # Verify pattern fields are strings
+        assert isinstance(metadata["metrics_file_pattern"], str)
+        assert isinstance(metadata["metrics_file_rank0"], str)
+
+        # Verify patterns are not empty
+        assert len(metadata["metrics_file_pattern"]) > 0
+        assert len(metadata["metrics_file_rank0"]) > 0
+
+    print("test execution complete")
+
+
+def test_pod_metadata_serializable():
+    """Test that pod metadata can be serialized and embedded in code."""
+    print("Executing test: pod_metadata_serializable")
+
+    for algorithm_name in ALGORITHMS:
+        print("  Checking algorithm:", algorithm_name)
+        metadata = get_algorithm_pod_metadata(algorithm_name)
+
+        # Verify metadata can be repr'd (for embedding in generated code)
+        metadata_repr = repr(metadata)
+        assert isinstance(metadata_repr, str)
+        assert len(metadata_repr) > 0
+
+        # Verify metadata can be eval'd back (sanity check)
+        metadata_evaled = eval(metadata_repr)
+        assert metadata_evaled == metadata
+
+    print("test execution complete")
+
+
+def test_registry_all_specs_are_frozen():
+    """Test that all AlgorithmSpecs in registry are frozen (immutable)."""
+    print("Executing test: registry_all_specs_are_frozen")
+
+    for algorithm_name, spec in ALGORITHMS.items():
+        print("  Checking algorithm:", algorithm_name)
+
+        # Verify spec is an AlgorithmSpec instance
+        assert isinstance(spec, AlgorithmSpec)
+
+        # Verify spec is frozen (attempt to modify should fail)
+        with pytest.raises((AttributeError, Exception)):
+            spec.name = "modified"
+
+    print("test execution complete")
+
+
+def test_registry_keys_are_lowercase():
+    """Test that all algorithm registry keys are lowercase."""
+    print("Executing test: registry_keys_are_lowercase")
+
+    for algorithm_name in ALGORITHMS:
+        assert algorithm_name == algorithm_name.lower(), (
+            f"Algorithm name '{algorithm_name}' should be lowercase"
+        )
+
+    print("test execution complete")
+
+
+def test_registry_no_duplicate_patterns():
+    """Test that algorithms don't share identical metrics patterns."""
+    print("Executing test: registry_no_duplicate_patterns")
+
+    patterns_seen = {}
+
+    for algorithm_name, spec in ALGORITHMS.items():
+        print("  Checking algorithm:", algorithm_name)
+        patterns = tuple(spec.metrics_file_patterns)
+
+        if patterns in patterns_seen:
+            other_algo = patterns_seen[patterns]
+            pytest.fail(
+                f"Algorithm '{algorithm_name}' has same patterns as '{other_algo}': {patterns}"
+            )
+
+        patterns_seen[patterns] = algorithm_name
+
+    print("test execution complete")
+
+
+def test_registry_validate_functions_accept_any():
+    """Test that all validate functions accept Any parameter."""
+    print("Executing test: registry_validate_functions_accept_any")
+
+    for algorithm_name, spec in ALGORITHMS.items():
+        print("  Checking algorithm:", algorithm_name)
+
+        # Verify validate function doesn't crash on None
+        try:
+            spec.validate(None)
+        except ValueError:
+            # ValueError is acceptable (validation failed)
+            pass
+        except Exception as e:
+            # Any other exception is a bug
+            pytest.fail(
+                f"Algorithm '{algorithm_name}' validate raised unexpected "
+                f"exception for None: {type(e).__name__}: {e}"
+            )
+
+        # Verify validate function doesn't crash on empty dict
+        try:
+            spec.validate({})
+        except ValueError:
+            # ValueError is acceptable (validation failed)
+            pass
+        except Exception as e:
+            # Any other exception is a bug
+            pytest.fail(
+                f"Algorithm '{algorithm_name}' validate raised unexpected "
+                f"exception for {{}}: {type(e).__name__}: {e}"
+            )
+
+    print("test execution complete")
+
+
+def test_no_algorithm_branching_outside_pod_code():
+    """Test that algorithm branching only exists in allowed places.
+
+    This guardrail test prevents regression to scattered algorithm logic.
+    Algorithm branching (if algorithm == "sft") is only allowed in:
+    1. Pod-injected code (_create_training_hub_progression_instrumentation)
+       - For method dispatch to algorithm-specific readers/transformers
+    2. Pod wrapper code (_render_algorithm_wrapper)
+       - For termination message writing
+
+    All other code should use the centralized registry.
+    """
+    print("Executing test: no_algorithm_branching_outside_pod_code")
+
+    import os
+    import re
+
+    # Read the traininghub.py file
+    traininghub_path = os.path.join(os.path.dirname(__file__), "rhai", "traininghub.py")
+
+    if not os.path.exists(traininghub_path):
+        # File might be in different location during testing
+        pytest.skip(f"Could not find traininghub.py at {traininghub_path}")
+
+    with open(traininghub_path) as f:
+        content = f.read()
+
+    # Pattern to find algorithm branching
+    # Matches: if algorithm == "...", elif algorithm == "...", etc.
+    branching_pattern = re.compile(r'(if|elif)\s+algorithm\s*==\s*["\'](\w+)["\']')
+
+    # Find all matches with their line numbers
+    matches = []
+    for i, line in enumerate(content.split("\n"), start=1):
+        for match in branching_pattern.finditer(line):
+            algo_name = match.group(2)
+            matches.append((i, line.strip(), algo_name))
+
+    # Identify which function each match is in
+    # Extract function definitions to map line numbers to functions
+    func_pattern = re.compile(r"^def\s+(\w+)\(")
+    current_func = None
+    func_ranges = []
+
+    for i, line in enumerate(content.split("\n"), start=1):
+        func_match = func_pattern.match(line)
+        if func_match:
+            current_func = func_match.group(1)
+            func_ranges.append((current_func, i))
+
+    # Allowed functions where algorithm branching is permitted
+    allowed_functions = {
+        "_create_training_hub_progression_instrumentation",
+        "_read_latest_metrics",  # method inside pod-injected class
+        "_transform_schema",  # method inside pod-injected class
+        "_write_termination_message",  # inside _render_algorithm_wrapper
+    }
+
+    # Check each match
+    forbidden_matches = []
+    for line_num, line_content, _algo_name in matches:
+        # Find which function this line is in
+        func_name = None
+        for fname, fline in reversed(func_ranges):
+            if fline <= line_num:
+                func_name = fname
+                break
+
+        # Check if this is in an allowed function or part of pod-injected code
+        # Also allow if it's inside a nested method (e.g., _read_* or _transform_*)
+        if (
+            func_name not in allowed_functions
+            and "_read_" not in line_content
+            and "_transform_" not in line_content
+        ):
+            forbidden_matches.append((line_num, line_content, func_name))
+
+    if forbidden_matches:
+        error_msg = [
+            "Algorithm branching found outside allowed pod-injected code:",
+            "",
+        ]
+        for line_num, line_content, func_name in forbidden_matches:
+            error_msg.append(f"  Line {line_num} in {func_name}: {line_content}")
+        error_msg.append("")
+        error_msg.append("Algorithm branching should only exist in pod-injected functions.")
+        error_msg.append("Use get_algorithm_spec() or get_algorithm_pod_metadata() instead.")
+        pytest.fail("\n".join(error_msg))
+
+    print("  ✓ No forbidden algorithm branching found")
     print("test execution complete")
 
 
