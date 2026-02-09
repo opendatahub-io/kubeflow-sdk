@@ -14,7 +14,8 @@
 
 """Tests for RHAI utils functions."""
 
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
 from kubernetes.client.rest import ApiException
 import pytest
@@ -26,10 +27,95 @@ from kubeflow.trainer.rhai.constants import (
 from kubeflow.trainer.rhai.utils import (
     get_cloud_storage_credential_env_vars,
     inject_cloud_storage_credentials,
+    is_primary_pod,
     parse_output_dir_uri,
     setup_rhai_trainer_storage,
 )
 from kubeflow.trainer.test.common import SUCCESS, TestCase
+
+
+def test_is_primary_pod_with_job_completion_index_0():
+    """Test is_primary_pod returns True when JOB_COMPLETION_INDEX is 0."""
+    print("Executing test: is_primary_pod_with_job_completion_index_0")
+
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0"}, clear=True):
+        assert is_primary_pod() is True
+
+    print("test execution complete")
+
+
+def test_is_primary_pod_with_job_completion_index_1():
+    """Test is_primary_pod returns False when JOB_COMPLETION_INDEX is 1."""
+    print("Executing test: is_primary_pod_with_job_completion_index_1")
+
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "1"}, clear=True):
+        assert is_primary_pod() is False
+
+    print("test execution complete")
+
+
+def test_is_primary_pod_with_pet_node_rank_0():
+    """Test is_primary_pod returns True when PET_NODE_RANK is 0."""
+    print("Executing test: is_primary_pod_with_pet_node_rank_0")
+
+    with patch.dict(os.environ, {"PET_NODE_RANK": "0"}, clear=True):
+        assert is_primary_pod() is True
+
+    print("test execution complete")
+
+
+def test_is_primary_pod_with_pet_node_rank_1():
+    """Test is_primary_pod returns False when PET_NODE_RANK is 1."""
+    print("Executing test: is_primary_pod_with_pet_node_rank_1")
+
+    with patch.dict(os.environ, {"PET_NODE_RANK": "1"}, clear=True):
+        assert is_primary_pod() is False
+
+    print("test execution complete")
+
+
+def test_is_primary_pod_job_completion_index_takes_precedence():
+    """Test JOB_COMPLETION_INDEX takes precedence over PET_NODE_RANK."""
+    print("Executing test: is_primary_pod_job_completion_index_takes_precedence")
+
+    # JOB_COMPLETION_INDEX=0, PET_NODE_RANK=1 -> should return True (JOB_COMPLETION_INDEX wins)
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0", "PET_NODE_RANK": "1"}, clear=True):
+        assert is_primary_pod() is True
+
+    # JOB_COMPLETION_INDEX=1, PET_NODE_RANK=0 -> should return False (JOB_COMPLETION_INDEX wins)
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "1", "PET_NODE_RANK": "0"}, clear=True):
+        assert is_primary_pod() is False
+
+    print("test execution complete")
+
+
+def test_is_primary_pod_no_environment_variables():
+    """Test is_primary_pod returns False when neither env var is set (conservative)."""
+    print("Executing test: is_primary_pod_no_environment_variables")
+
+    with patch.dict(os.environ, {}, clear=True):
+        assert is_primary_pod() is False
+
+    print("test execution complete")
+
+
+def test_is_primary_pod_with_non_numeric_job_completion_index():
+    """Test is_primary_pod handles non-0 string values correctly."""
+    print("Executing test: is_primary_pod_with_non_numeric_job_completion_index")
+
+    # String "0" should match (primary)
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0"}, clear=True):
+        assert is_primary_pod() is True
+
+    # String "00" should NOT match (not exactly "0")
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "00"}, clear=True):
+        assert is_primary_pod() is False
+
+    # String "2" should NOT match
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "2"}, clear=True):
+        assert is_primary_pod() is False
+
+    print("test execution complete")
 
 
 @pytest.mark.parametrize(

@@ -495,12 +495,17 @@ def _create_training_hub_progression_instrumentation(
         # Clean stale metrics files from previous runs
         # Since backends restart training from step 0 without checkpoint resumption,
         # old metrics files should be deleted to avoid showing stale/incorrect progress
-        # Only the primary pod (rank 0, identified by -node-0 suffix in hostname) performs cleanup
-        # If pod name cannot be determined, assume primary pod (single pod or test environment)
-        hostname = os.environ.get("HOSTNAME", "")
-        pod_name_env = os.environ.get("POD_NAME")
-        pod_name = pod_name_env or hostname
-        is_primary_pod = pod_name_env is None or pod_name.endswith("-node-0")
+        # Only the primary pod (rank 0) performs cleanup
+
+        # Determine if this is the primary pod using standard environment variables
+        # Precedence: JOB_COMPLETION_INDEX -> PET_NODE_RANK -> False (conservative)
+        job_index = os.environ.get("JOB_COMPLETION_INDEX")
+        if job_index is not None:
+            is_primary_pod = job_index == "0"
+        else:
+            pet_rank = os.environ.get("PET_NODE_RANK")
+            # Conservative default: if neither signal present, don't assume primary
+            is_primary_pod = pet_rank == "0" if pet_rank is not None else False
 
         if is_primary_pod:
             try:
