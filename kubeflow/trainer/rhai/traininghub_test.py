@@ -230,15 +230,15 @@ def test_metrics_port_validation(test_case):
             ],
         ),
         TestCase(
-            name="structure - function call and constants",
+            name="structure - function call and metadata",
             expected_status="success",
             config={"algorithm": "sft", "ckpt_output_dir": "/tmp", "port": 28080},
             expected_output=[
                 ("apply_progression_tracking", True),
                 ("apply_progression_tracking()", True),
-                ("SFT_METRICS_FILE_RANK0", True),
-                ("OSFT_METRICS_FILE_RANK0", True),
-                ("OSFT_CONFIG_FILE", True),
+                ("algorithm_metadata", True),
+                ("metrics_file_pattern", True),
+                ("metrics_file_rank0", True),
             ],
         ),
         TestCase(
@@ -299,9 +299,9 @@ def test_instrumentation_wrapper_no_syntax_errors():
     print("test execution complete")
 
 
-def test_instrumentation_constants_embedded():
-    """Test that file path constants are embedded in the wrapper."""
-    print("Executing test: Constants are embedded")
+def test_instrumentation_metadata_embedded():
+    """Test that algorithm metadata is embedded in the wrapper."""
+    print("Executing test: Algorithm metadata is embedded")
 
     wrapper = get_training_hub_instrumentation_wrapper(
         algorithm="sft",
@@ -309,12 +309,14 @@ def test_instrumentation_constants_embedded():
         metrics_port=28080,
     )
 
-    # Verify constants are defined in the wrapper
-    assert 'SFT_METRICS_FILE_PATTERN = "training_params_and_metrics_global*.jsonl"' in wrapper
-    assert 'SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"' in wrapper
-    assert 'OSFT_METRICS_FILE_PATTERN = "training_metrics_*.jsonl"' in wrapper
-    assert 'OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"' in wrapper
-    assert 'OSFT_CONFIG_FILE = "training_params.json"' in wrapper
+    # Verify algorithm metadata dict is passed to the instrumentation function
+    assert "algorithm_metadata=" in wrapper
+    assert "'name': 'sft'" in wrapper
+    assert "'metrics_file_pattern':" in wrapper
+    assert "'metrics_file_rank0':" in wrapper
+    # Verify the metadata extraction in the function
+    assert 'algorithm = algorithm_metadata["name"]' in wrapper
+    assert 'metrics_file_pattern = algorithm_metadata["metrics_file_pattern"]' in wrapper
 
     print("test execution complete")
 
@@ -329,9 +331,9 @@ def test_algorithm_parameter_used_not_detected():
         metrics_port=28080,
     )
 
-    # Verify algorithm parameter is used in conditionals
-    assert 'if algorithm == "osft"' in wrapper
-    assert 'if algorithm == "sft"' in wrapper or "else:  # sft" in wrapper
+    # Verify algorithm metadata is used (extracted from centralized registry)
+    assert "algorithm_metadata" in wrapper
+    assert 'algorithm = algorithm_metadata["name"]' in wrapper
 
     # Verify NO heuristic detection based on metrics keys
     assert 'if "tokens_per_second" in metrics' not in wrapper

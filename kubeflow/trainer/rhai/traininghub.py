@@ -12,14 +12,6 @@ import kubeflow.trainer.backends.kubernetes.utils as k8s_utils
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.types import types
 
-# Training Hub specific file names and patterns
-# These are the JSONL metrics files written by Training Hub backends
-TRAININGHUB_SFT_METRICS_FILE_PATTERN = "training_params_and_metrics_global*.jsonl"
-TRAININGHUB_SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"
-TRAININGHUB_OSFT_METRICS_FILE_PATTERN = "training_metrics_*.jsonl"
-TRAININGHUB_OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"
-TRAININGHUB_OSFT_CONFIG_FILE = "training_params.json"
-
 
 class TrainingHubAlgorithms(Enum):
     """Algorithm for TrainingHub Trainer."""
@@ -123,7 +115,7 @@ def _build_install_snippet(
 
 
 def _create_training_hub_progression_instrumentation(
-    algorithm: str,
+    algorithm_metadata: dict,
     ckpt_output_dir: str,
     metrics_port: int,
 ) -> tuple:
@@ -134,11 +126,15 @@ def _create_training_hub_progression_instrumentation(
     provides syntax highlighting, testability, and type checking while avoiding
     string templates.
 
-    The constants are embedded directly in the function to make it self-contained
-    when extracted via inspect.getsource().
+    The algorithm metadata is pre-resolved from the centralized registry and embedded
+    when extracted via inspect.getsource() to keep the function self-contained.
 
     Args:
-        algorithm: Training Hub algorithm ("sft" or "osft")
+        algorithm_metadata: Pre-resolved algorithm metadata dict containing:
+            - name: Algorithm name (e.g., "sft", "osft")
+            - metrics_file_patterns: List of glob patterns for metrics files
+            - metrics_file_rank0: Filename for rank 0 metrics
+            - config_file: Optional config file name (for OSFT)
         ckpt_output_dir: Directory where metrics files are written
         metrics_port: Port for HTTP metrics server
 
@@ -152,14 +148,10 @@ def _create_training_hub_progression_instrumentation(
     import subprocess
     import threading
 
-    # Training Hub file constants (embedded for self-contained extraction)
-    # fmt: off
-    SFT_METRICS_FILE_PATTERN = "training_params_and_metrics_global*.jsonl"  # noqa: N806, F841
-    SFT_METRICS_FILE_RANK0 = "training_params_and_metrics_global0.jsonl"  # noqa: N806
-    OSFT_METRICS_FILE_PATTERN = "training_metrics_*.jsonl"  # noqa: N806, F841
-    OSFT_METRICS_FILE_RANK0 = "training_metrics_0.jsonl"  # noqa: N806, F841
-    OSFT_CONFIG_FILE = "training_params.json"  # noqa: N806, F841
-    # fmt: on
+    # Extract algorithm metadata (pre-resolved from centralized registry)
+    algorithm = algorithm_metadata["name"]
+    metrics_file_pattern = algorithm_metadata["metrics_file_pattern"]
+    metrics_file_rank0 = algorithm_metadata["metrics_file_rank0"]
 
     # Track if termination message has been written (to avoid duplicates)
     _termination_message_written = False
@@ -229,19 +221,19 @@ def _create_training_hub_progression_instrumentation(
                 return {}
 
         def _read_osft_metrics(self):
-            """Read OSFT metrics from training_metrics_0.jsonl."""
-            metrics_file = f"{ckpt_output_dir}/{OSFT_METRICS_FILE_RANK0}"
+            """Read OSFT metrics from metrics file."""
+            metrics_file = f"{ckpt_output_dir}/{metrics_file_rank0}"
 
             try:
                 if not os.path.exists(metrics_file):
                     return {}
 
-                # Read config from training_params.json
+                # Read config from training_params.json (OSFT-specific)
                 config = {}
-                config_file = f"{ckpt_output_dir}/{OSFT_CONFIG_FILE}"
-                if os.path.exists(config_file):
+                config_file_path = f"{ckpt_output_dir}/training_params.json"
+                if os.path.exists(config_file_path):
                     try:
-                        with open(config_file) as f:
+                        with open(config_file_path) as f:
                             config = json.load(f)
                     except Exception:
                         print(
@@ -279,16 +271,16 @@ def _create_training_hub_progression_instrumentation(
             return {}
 
         def _read_sft_metrics(self):
-            """Read SFT metrics from training_params_and_metrics_global*.jsonl."""
+            """Read SFT metrics from metrics files."""
             # Find rank 0 metrics file
-            pattern = f"{ckpt_output_dir}/{SFT_METRICS_FILE_PATTERN}"
+            pattern = f"{ckpt_output_dir}/{metrics_file_pattern}"
             files = glob.glob(pattern)
 
             if not files:
                 return {}
 
             # Prefer rank 0 file
-            rank_0_files = [f for f in files if SFT_METRICS_FILE_RANK0 in f]
+            rank_0_files = [f for f in files if metrics_file_rank0 in f]
             metrics_file = rank_0_files[0] if rank_0_files else files[0]
 
             try:
@@ -511,14 +503,8 @@ def _create_training_hub_progression_instrumentation(
             try:
                 print("[Kubeflow] Primary pod cleaning stale metrics files", flush=True)
 
-                # Determine file patterns based on algorithm
-                if algorithm == "sft":
-                    patterns = [SFT_METRICS_FILE_PATTERN]
-                elif algorithm == "osft":
-                    # All ranks
-                    patterns = [OSFT_METRICS_FILE_PATTERN]
-                else:
-                    patterns = []
+                # Use metrics patterns from algorithm metadata
+                patterns = [metrics_file_pattern]
 
                 # Delete matching files
                 files_removed = 0
@@ -581,14 +567,25 @@ def _create_training_hub_progression_instrumentation(
     return (apply_progression_tracking, TrainingHubMetricsHandler)
 
 
-def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) -> str:
+def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: Optional[dict]) -> str:
     """Render a small Python script that calls training_hub.<algorithm>(**func_args).
 
     Includes termination message writing after training completes (on_train_end equivalent)
     to ensure controller captures final metrics even if HTTP server becomes unreachable.
+
+    Args:
+        algorithm_metadata: Pre-resolved algorithm metadata dict from
+            get_algorithm_pod_metadata() containing:
+            - name: Algorithm name
+            - metrics_file_rank0: Filename for rank 0 metrics
+        func_args: Arguments to pass to the training function
     """
+    # Extract values from pre-validated metadata
+    algorithm_name = algorithm_metadata["name"]
+    metrics_file_rank0 = algorithm_metadata["metrics_file_rank0"]
+
     base_script = textwrap.dedent("""
-    def _write_termination_message(ckpt_output_dir, algorithm):
+    def _write_termination_message(ckpt_output_dir, algorithm, metrics_file_rank0):
         \"\"\"Write final metrics to /dev/termination-log for reliable capture.
 
         Kubernetes reads /dev/termination-log after container exit, providing
@@ -597,36 +594,30 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
         \"\"\"
         import json
         import os
-        import glob
 
         try:
-            # Read final metrics based on algorithm
+            # Read final metrics from rank 0 file
             metrics = None
-            if algorithm == "sft":
-                pattern = os.path.join(ckpt_output_dir, "training_params_and_metrics_global0.jsonl")
-                files = glob.glob(pattern)
-                if files:
-                    with open(files[0], 'r') as f:
-                        lines = f.readlines()
-                        if len(lines) >= 2:
-                            metrics = json.loads(lines[-1])
-            elif algorithm == "osft":
-                metrics_file = os.path.join(ckpt_output_dir, "training_metrics_0.jsonl")
-                if os.path.exists(metrics_file):
-                    with open(metrics_file, 'r') as f:
-                        lines = f.readlines()
-                        if lines:
-                            metrics = json.loads(lines[-1])
-            else:
-                # TODO: Add support for other algorithms (e.g., lora_sft) in future
-                metrics = None
+            metrics_file = os.path.join(ckpt_output_dir, metrics_file_rank0)
+            if os.path.exists(metrics_file):
+                with open(metrics_file, 'r') as f:
+                    lines = f.readlines()
+                    if lines:
+                        metrics = json.loads(lines[-1])
 
             if metrics:
                 # Build final progress JSON (matches controller's AnnotationStatus struct)
+                # Try different metric names based on algorithm
+                loss_value = (
+                    metrics.get("loss")
+                    or metrics.get("train_loss")
+                    or metrics.get("avg_loss")
+                    or 0
+                )
                 final_progress = {{
                     "progressPercentage": 100,
                     "trainMetrics": {{
-                        "loss": str(metrics.get("loss", metrics.get("train_loss", 0))),
+                        "loss": str(loss_value),
                     }},
                     "evalMetrics": {{}},
                 }}
@@ -655,6 +646,7 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
         args = dict(func_args or {{}})
         ckpt_output_dir = args.get('ckpt_output_dir', '/tmp/checkpoints')
         algorithm = '{algo}'
+        metrics_file_rank0 = {metrics_file_rank0!r}
 
         print("[PY] Launching {algo_upper} training...", flush=True)
         try:
@@ -663,7 +655,7 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
 
             # Write termination message (on_train_end equivalent)
             # Ensures controller captures final metrics even if HTTP server unreachable
-            _write_termination_message(ckpt_output_dir, algorithm)
+            _write_termination_message(ckpt_output_dir, algorithm, metrics_file_rank0)
 
         except ValueError as e:
             print("Configuration error:", e, flush=True)
@@ -676,7 +668,11 @@ def _render_algorithm_wrapper(algorithm_name: str, func_args: Optional[dict]) ->
             # Propagate errors so the pod fails
             raise
 
-    """).format(algo=algorithm_name, algo_upper=algorithm_name.upper())
+    """).format(
+        algo=algorithm_name,
+        algo_upper=algorithm_name.upper(),
+        metrics_file_rank0=metrics_file_rank0,
+    )
 
     if func_args is None:
         call_line = "training_func({})\n"
@@ -735,15 +731,24 @@ def get_training_hub_instrumentation_wrapper(
     a call with the provided parameters.
 
     Args:
-        algorithm: Training Hub algorithm ("sft" or "osft")
+        algorithm: Training Hub algorithm name ("sft" or "osft")
         ckpt_output_dir: Directory where metrics files are written
         metrics_port: Port for HTTP metrics server
 
     Returns:
         Python code as string to be injected before training code
+
+    Raises:
+        ValueError: If algorithm is not supported (via get_algorithm_pod_metadata).
     """
     import inspect
     import textwrap
+
+    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
+
+    # Resolve algorithm metadata from centralized registry
+    # This validates the algorithm name and retrieves its metadata
+    algorithm_metadata = get_algorithm_pod_metadata(algorithm)
 
     # Extract the entire function source
     instrumentation_code = inspect.getsource(_create_training_hub_progression_instrumentation)
@@ -765,7 +770,7 @@ print("[Kubeflow] Initializing Training Hub progression tracking", flush=True)
     apply_progression_tracking,
     _,
 ) = _create_training_hub_progression_instrumentation(
-    algorithm="{algorithm}",
+    algorithm_metadata={algorithm_metadata!r},
     ckpt_output_dir={ckpt_output_dir!r},
     metrics_port={metrics_port}
 )
@@ -832,8 +837,15 @@ def get_trainer_cr_from_training_hub_trainer(
         if not trainer.algorithm:
             raise ValueError("TrainingHubTrainer requires 'algorithm' when 'func' is not provided")
 
+        from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
+
         algorithm_name = trainer.algorithm.value
-        raw_code = _render_algorithm_wrapper(algorithm_name, trainer.func_args)
+
+        # Resolve algorithm metadata from centralized registry
+        # This validates the algorithm is supported and retrieves its metadata
+        algorithm_metadata = get_algorithm_pod_metadata(algorithm_name)
+
+        raw_code = _render_algorithm_wrapper(algorithm_metadata, trainer.func_args)
 
         # Inject progress tracking code if enabled
         if trainer.enable_progression_tracking:
