@@ -2,6 +2,24 @@
 
 This module defines a single authoritative place for supported training algorithms,
 their metrics file patterns, and validation logic.
+
+Adding a New Algorithm:
+    To add support for a new training algorithm, simply add an entry to the
+    ALGORITHMS registry:
+
+    Example with metrics files:
+        "my_algorithm": AlgorithmSpec(
+            name="my_algorithm",
+            metrics_file_patterns=("my_metrics_*.jsonl",),
+            validate=_no_op_validate,
+        ),
+
+    Example without metrics files (no progress tracking):
+        "my_algorithm": AlgorithmSpec(
+            name="my_algorithm",
+            metrics_file_patterns=(),  # Empty tuple for no metrics
+            validate=_no_op_validate,
+        ),
 """
 
 from collections.abc import Callable, Iterable
@@ -47,17 +65,18 @@ class AlgorithmSpec:
                 f"Use {self.name.lower()!r} instead."
             )
 
-        # Validate metrics_file_patterns
-        if not self.metrics_file_patterns:
-            raise ValueError(f"Algorithm '{self.name}' must have at least one metrics_file_pattern")
+        # Validate metrics_file_patterns (can be empty for algorithms without metrics)
+        if self.metrics_file_patterns is None:
+            raise ValueError(
+                f"Algorithm '{self.name}' metrics_file_patterns cannot be None "
+                "(use empty tuple for no metrics)"
+            )
 
         # Convert to list to check contents
         patterns_list = list(self.metrics_file_patterns)
-        if not patterns_list:
-            raise ValueError(
-                f"Algorithm '{self.name}' metrics_file_patterns is empty after conversion to list"
-            )
 
+        # Empty patterns are allowed (for algorithms that don't produce metrics files)
+        # but if patterns are provided, validate them
         for i, pattern in enumerate(patterns_list):
             if not isinstance(pattern, str):
                 raise ValueError(
@@ -104,6 +123,11 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
     "osft": AlgorithmSpec(
         name="osft",
         metrics_file_patterns=("training_metrics_*.jsonl",),
+        validate=_no_op_validate,
+    ),
+    "lora_sft": AlgorithmSpec(
+        name="lora_sft",
+        metrics_file_patterns=(),  # LoRA uses HF Trainer logging, not JSONL metrics files
         validate=_no_op_validate,
     ),
 }
@@ -155,8 +179,8 @@ def get_algorithm_pod_metadata(name: str) -> dict:
     pod-injected code, derived from the centralized AlgorithmSpec.
 
     The metadata is automatically derived from the AlgorithmSpec:
-    - metrics_file_pattern: First pattern from spec.metrics_file_patterns
-    - metrics_file_rank0: Derived by replacing '*' with '0' in the pattern
+    - metrics_file_pattern: First pattern from spec.metrics_file_patterns (None if no patterns)
+    - metrics_file_rank0: Derived by replacing '*' with '0' in the pattern (None if no patterns)
 
     Args:
         name: The algorithm identifier (e.g., "sft", "osft").
@@ -165,7 +189,9 @@ def get_algorithm_pod_metadata(name: str) -> dict:
         Dict containing:
             - name: Algorithm name
             - metrics_file_pattern: Glob pattern for metrics files
+              (None if algorithm produces no metrics)
             - metrics_file_rank0: Specific filename for rank 0 metrics
+              (None if algorithm produces no metrics)
 
     Raises:
         ValueError: If the algorithm name is not supported.
@@ -176,13 +202,26 @@ def get_algorithm_pod_metadata(name: str) -> dict:
         'sft'
         >>> metadata["metrics_file_rank0"]
         'training_params_and_metrics_global0.jsonl'
+
+        >>> metadata = get_algorithm_pod_metadata("lora_sft")  # No metrics
+        >>> metadata["metrics_file_pattern"]
+        None
     """
     # get_algorithm_spec() validates the name parameter
     spec = get_algorithm_spec(name)
 
     # Derive metadata from the spec - no algorithm branching needed!
-    # AlgorithmSpec.__post_init__ ensures patterns are non-empty
     patterns = list(spec.metrics_file_patterns)
+
+    # Handle algorithms without metrics files
+    if not patterns:
+        return {
+            "name": name,
+            "metrics_file_pattern": None,
+            "metrics_file_rank0": None,
+        }
+
+    # Use first pattern for algorithms with metrics
     pattern = patterns[0]
 
     # Derive rank0 file by replacing wildcard with 0

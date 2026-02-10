@@ -212,12 +212,16 @@ def _create_training_hub_progression_instrumentation(
 
         def _read_latest_metrics(self):
             """Read last line of JSONL file (most recent metrics from rank 0)."""
+            # Return empty metrics if algorithm doesn't produce metrics files
+            if metrics_file_pattern is None:
+                return {}
+
             if algorithm == "sft":
                 return self._read_sft_metrics()
             elif algorithm == "osft":
                 return self._read_osft_metrics()
             else:
-                # TODO: Add support for other algorithms (e.g., lora_sft) in future
+                # Algorithm not yet supported for metrics reading
                 return {}
 
         def _read_osft_metrics(self):
@@ -349,7 +353,7 @@ def _create_training_hub_progression_instrumentation(
             elif algorithm == "osft":
                 return self._transform_osft(metrics)
             else:
-                # TODO: Add support for other algorithms (e.g., lora_sft) in future
+                # Algorithms without metrics files (e.g., lora_sft) return empty dict
                 return {}
 
         def _transform_osft(self, metrics):
@@ -500,38 +504,48 @@ def _create_training_hub_progression_instrumentation(
             is_primary_pod = pet_rank == "0" if pet_rank is not None else False
 
         if is_primary_pod:
-            try:
-                print("[Kubeflow] Primary pod cleaning stale metrics files", flush=True)
+            # Skip cleanup if algorithm doesn't produce metrics files
+            if metrics_file_pattern is None:
+                print(
+                    "[Kubeflow] Algorithm produces no metrics files, skipping cleanup", flush=True
+                )
+            else:
+                try:
+                    print("[Kubeflow] Primary pod cleaning stale metrics files", flush=True)
 
-                # Use metrics patterns from algorithm metadata
-                patterns = [metrics_file_pattern]
+                    # Use metrics patterns from algorithm metadata
+                    patterns = [metrics_file_pattern]
 
-                # Delete matching files
-                files_removed = 0
-                for pattern in patterns:
-                    full_pattern = os.path.join(ckpt_output_dir, pattern)
-                    for file_path in sorted(glob.glob(full_pattern)):
-                        try:
-                            os.remove(file_path)
-                            files_removed += 1
-                            filename = os.path.basename(file_path)
-                            print(f"[Kubeflow] Removed stale metrics file: {filename}", flush=True)
-                        except OSError as e:
-                            filename = os.path.basename(file_path)
-                            print(
-                                f"[Kubeflow] Warning: Could not remove {filename}: {e}", flush=True
-                            )
+                    # Delete matching files
+                    files_removed = 0
+                    for pattern in patterns:
+                        full_pattern = os.path.join(ckpt_output_dir, pattern)
+                        for file_path in sorted(glob.glob(full_pattern)):
+                            try:
+                                os.remove(file_path)
+                                files_removed += 1
+                                filename = os.path.basename(file_path)
+                                print(
+                                    f"[Kubeflow] Removed stale metrics file: {filename}", flush=True
+                                )
+                            except OSError as e:
+                                filename = os.path.basename(file_path)
+                                print(
+                                    f"[Kubeflow] Warning: Could not remove {filename}: {e}",
+                                    flush=True,
+                                )
 
-                if files_removed > 0:
-                    file_word = "files" if files_removed != 1 else "file"
-                    print(
-                        f"[Kubeflow] Cleaned {files_removed} stale metrics {file_word}", flush=True
-                    )
-                else:
-                    print("[Kubeflow] No stale metrics files found", flush=True)
+                    if files_removed > 0:
+                        file_word = "files" if files_removed != 1 else "file"
+                        print(
+                            f"[Kubeflow] Cleaned {files_removed} stale metrics {file_word}",
+                            flush=True,
+                        )
+                    else:
+                        print("[Kubeflow] No stale metrics files found", flush=True)
 
-            except OSError as e:
-                print(f"[Kubeflow] Warning: Metrics cleanup failed: {e}", flush=True)
+                except OSError as e:
+                    print(f"[Kubeflow] Warning: Metrics cleanup failed: {e}", flush=True)
         else:
             print("[Kubeflow] Non-primary pod skipping metrics cleanup", flush=True)
 
@@ -543,10 +557,17 @@ def _create_training_hub_progression_instrumentation(
             server_thread = threading.Thread(target=server.serve_forever, daemon=True)
             server_thread.start()
 
-            print(
-                f"[Kubeflow] Metrics server started on port {metrics_port} for {algorithm}",
-                flush=True,
-            )
+            if metrics_file_pattern is None:
+                msg = (
+                    f"[Kubeflow] Metrics server started on port {metrics_port} for {algorithm} "
+                    "(no metrics files - progress tracking unavailable)"
+                )
+                print(msg, flush=True)
+            else:
+                print(
+                    f"[Kubeflow] Metrics server started on port {metrics_port} for {algorithm}",
+                    flush=True,
+                )
 
             return server
         except OSError as e:
@@ -595,15 +616,42 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: Optional[dict
         import json
         import os
 
+        # Skip termination message for algorithms without metrics files (e.g., LoRA)
+        if metrics_file_rank0 is None:
+            print(
+                "[Kubeflow] Algorithm produces no metrics files - skipping termination message",
+                flush=True,
+            )
+            return
+
         try:
+            # If we reach here, metrics ARE expected for this algorithm
+            metrics_file = os.path.join(ckpt_output_dir, metrics_file_rank0)
+
+            # Check if expected metrics file exists
+            if not os.path.exists(metrics_file):
+                print(
+                    f"[Kubeflow] WARNING: Expected metrics file not found: {{metrics_file_rank0}}",
+                    flush=True,
+                )
+                print(
+                    "[Kubeflow] Training may have failed to write metrics or terminated early",
+                    flush=True,
+                )
+                return
+
             # Read final metrics from rank 0 file
             metrics = None
-            metrics_file = os.path.join(ckpt_output_dir, metrics_file_rank0)
-            if os.path.exists(metrics_file):
-                with open(metrics_file, 'r') as f:
-                    lines = f.readlines()
-                    if lines:
-                        metrics = json.loads(lines[-1])
+            with open(metrics_file, 'r') as f:
+                lines = f.readlines()
+                if lines:
+                    metrics = json.loads(lines[-1])
+                else:
+                    print(
+                        f"[Kubeflow] WARNING: Metrics file is empty: {{metrics_file_rank0}}",
+                        flush=True,
+                    )
+                    return
 
             if metrics:
                 # Build final progress JSON (matches controller's AnnotationStatus struct)
@@ -624,9 +672,13 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: Optional[dict
 
                 with open("/dev/termination-log", 'w') as f:
                     json.dump(final_progress, f)
-                print("[Kubeflow] Termination message written", flush=True)
+                print("[Kubeflow] Termination message written with final metrics", flush=True)
             else:
-                print("[Kubeflow] No metrics found for termination message", flush=True)
+                print(
+                    "[Kubeflow] WARNING: Metrics file read but could not parse final metrics",
+                    flush=True,
+                )
+
 
         except PermissionError:
             print("[Kubeflow] Cannot write termination message (not in container)", flush=True)

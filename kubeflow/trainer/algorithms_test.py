@@ -72,16 +72,19 @@ def test_algorithm_spec_validation_uppercase_name():
     print("test execution complete")
 
 
-def test_algorithm_spec_validation_empty_patterns():
-    """Test that AlgorithmSpec validates patterns are not empty."""
-    print("Executing test: algorithm_spec_validation_empty_patterns")
+def test_algorithm_spec_allows_empty_patterns():
+    """Test that AlgorithmSpec allows empty patterns for algorithms without metrics."""
+    print("Executing test: algorithm_spec_allows_empty_patterns")
 
-    with pytest.raises(ValueError, match="must have at least one metrics_file_pattern"):
-        AlgorithmSpec(
-            name="test",
-            metrics_file_patterns=(),
-            validate=lambda x: None,
-        )
+    # Empty patterns should be allowed (for algorithms that don't produce metrics files)
+    spec = AlgorithmSpec(
+        name="test",
+        metrics_file_patterns=(),
+        validate=lambda x: None,
+    )
+
+    assert spec.name == "test"
+    assert list(spec.metrics_file_patterns) == []
 
     print("test execution complete")
 
@@ -109,6 +112,13 @@ def test_get_algorithm_pod_metadata_rank0_derived_correctly():
         pattern = metadata["metrics_file_pattern"]
         rank0 = metadata["metrics_file_rank0"]
 
+        # Skip algorithms without metrics
+        if pattern is None:
+            assert rank0 is None, (
+                f"Algorithm '{algorithm_name}' has no pattern but rank0 is not None"
+            )
+            continue
+
         # Verify derivation: pattern with * replaced by 0
         assert rank0 == pattern.replace("*", "0"), (
             f"Algorithm '{algorithm_name}' rank0 file should be pattern with * replaced by 0. "
@@ -118,9 +128,9 @@ def test_get_algorithm_pod_metadata_rank0_derived_correctly():
     print("test execution complete")
 
 
-def test_all_algorithms_have_non_empty_metrics_patterns():
-    """Test that all registered algorithms define non-empty metrics_file_patterns."""
-    print("Executing test: all_algorithms_have_non_empty_metrics_patterns")
+def test_all_algorithms_have_valid_metrics_patterns():
+    """Test that all registered algorithms define valid metrics_file_patterns."""
+    print("Executing test: all_algorithms_have_valid_metrics_patterns")
 
     for algorithm_name, spec in ALGORITHMS.items():
         print("  Checking algorithm:", algorithm_name)
@@ -135,15 +145,11 @@ def test_all_algorithms_have_non_empty_metrics_patterns():
             f"Algorithm '{algorithm_name}' metrics_file_patterns is not iterable"
         )
 
-        # Convert to list to check length
+        # Convert to list to check contents
         patterns_list = list(spec.metrics_file_patterns)
 
-        # Verify metrics_file_patterns is not empty
-        assert len(patterns_list) > 0, (
-            f"Algorithm '{algorithm_name}' has empty metrics_file_patterns"
-        )
-
-        # Verify all patterns are non-empty strings
+        # Empty patterns are allowed (for algorithms without metrics files)
+        # but if patterns are provided, validate them
         for pattern in patterns_list:
             assert isinstance(pattern, str), (
                 f"Algorithm '{algorithm_name}' has non-string pattern: {pattern}"
@@ -265,7 +271,7 @@ def test_algorithms_registry_not_empty():
 
     # Verify known algorithms exist (baseline check)
     # This ensures we don't accidentally break existing algorithms
-    known_algorithms = {"sft", "osft"}
+    known_algorithms = {"sft", "osft", "lora_sft"}
     for algo in known_algorithms:
         assert algo in ALGORITHMS, f"Known algorithm '{algo}' missing from registry"
 
@@ -364,6 +370,38 @@ def test_get_algorithm_pod_metadata_unknown_raises():
     print("test execution complete")
 
 
+def test_get_algorithm_pod_metadata_no_metrics():
+    """Test get_algorithm_pod_metadata returns None for algorithms without metrics."""
+    print("Executing test: get_algorithm_pod_metadata_no_metrics")
+
+    # Temporarily add an algorithm with no metrics to test
+    from kubeflow.trainer.algorithms import ALGORITHMS, AlgorithmSpec, _no_op_validate
+
+    # Save original registry
+    original_algorithms = ALGORITHMS.copy()
+
+    try:
+        # Add test algorithm with no metrics
+        ALGORITHMS["test_no_metrics"] = AlgorithmSpec(
+            name="test_no_metrics",
+            metrics_file_patterns=(),
+            validate=_no_op_validate,
+        )
+
+        metadata = get_algorithm_pod_metadata("test_no_metrics")
+
+        assert metadata["name"] == "test_no_metrics"
+        assert metadata["metrics_file_pattern"] is None
+        assert metadata["metrics_file_rank0"] is None
+
+    finally:
+        # Restore original registry
+        ALGORITHMS.clear()
+        ALGORITHMS.update(original_algorithms)
+
+    print("test execution complete")
+
+
 def test_pod_metadata_has_all_required_keys():
     """Test that pod metadata contains all required keys for all algorithms."""
     print("Executing test: pod_metadata_has_all_required_keys")
@@ -383,9 +421,12 @@ def test_pod_metadata_has_all_required_keys():
         # Verify name matches
         assert metadata["name"] == algorithm_name
 
-        # Verify non-empty patterns
-        assert metadata["metrics_file_pattern"]
-        assert metadata["metrics_file_rank0"]
+        # Patterns can be None for algorithms without metrics
+        # If pattern is not None, verify rank0 is also not None
+        if metadata["metrics_file_pattern"] is not None:
+            assert metadata["metrics_file_rank0"] is not None
+        else:
+            assert metadata["metrics_file_rank0"] is None
 
     print("test execution complete")
 
@@ -398,8 +439,16 @@ def test_pod_metadata_rank0_derived_from_pattern():
         print("  Checking algorithm:", algorithm_name)
         metadata = get_algorithm_pod_metadata(algorithm_name)
 
-        # Verify rank0 file is derived by replacing * with 0
         pattern = metadata["metrics_file_pattern"]
+
+        # Skip algorithms without metrics
+        if pattern is None:
+            assert metadata["metrics_file_rank0"] is None, (
+                f"Algorithm '{algorithm_name}' has no pattern but rank0 is not None"
+            )
+            continue
+
+        # Verify rank0 file is derived by replacing * with 0
         expected_rank0 = pattern.replace("*", "0")
         assert metadata["metrics_file_rank0"] == expected_rank0, (
             f"Algorithm '{algorithm_name}': rank0 file should be pattern with * replaced by 0. "
@@ -424,6 +473,7 @@ def test_pod_metadata_self_contained():
         # Pod code should not need to import anything to use this metadata
         for key, value in metadata.items():
             assert isinstance(key, str), f"Metadata key should be string, got {type(key)}"
+            # None is allowed for algorithms without metrics
             assert isinstance(value, (str, int, bool, type(None))), (
                 f"Metadata value for key '{key}' should be basic type, got {type(value).__name__}"
             )
@@ -431,21 +481,22 @@ def test_pod_metadata_self_contained():
     print("test execution complete")
 
 
-def test_pod_metadata_patterns_are_strings():
-    """Test that all file patterns in pod metadata are strings."""
-    print("Executing test: pod_metadata_patterns_are_strings")
+def test_pod_metadata_patterns_are_strings_or_none():
+    """Test that all file patterns in pod metadata are strings or None."""
+    print("Executing test: pod_metadata_patterns_are_strings_or_none")
 
     for algorithm_name in ALGORITHMS:
         print("  Checking algorithm:", algorithm_name)
         metadata = get_algorithm_pod_metadata(algorithm_name)
 
-        # Verify pattern fields are strings
-        assert isinstance(metadata["metrics_file_pattern"], str)
-        assert isinstance(metadata["metrics_file_rank0"], str)
+        # Verify pattern fields are strings or None
+        assert isinstance(metadata["metrics_file_pattern"], (str, type(None)))
+        assert isinstance(metadata["metrics_file_rank0"], (str, type(None)))
 
-        # Verify patterns are not empty
-        assert len(metadata["metrics_file_pattern"]) > 0
-        assert len(metadata["metrics_file_rank0"]) > 0
+        # If patterns exist, verify they are not empty
+        if metadata["metrics_file_pattern"] is not None:
+            assert len(metadata["metrics_file_pattern"]) > 0
+            assert len(metadata["metrics_file_rank0"]) > 0
 
     print("test execution complete")
 
@@ -646,6 +697,50 @@ def test_no_algorithm_branching_outside_pod_code():
         pytest.fail("\n".join(error_msg))
 
     print("  ✓ No forbidden algorithm branching found")
+    print("test execution complete")
+
+
+def test_algorithm_without_metrics_integration():
+    """Test that algorithms without metrics work end-to-end."""
+    print("Executing test: algorithm_without_metrics_integration")
+
+    from kubeflow.trainer.algorithms import ALGORITHMS, AlgorithmSpec, _no_op_validate
+
+    # Save original registry
+    original_algorithms = ALGORITHMS.copy()
+
+    try:
+        # Add test algorithm with no metrics
+        ALGORITHMS["test_no_metrics"] = AlgorithmSpec(
+            name="test_no_metrics",
+            metrics_file_patterns=(),
+            validate=_no_op_validate,
+        )
+
+        # Test get_algorithm_spec
+        spec = get_algorithm_spec("test_no_metrics")
+        assert spec.name == "test_no_metrics"
+        assert list(spec.metrics_file_patterns) == []
+
+        # Test get_algorithm_pod_metadata
+        metadata = get_algorithm_pod_metadata("test_no_metrics")
+        assert metadata["name"] == "test_no_metrics"
+        assert metadata["metrics_file_pattern"] is None
+        assert metadata["metrics_file_rank0"] is None
+
+        # Test that metadata is serializable (for pod injection)
+        import json
+
+        metadata_json = json.dumps(metadata)
+        assert metadata_json
+        rehydrated = json.loads(metadata_json)
+        assert rehydrated == metadata
+
+    finally:
+        # Restore original registry
+        ALGORITHMS.clear()
+        ALGORITHMS.update(original_algorithms)
+
     print("test execution complete")
 
 
