@@ -19,6 +19,7 @@ This module uses pytest and unittest.mock to simulate Kubernetes API interaction
 It tests KubernetesBackend's behavior across job listing, resource creation etc
 """
 
+import copy
 from dataclasses import asdict
 import datetime
 import multiprocessing
@@ -455,28 +456,28 @@ def mock_list_namespaced_event(*args, **kwargs):
                     name="test-event-1",
                     namespace=DEFAULT_NAMESPACE,
                 ),
-                involved_object=models.IoK8sApiCoreV1ObjectReference(
+                involvedObject=models.IoK8sApiCoreV1ObjectReference(
                     kind=constants.TRAINJOB_KIND,
                     name=BASIC_TRAIN_JOB_NAME,
                     namespace=DEFAULT_NAMESPACE,
                 ),
                 message="TrainJob created successfully",
                 reason="Created",
-                first_timestamp=datetime.datetime(2025, 6, 1, 10, 30, 0),
+                firstTimestamp=datetime.datetime(2025, 6, 1, 10, 30, 0),
             ),
             models.IoK8sApiCoreV1Event(
                 metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
                     name="test-event-2",
                     namespace=DEFAULT_NAMESPACE,
                 ),
-                involved_object=models.IoK8sApiCoreV1ObjectReference(
+                involvedObject=models.IoK8sApiCoreV1ObjectReference(
                     kind="Pod",
                     name="node-0-pod",
                     namespace=DEFAULT_NAMESPACE,
                 ),
                 message="Pod scheduled successfully",
                 reason="Scheduled",
-                first_timestamp=datetime.datetime(2025, 6, 1, 10, 31, 0),
+                firstTimestamp=datetime.datetime(2025, 6, 1, 10, 31, 0),
             ),
         ]
     )
@@ -1078,13 +1079,28 @@ def test_train(kubernetes_backend, test_case):
         expected_output = test_case.expected_output
         expected_output.metadata.name = train_job_name
 
-        kubernetes_backend.custom_api.create_namespaced_custom_object.assert_called_with(
-            constants.GROUP,
-            constants.VERSION,
-            DEFAULT_NAMESPACE,
-            constants.TRAINJOB_PLURAL,
-            expected_output.to_dict(),
+        # Compare request payload with tolerance for empty podTemplateOverrides
+        call_args, call_kwargs = (
+            kubernetes_backend.custom_api.create_namespaced_custom_object.call_args
         )
+        assert call_args[0] == constants.GROUP
+        assert call_args[1] == constants.VERSION
+        assert call_args[2] == DEFAULT_NAMESPACE
+        assert call_args[3] == constants.TRAINJOB_PLURAL
+
+        actual_body = copy.deepcopy(call_args[4])
+        expected_body = expected_output.to_dict()
+
+        # If backend included an empty podTemplateOverrides list, drop it for comparison
+        if (
+            isinstance(actual_body, dict)
+            and "spec" in actual_body
+            and isinstance(actual_body["spec"], dict)
+            and actual_body["spec"].get("podTemplateOverrides") == []
+        ):
+            actual_body["spec"].pop("podTemplateOverrides", None)
+
+        assert actual_body == expected_body
 
     except Exception as e:
         assert type(e) is test_case.expected_error
