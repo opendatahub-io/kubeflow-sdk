@@ -219,7 +219,6 @@ def get_trainjob_node_step(
     return step
 
 
-# TODO (andreyvelich): Discuss if we want to support V1ResourceRequirements resources as input.
 def get_resources_per_node(
     resources_per_node: dict,
 ) -> models.IoK8sApiCoreV1ResourceRequirements:
@@ -227,13 +226,16 @@ def get_resources_per_node(
     Get the Trainer resources for the training node from the given dict.
     """
 
-    # Convert all keys in resources to lowercase.
-    resources = {
-        k.lower(): models.IoK8sApimachineryPkgApiResourceQuantity(v)
-        for k, v in resources_per_node.items()
-    }
-    if "gpu" in resources:
-        resources["nvidia.com/gpu"] = resources.pop("gpu")
+    # Convert only standard resource keys and aliases to lowercase.
+    # Extended resources (e.g., "example.com/Custom-NPU") preserve their original case.
+    standard_resources = {constants.CPU_LABEL, "memory", "gpu", "storage", "ephemeral-storage"}
+    resource_aliases = {"gpu": "nvidia.com/gpu", "storage": "ephemeral-storage"}
+
+    resources = {}
+    for k, v in resources_per_node.items():
+        key = k.lower() if k.lower() in standard_resources or k.lower().startswith("mig-") else k
+        key = resource_aliases.get(key, key)
+        resources[key] = models.IoK8sApimachineryPkgApiResourceQuantity(v)
 
     # Optional alias for MIG: "mig-<profile>" -> "nvidia.com/mig-<profile>"
     # Example: "mig-1g.5gb" -> "nvidia.com/mig-1g.5gb"
@@ -249,11 +251,10 @@ def get_resources_per_node(
             f"GPU (nvidia.com/gpu) and MIG ({mig_keys[0]}) cannot be requested together"
         )
 
-    resources = models.IoK8sApiCoreV1ResourceRequirements(
+    return models.IoK8sApiCoreV1ResourceRequirements(
         requests=resources,
         limits=resources,
     )
-    return resources
 
 
 def get_script_for_python_packages(

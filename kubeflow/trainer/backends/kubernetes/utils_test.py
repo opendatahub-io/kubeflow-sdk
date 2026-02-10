@@ -117,6 +117,58 @@ def test_get_container_devices(test_case: TestCase):
             },
             expected_error=ValueError,
         ),
+        TestCase(
+            name="extended resource preserves case",
+            expected_status=SUCCESS,
+            config={
+                "resources_per_node": {
+                    "example.com/Capitalized": 1,
+                    "CPU": 2,
+                    "Memory": "16Gi",
+                    "EPHEMERAL-STORAGE": "100Gi",
+                }
+            },
+            expected_output=models.IoK8sApiCoreV1ResourceRequirements(
+                limits={
+                    "example.com/Capitalized": models.IoK8sApimachineryPkgApiResourceQuantity(1),
+                    "cpu": models.IoK8sApimachineryPkgApiResourceQuantity(2),
+                    "memory": models.IoK8sApimachineryPkgApiResourceQuantity("16Gi"),
+                    "ephemeral-storage": models.IoK8sApimachineryPkgApiResourceQuantity("100Gi"),
+                },
+                requests={
+                    "example.com/Capitalized": models.IoK8sApimachineryPkgApiResourceQuantity(1),
+                    "cpu": models.IoK8sApimachineryPkgApiResourceQuantity(2),
+                    "memory": models.IoK8sApimachineryPkgApiResourceQuantity("16Gi"),
+                    "ephemeral-storage": models.IoK8sApimachineryPkgApiResourceQuantity("100Gi"),
+                },
+            ),
+        ),
+        TestCase(
+            name="diverse resource types and mixed case standard keys",
+            expected_status=SUCCESS,
+            config={
+                "resources_per_node": {
+                    "example.com/test": 1,
+                    "Example.com/Custom-NPU": 2,
+                    "mEmOrY": "8Gi",
+                    "STORAGE": "100Gi",
+                }
+            },
+            expected_output=models.IoK8sApiCoreV1ResourceRequirements(
+                limits={
+                    "example.com/test": models.IoK8sApimachineryPkgApiResourceQuantity(1),
+                    "Example.com/Custom-NPU": models.IoK8sApimachineryPkgApiResourceQuantity(2),
+                    "memory": models.IoK8sApimachineryPkgApiResourceQuantity("8Gi"),
+                    "ephemeral-storage": models.IoK8sApimachineryPkgApiResourceQuantity("100Gi"),
+                },
+                requests={
+                    "example.com/test": models.IoK8sApimachineryPkgApiResourceQuantity(1),
+                    "Example.com/Custom-NPU": models.IoK8sApimachineryPkgApiResourceQuantity(2),
+                    "memory": models.IoK8sApimachineryPkgApiResourceQuantity("8Gi"),
+                    "ephemeral-storage": models.IoK8sApimachineryPkgApiResourceQuantity("100Gi"),
+                },
+            ),
+        ),
     ],
 )
 def test_get_resources_per_node(test_case: TestCase):
