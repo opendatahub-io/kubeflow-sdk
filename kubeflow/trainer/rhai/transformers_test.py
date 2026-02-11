@@ -2484,12 +2484,12 @@ print("TEST_COMPLETE=True")
 
             if checkpoints is None:
                 # FileNotFoundError case - remote storage doesn't exist yet
-                assert "No existing checkpoints found in cloud storage" in output
+                assert "No existing or valid checkpoints found in cloud storage" in output
                 # Should only print once
                 assert output.count("Training will start from scratch") == 1
             elif checkpoints and test_case.config["incomplete_markers"]:
                 # Has checkpoints but all are incomplete
-                assert "No valid checkpoints found in cloud storage" in output
+                assert "No existing or valid checkpoints found in cloud storage" in output
                 # Should only print once
                 assert output.count("Training will start from scratch") == 1
             elif not checkpoints:
