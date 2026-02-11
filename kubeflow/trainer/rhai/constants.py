@@ -33,3 +33,5 @@ CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
 
 # Cloud storage URI schemes
 S3_URI_SCHEME = "s3://"
+
+CAN_ROB_MERGE_THIS = "hopefully?"
