@@ -397,8 +397,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 operation: Description of the operation (e.g., "download", "upload")
             """
             try:
-                if hasattr(dist, "is_available") and dist.is_available() and dist.is_initialized():
-                    dist.barrier()
+                dist.barrier()
             except Exception as e:
                 raise RuntimeError(
                     f"[Kubeflow] Barrier synchronization failed during checkpoint "
@@ -447,7 +446,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             parent.value += inc
                             if time.time() - parent.last >= 1:
                                 mb = parent.value / (1024 * 1024)
-                                pct = int((parent.value / parent.total_size) * 100)
+                                pct = (
+                                    int((parent.value / parent.total_size) * 100)
+                                    if parent.total_size
+                                    else 0
+                                )
                                 print(
                                     f"[Kubeflow] Progress: {mb:.1f}"
                                     f"/{parent.total_size / (1024 * 1024):.1f} MB ({pct}%)",
@@ -473,11 +476,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     checkpoint_dirs = self.remote_fs.ls("", detail=False)
                 except FileNotFoundError:
                     # Remote storage path doesn't exist yet (first training run)
-                    print(
-                        "[Kubeflow] No existing checkpoints found in cloud storage. "
-                        "Training will start from scratch.",
-                        flush=True,
-                    )
                     checkpoint_dirs = []
 
                 steps = sorted(
@@ -519,13 +517,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     break
                 else:
                     # Loop completed without break - either no checkpoints or all incomplete
-                    # Only print if we had checkpoints to check (not FileNotFoundError case)
-                    if checkpoint_dirs:
-                        print(
-                            "[Kubeflow] No valid checkpoints found in cloud storage. "
-                            "Training will start from scratch.",
-                            flush=True,
-                        )
+                    print(
+                        "[Kubeflow] No existing or valid checkpoints found in cloud storage. "
+                        "Training will start from scratch.",
+                        flush=True,
+                    )
 
             # Barrier to wait for local rank 0 checkpoint download to complete
             self._wait_for_all_ranks("download")
@@ -610,13 +606,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             "This may be caused by network issues, S3 outage, or "
                             "permission changes. Verify S3 connectivity and retry the training job."
                         )
+                        upload_exception.__cause__ = e
 
             # Barrier to wait for all local rank 0 upload to complete
             self._wait_for_all_ranks("upload")
 
             # Raise upload exception after barrier to ensure all ranks see the failure
             if upload_exception is not None:
-                raise upload_exception from upload_exception.__cause__
+                raise upload_exception
 
             if is_global_rank_0:
                 # Delete .incomplete sentinel (marks upload complete)
