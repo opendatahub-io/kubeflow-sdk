@@ -1,14 +1,24 @@
 approvers:
-  - Al-Pragliola
-  - ederign
-  - jonburdo
-  - pboyd
-  - rareddy
-  - tarilabs
-emeritus_approvers:
-  - andreyvelich
-  - ckadner
-  - Tomcli
-  - zijianjoy
+- Al-Pragliola
+- adysenrothman
+- fege
+- jonburdo
+- pboyd
+- rareddy
+- tarilabs
 reviewers:
-  - fege
+- Al-Pragliola
+- adysenrothman
+- fege
+- jonburdo
+- pboyd
+- rareddy
+- tarilabs
+emeritus_approvers:
+- dhirajsb
+- isinyaaa
+- lampajr
+- nehachopra27
+- rkubis
+- tonyxrmdavidson
+- Crazyglue
