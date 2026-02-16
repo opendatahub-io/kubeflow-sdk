@@ -157,6 +157,14 @@ for version in client.list_model_versions("my-model"):
     print(f"Version: {version.name}")
 ```
 
+You can also initialize the client using different port configurations:
+
+```python
+ModelRegistryClient("https://example.org", port=456)  # Explicit port argument
+ModelRegistryClient("https://example.org:456")        # Port parsed from base_url
+ModelRegistryClient("https://example.org")            # Default port (443 for https, 8080 for http)
+```
+
 ## Local Development
 
 Kubeflow Trainer client supports local development without needing a Kubernetes cluster.
