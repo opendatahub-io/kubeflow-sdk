@@ -11,6 +11,10 @@
 
 Fixes #
 
+**Verification steps** _(required; provide valid, reproducible steps for reviewers to verify your changes, e.g. setup, commands, expected outcome, notebooks)_:
+
+_Example: 1. Check out this branch. 2. Run `make test-python`. 3. Confirm that …_
+
 **Checklist:**
 
 - [ ] [Docs](https://www.kubeflow.org/docs/) included if any changes are user facing
