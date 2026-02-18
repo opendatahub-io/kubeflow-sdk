@@ -344,7 +344,7 @@ def get_cluster_custom_object_response(*args, **kwargs):
 
 
 def get_namespaced_custom_object_response(*args, **kwargs):
-    """Return a mocked TrainJob object."""
+    """Return a mocked TrainJob or TrainingRuntime object."""
     mock_thread = Mock()
     if args[2] == TIMEOUT or args[4] == TIMEOUT:
         raise multiprocessing.TimeoutError()
@@ -352,6 +352,12 @@ def get_namespaced_custom_object_response(*args, **kwargs):
         raise RuntimeError()
     if args[3] == TRAIN_JOBS:  # TODO: review this.
         mock_thread.get.return_value = add_status(create_train_job(train_job_name=args[4]))
+    elif args[3] == constants.TRAINING_RUNTIME_PLURAL:
+        # Return a namespaced TrainingRuntime for the requested name.
+        mock_thread.get.return_value = normalize_model(
+            create_training_runtime(name=args[4]),
+            models.TrainerV1alpha1TrainingRuntime,
+        )
 
     return mock_thread
 
@@ -379,7 +385,7 @@ def add_status(
 
 
 def list_namespaced_custom_object_response(*args, **kwargs):
-    """Return a list of mocked TrainJob objects."""
+    """Return a list of mocked TrainJob or TrainingRuntime objects."""
     mock_thread = Mock()
     if args[2] == TIMEOUT:
         raise multiprocessing.TimeoutError()
@@ -393,6 +399,16 @@ def list_namespaced_custom_object_response(*args, **kwargs):
         mock_thread.get.return_value = normalize_model(
             models.TrainerV1alpha1TrainJobList(items=items),
             models.TrainerV1alpha1TrainJobList,
+        )
+    elif args[3] == constants.TRAINING_RUNTIME_PLURAL:
+        # Added namespace-scoped runtimes for testing.
+        items = [
+            create_training_runtime(name="runtime-1"),
+            create_training_runtime(name="ns-runtime-2"),
+        ]
+        mock_thread.get.return_value = normalize_model(
+            models.TrainerV1alpha1TrainingRuntimeList(items=items),
+            models.TrainerV1alpha1TrainingRuntimeList,
         )
 
     return mock_thread
@@ -409,6 +425,7 @@ def list_cluster_custom_object(*args, **kwargs):
         items = [
             create_cluster_training_runtime(name="runtime-1"),
             create_cluster_training_runtime(name="runtime-2"),
+            create_cluster_training_runtime(name="runtime-3"),
         ]
         mock_thread.get.return_value = normalize_model(
             models.TrainerV1alpha1ClusterTrainingRuntimeList(items=items),
@@ -504,6 +521,22 @@ def normalize_model(model_obj, model_class):
     return model_class.from_dict(model_obj.to_dict())
 
 
+def make_error_thread(exc_type):
+    """Helper: return a mock thread whose .get() raises exc_type when called."""
+    t = Mock()
+    if exc_type is TIMEOUT:
+        t.get.side_effect = multiprocessing.TimeoutError()
+    elif exc_type is RUNTIME:
+        t.get.side_effect = RuntimeError()
+    else:
+        # defensive: allow passing an exception class or instance
+        if isinstance(exc_type, Exception):
+            t.get.side_effect = exc_type
+        else:
+            t.get.side_effect = exc_type()
+    return t
+
+
 # --------------------------
 # Object Creators
 # --------------------------
@@ -573,6 +606,37 @@ def create_cluster_training_runtime(
     )
 
 
+def create_training_runtime(
+    name: str,
+    namespace: str = "default",
+) -> models.TrainerV1alpha1TrainingRuntime:
+    """Create a mock namespaced TrainingRuntime object (not cluster-scoped)."""
+    return models.TrainerV1alpha1TrainingRuntime(
+        apiVersion=constants.API_VERSION,
+        kind=constants.TRAINING_RUNTIME_KIND,
+        metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
+            name=name,
+            namespace=namespace,
+            labels={constants.RUNTIME_FRAMEWORK_LABEL: name},
+        ),
+        spec=models.TrainerV1alpha1TrainingRuntimeSpec(
+            mlPolicy=models.TrainerV1alpha1MLPolicy(
+                torch=models.TrainerV1alpha1TorchMLPolicySource(
+                    numProcPerNode=models.IoK8sApimachineryPkgUtilIntstrIntOrString(2)
+                ),
+                numNodes=2,
+            ),
+            template=models.TrainerV1alpha1JobSetTemplateSpec(
+                metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
+                    name=name,
+                    namespace=namespace,
+                ),
+                spec=models.JobsetV1alpha2JobSetSpec(replicatedJobs=[get_replicated_job()]),
+            ),
+        ),
+    )
+
+
 def get_replicated_job() -> models.JobsetV1alpha2ReplicatedJob:
     return models.JobsetV1alpha2ReplicatedJob(
         name="node",
@@ -612,10 +676,9 @@ def create_runtime_type(
         image="example.com/test-runtime",
     )
     trainer.set_command(constants.TORCH_COMMAND)
-    return types.Runtime(
-        name=name,
-        trainer=trainer,
-    )
+    # Namespaced TrainingRuntime objects and default torch runtime use namespace scope;
+    # other runtimes created as cluster-scoped use cluster scope.
+    return types.Runtime(name=name, trainer=trainer)
 
 
 def get_train_job_data_type(
@@ -767,7 +830,9 @@ def test_verify_backend(test_case):
             name="valid flow with all defaults",
             expected_status=SUCCESS,
             config={"name": TORCH_RUNTIME},
-            expected_output=create_runtime_type(name=TORCH_RUNTIME),
+            expected_output=create_runtime_type(
+                name=TORCH_RUNTIME,
+            ),
         ),
         TestCase(
             name="timeout error when getting runtime",
@@ -801,31 +866,100 @@ def test_get_runtime(kubernetes_backend, test_case):
 @pytest.mark.parametrize(
     "test_case",
     [
+        # happy path: both namespace + cluster succeed -> full set
+        # skip runtime-1 cluster runtime to test deduplication logic
+        # (same runtime in both namespace and cluster should only be returned once, with namespace scope)
         TestCase(
             name="valid flow with all defaults",
             expected_status=SUCCESS,
             config={"name": LIST_RUNTIMES},
             expected_output=[
                 create_runtime_type(name="runtime-1"),
+                create_runtime_type(name="ns-runtime-2"),
                 create_runtime_type(name="runtime-2"),
+                create_runtime_type(name="runtime-3"),
             ],
+        ),
+        # namespace retrieval fails (timeout) but cluster succeeds -> expect TimeoutError
+        TestCase(
+            name="namespace fails but cluster succeeds",
+            expected_status=FAILED,
+            config={"namespace": TIMEOUT, "name": LIST_RUNTIMES},
+            expected_error=TimeoutError,
+        ),
+        # cluster retrieval fails but namespace succeeds -> expect TimeoutError
+        TestCase(
+            name="cluster fails but namespace succeeds",
+            expected_status=FAILED,
+            config={
+                "namespace": DEFAULT_NAMESPACE,
+                "name": LIST_RUNTIMES,
+                "cluster_error": TIMEOUT,
+            },
+            expected_error=TimeoutError,
+        ),
+        # both fail with timeout -> expect TimeoutError
+        TestCase(
+            name="both fail with timeout",
+            expected_status=FAILED,
+            config={"namespace_error": TIMEOUT, "name": LIST_RUNTIMES, "cluster_error": TIMEOUT},
+            expected_error=TimeoutError,
+        ),
+        # both fail with other errors -> expect RuntimeError
+        TestCase(
+            name="both fail with runtime error",
+            expected_status=FAILED,
+            config={"namespace_error": RUNTIME, "name": LIST_RUNTIMES, "cluster_error": RUNTIME},
+            expected_error=RuntimeError,
         ),
     ],
 )
 def test_list_runtimes(kubernetes_backend, test_case):
-    """Test KubernetesBackend.list_runtimes with basic success path."""
+    """Test KubernetesBackend.list_runtimes with both success and error scenarios."""
     print("Executing test:", test_case.name)
-    try:
-        kubernetes_backend.namespace = test_case.config.get("namespace", DEFAULT_NAMESPACE)
-        runtimes = kubernetes_backend.list_runtimes()
 
-        assert test_case.expected_status == SUCCESS
+    # --- Prepare namespace behavior ---
+    ns_cfg = test_case.config.get(
+        "namespace_error", test_case.config.get("namespace", DEFAULT_NAMESPACE)
+    )
+
+    # If tests passed a sentinel (TIMEOUT or RUNTIME) in `namespace`, don't set the backend
+    # namespace to that sentinel (that causes the fixture helper to raise at call time).
+    # Instead, keep a real namespace and inject a thread whose .get() raises as desired.
+    if ns_cfg in {TIMEOUT, RUNTIME}:
+        # keep a safe namespace for API call signatures
+        kubernetes_backend.namespace = DEFAULT_NAMESPACE
+        # inject mock thread that will raise on .get()
+        kubernetes_backend.custom_api.list_namespaced_custom_object = Mock(
+            return_value=make_error_thread(ns_cfg)
+        )
+    else:
+        kubernetes_backend.namespace = ns_cfg
+
+    # --- Prepare cluster behavior if test requests cluster_error ---
+    if "cluster_error" in test_case.config:
+        cluster_err = test_case.config["cluster_error"]
+        kubernetes_backend.custom_api.list_cluster_custom_object = Mock(
+            return_value=make_error_thread(cluster_err)
+        )
+
+    # Existing small compatibility hook: allow callers to set attributes on backend if needed
+    if "cluster_runtimes" in test_case.config:
+        # optional: let tests override cluster runtime list by assigning a mock thread
+        mock_thread = Mock()
+        mock_thread.get.return_value = test_case.config["cluster_runtimes"]
+        kubernetes_backend.custom_api.list_cluster_custom_object = Mock(return_value=mock_thread)
+
+    # --- Run assertion according to expected_status ---
+    if test_case.expected_status == SUCCESS:
+        runtimes = kubernetes_backend.list_runtimes()
         assert isinstance(runtimes, list)
         assert all(isinstance(r, types.Runtime) for r in runtimes)
+        # Compare as dicts for stable ordering and equality semantics
         assert [asdict(r) for r in runtimes] == [asdict(r) for r in test_case.expected_output]
-
-    except Exception as e:
-        assert type(e) is test_case.expected_error
+    else:
+        with pytest.raises(test_case.expected_error):
+            kubernetes_backend.list_runtimes()
     print("test execution complete")
 
 
@@ -835,7 +969,11 @@ def test_list_runtimes(kubernetes_backend, test_case):
         TestCase(
             name="valid flow with custom trainer runtime",
             expected_status=SUCCESS,
-            config={"runtime": create_runtime_type(name=TORCH_RUNTIME)},
+            config={
+                "runtime": create_runtime_type(
+                    name=TORCH_RUNTIME,
+                )
+            },
         ),
         TestCase(
             name="value error with builtin trainer runtime",
