@@ -14,7 +14,6 @@
 
 import abc
 from collections.abc import Callable, Iterator
-from typing import Optional, Union
 
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import RHAITrainer
@@ -42,6 +41,7 @@ class RuntimeBackend(abc.ABC):
     @abc.abstractmethod
     def train(
         self,
+<<<<<<< HEAD
         runtime: Optional[Union[str, types.Runtime]] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
@@ -53,11 +53,20 @@ class RuntimeBackend(abc.ABC):
             ]
         ] = None,
         options: Optional[list] = None,
+=======
+        runtime: str | types.Runtime | None = None,
+        initializer: types.Initializer | None = None,
+        trainer: types.CustomTrainer
+        | types.CustomTrainerContainer
+        | types.BuiltinTrainer
+        | None = None,
+        options: list | None = None,
+>>>>>>> upstream/main
     ) -> str:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def list_jobs(self, runtime: Optional[types.Runtime] = None) -> list[types.TrainJob]:
+    def list_jobs(self, runtime: types.Runtime | None = None) -> list[types.TrainJob]:
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -91,7 +100,7 @@ class RuntimeBackend(abc.ABC):
         status: set[str] = {constants.TRAINJOB_COMPLETE},
         timeout: int = 600,
         polling_interval: int = 2,
-        callbacks: Optional[list[Callable[[types.TrainJob], None]]] = None,
+        callbacks: list[Callable[[types.TrainJob], None]] | None = None,
     ) -> types.TrainJob:
         raise NotImplementedError()
 
