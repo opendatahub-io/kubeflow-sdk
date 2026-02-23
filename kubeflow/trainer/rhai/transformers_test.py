@@ -14,6 +14,7 @@
 
 """Tests for TransformersTrainer and instrumentation wrapper generation."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -2200,6 +2201,174 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
     # Verify cloud_remote_storage_uri is in the generated config
     assert "cloud_remote_storage_uri" in checkpoint_code
     assert "s3://my-bucket/model-checkpoints" in checkpoint_code
+
+    print("test execution complete")
+
+
+def _run_checkpoint_validation_subprocess(
+    tmp_path: Path, test_name: str, checkpoint_code: str, training_args_body: str
+) -> tuple[int, str, str]:
+    """Run injected checkpoint code in a subprocess and return exit code and output."""
+    import subprocess
+    import sys
+
+    fsspec_stub = """
+class MockS3FileSystem:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def pipe(self, path, data):
+        pass
+
+    def cat(self, path):
+        return b"test"
+
+    def rm_file(self, path):
+        pass
+
+def filesystem(protocol, **kwargs):
+    return MockS3FileSystem()
+"""
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+
+class Tensor:
+    pass
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def train(self, resume_from_checkpoint=None, **train_kwargs):
+        return {"train_called": True, "resume_from": resume_from_checkpoint}
+"""
+
+    test_file = tmp_path / f"{test_name}.py"
+    test_code = f"""
+import sys
+import types
+
+fsspec_module = types.ModuleType('fsspec')
+exec('''{fsspec_stub}''', fsspec_module.__dict__)
+sys.modules['fsspec'] = fsspec_module
+
+callbacks_module = types.ModuleType('fsspec.callbacks')
+callbacks_module.Callback = type('Callback', (), {{}})
+sys.modules['fsspec.callbacks'] = callbacks_module
+fsspec_module.callbacks = callbacks_module
+
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+{checkpoint_code}
+
+from transformers import Trainer
+
+class TrainingArgs:
+{training_args_body}
+
+try:
+    Trainer(args=TrainingArgs())
+    print("NO_ERROR")
+    sys.exit(1)
+except ValueError as e:
+    print(str(e))
+    sys.exit(0)
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+def test_save_only_model_validation_error(tmp_path):
+    """Test save_only_model=True raises a validation error."""
+    print("Executing test: save_only_model validation error")
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/kubeflow-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    returncode, stdout, stderr = _run_checkpoint_validation_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_save_only_model_validation_error",
+        checkpoint_code=checkpoint_code,
+        training_args_body="    save_only_model = True\n",
+    )
+
+    if returncode != 0:
+        print(f"Test stderr:\n{stderr}")
+
+    assert returncode == 0
+    assert "save_only_model=True is incompatible with Kubeflow checkpointing" in stdout
+
+    print("test execution complete")
+
+
+def test_save_on_each_node_validation_error(tmp_path):
+    """Test save_on_each_node=True raises a validation error with S3."""
+    print("Executing test: save_on_each_node validation error")
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/kubeflow-checkpoints",
+        cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    returncode, stdout, stderr = _run_checkpoint_validation_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_save_on_each_node_validation_error",
+        checkpoint_code=checkpoint_code,
+        training_args_body="    save_on_each_node = True\n",
+    )
+
+    if returncode != 0:
+        print(f"Test stderr:\n{stderr}")
+
+    assert returncode == 0
+    assert "save_on_each_node=True is not supported when output_dir is an S3 URI" in stdout
 
     print("test execution complete")
 

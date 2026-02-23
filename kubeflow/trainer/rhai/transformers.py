@@ -233,7 +233,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         print(f"{_log_prefix} {message}", flush=True)
 
     class CheckpointManager:
-        """JIT checkpoint manager."""
+        """Manages async just-in-time checkpointing on SIGTERM signal using CUDA streams."""
 
         def __init__(self, trainer):
             self.trainer = trainer
@@ -252,7 +252,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 _log("CUDA not available, checkpointing will be synchronous")
 
         def setup_signal_handler(self):
-            """Register SIGTERM handler."""
+            """Register SIGTERM signal handler for JIT checkpointing."""
             self._original_sigterm_handler = signal.signal(signal.SIGTERM, self._sigterm_handler)
             _log("JIT checkpoint signal handler registered for SIGTERM")
 
@@ -271,7 +271,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             self.checkpoint_thread.start()
 
         def _async_checkpoint(self):
-            """Checkpoint asynchronously."""
+            """Execute checkpoint asynchronously, waiting if in optimizer step."""
             try:
                 # Wait if we're currently in optimizer step (unsafe to checkpoint)
                 while self._in_optimizer_step:
@@ -341,7 +341,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             return self.checkpoint_requested
 
     class JITCheckpointCallback(TrainerCallback):
-        """JIT checkpoint callback."""
+        """Transformers callback that integrates JIT checkpointing with trainer lifecycle."""
 
         def __init__(self, cloud_remote_storage_uri: Optional[str] = None) -> None:
             self.jit_manager = None
@@ -422,7 +422,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 ) from e
 
         def _calculate_local_dir_size(self, path: str) -> int:
-            """Total size of local directory."""
+            """Calculate total size of local directory."""
             import contextlib
 
             total = 0
@@ -433,7 +433,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             return total
 
         def _cloud_storage_progress_callback(self, operation: str, total_size: int):
-            """Progress callback."""
+            """Create progress callback with byte-level tracking via branched()."""
             from fsspec.callbacks import Callback
 
             class ProgressCallback(Callback):
@@ -661,7 +661,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 _log("Background upload worker stopped")
 
         def on_init_end(self, args, state, control, **kwargs):
-            """Download latest checkpoint from S3."""
+            """Download latest checkpoint from S3 (local rank 0)."""
             if not self.remote_fs:
                 # Return since cloud storage not configured by user
                 return
