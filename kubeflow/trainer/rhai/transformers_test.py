@@ -2386,8 +2386,8 @@ def test_async_upload_worker_scaffolding():
     assert "LifoQueue" in checkpoint_code
     assert "daemon=False" in checkpoint_code
     assert "KubeflowCheckpointUploader" in checkpoint_code
-    assert "self._upload_queue.join()" in checkpoint_code
-    assert "self._upload_thread.join()" in checkpoint_code
+    assert "1 hour" in checkpoint_code
+    assert "self._upload_thread.join(timeout=" in checkpoint_code
 
     print("test execution complete")
 
@@ -2675,6 +2675,7 @@ def test_s3_download_execution(test_case, tmp_path):
     import subprocess
     import sys
 
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
     from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
     checkpoint_code = get_jit_checkpoint_injection_code(
@@ -2687,18 +2688,16 @@ def test_s3_download_execution(test_case, tmp_path):
     checkpoints = test_case.config["checkpoints"]
     if checkpoints is None:
         # Simulate remote storage path not existing yet
-        ls_implementation = '        raise FileNotFoundError("Remote storage path does not exist")'
+        ls_implementation = (
+            '            raise FileNotFoundError("Remote storage path does not exist")'
+        )
     else:
         checkpoints_list = ", ".join([f'"{cp}"' for cp in checkpoints])
-        ls_implementation = f"        return [{checkpoints_list}]"
+        ls_implementation = f"            return [{checkpoints_list}]"
 
-    incomplete_checks = []
-    for marker in test_case.config["incomplete_markers"]:
-        incomplete_checks.append(
-            f'        if "{marker}" in path and "checkpoint-is-incomplete.txt" in path:\n'
-            f"            return True"
-        )
-    incomplete_logic = "\n".join(incomplete_checks) if incomplete_checks else "        pass"
+    incomplete_markers = ", ".join(
+        [f'"{marker}"' for marker in test_case.config["incomplete_markers"]]
+    )
 
     fsspec_stub = f"""
 class MockS3FileSystem:
@@ -2706,10 +2705,13 @@ class MockS3FileSystem:
         pass
 
     def ls(self, path, detail=False):
+        if path == "":
 {ls_implementation}
+        if path in [{incomplete_markers}]:
+            return [f"{{path}}/{CHECKPOINT_INCOMPLETE_MARKER}.node-0-rank-0"]
+        return []
 
     def exists(self, path):
-{incomplete_logic}
         return False
 
     def pipe(self, path, data):

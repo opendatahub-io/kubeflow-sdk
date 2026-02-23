@@ -519,12 +519,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         def _upload_checkpoint_to_cloud(self, task: tuple) -> None:
             """Upload checkpoint."""
-            staging_path, checkpoint_name, total_size, is_global_rank_0 = task
-            incomplete_marker_path = f"{checkpoint_name}/{CHECKPOINT_INCOMPLETE_MARKER}"
+            staging_path, checkpoint_name, total_size, incomplete_marker_name = task
+            incomplete_marker_path = f"{checkpoint_name}/{incomplete_marker_name}"
 
             # Create .incomplete sentinel so resume can skip in-flight uploads.
-            if is_global_rank_0:
-                _log(f"Creating .incomplete marker in S3: {checkpoint_name}")
+            _log(f"Creating .incomplete marker in S3: {checkpoint_name}")
             try:
                 self.remote_fs.pipe(
                     incomplete_marker_path,
@@ -551,12 +550,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             _log(f"Upload complete: {checkpoint_name}")
 
-            # Delete .incomplete sentinel (global rank 0 only)
-            if is_global_rank_0:
-                try:
-                    self.remote_fs.rm_file(incomplete_marker_path)
-                except Exception as e:
-                    _log(f"Warning: Failed to remove remote file '{incomplete_marker_path}': {e}")
+            # Delete .incomplete sentinel for this uploader
+            try:
+                self.remote_fs.rm_file(incomplete_marker_path)
+            except Exception as e:
+                _log(f"Warning: Failed to remove remote file '{incomplete_marker_path}': {e}")
 
             # Delete local staging checkpoint
             try:
@@ -570,7 +568,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         def _parallel_upload_files(
             self, staging_path: str, checkpoint_name: str, total_size: int
-        ) -> list:
+        ) -> list[tuple[str, str]]:
             """Upload files in parallel; return failed list."""
             # Collect all files to upload
             files_to_upload = []
@@ -628,7 +626,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             return failed_files
 
-        def _retry_failed_files(self, failed_files: list) -> list:
+        def _retry_failed_files(self, failed_files: list[tuple[str, str]]) -> list[tuple[str, str]]:
             """Retry failed files."""
             remaining_failures = []
 
@@ -655,10 +653,12 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             """Stop upload worker."""
             if self._upload_queue is not None and self._upload_thread is not None:
                 _log("Waiting for background uploads to complete...")
-                self._upload_queue.join()  # Wait for all tasks to finish
                 self._shutdown_event.set()  # Signal shutdown
-                self._upload_thread.join()  # Wait for thread to exit
-                _log("Background upload worker stopped")
+                self._upload_thread.join(timeout=3600)  # Wait up to 1 hour
+                if self._upload_thread.is_alive():
+                    _log("Warning: Upload worker thread is still running after 1 hour timeout")
+                else:
+                    _log("Background upload worker stopped")
 
         def on_init_end(self, args, state, control, **kwargs):
             """Download latest checkpoint from S3 (local rank 0)."""
@@ -686,8 +686,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
                 for step in steps:
                     name = f"checkpoint-{step}"
-                    incomplete_marker = f"{name}/{CHECKPOINT_INCOMPLETE_MARKER}"
-                    if self.remote_fs.exists(incomplete_marker):
+                    try:
+                        entries = self.remote_fs.ls(name, detail=False)
+                    except FileNotFoundError:
+                        entries = []
+                    if any(CHECKPOINT_INCOMPLETE_MARKER in entry for entry in entries):
                         continue
 
                     try:
@@ -729,15 +732,13 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 # S3 storage not configured, skip upload
                 return
 
-            # Check for background upload errors and propagate to main thread
-            self._check_upload_error()
-
             # Barrier before staging checkpoint to ensure all ranks finished saving their files
             self._wait_for_all_ranks("save")
 
-            is_local_rank_0 = args.local_process_index == 0
-            is_global_rank_0 = state.is_world_process_zero
+            # Check for background upload errors and propagate to main thread
+            self._check_upload_error()
 
+            is_local_rank_0 = args.local_process_index == 0
             # Only local rank 0 stages and queues uploads
             if is_local_rank_0:
                 current_step = state.global_step
@@ -769,11 +770,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Start upload worker if not yet running
                     self._start_upload_worker()
                     # Queue upload task (non-blocking, training continues immediately)
+                    node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
+                    marker_name = (
+                        f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-"
+                        f"rank-{args.local_process_index}"
+                    )
                     task = (
                         staging_checkpoint_path,
                         checkpoint_name,
                         total_size,
-                        is_global_rank_0,
+                        marker_name,
                     )
                     self._upload_queue.put(task)
                     _log(
