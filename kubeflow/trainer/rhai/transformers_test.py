@@ -14,6 +14,7 @@
 
 """Tests for TransformersTrainer and instrumentation wrapper generation."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -1609,6 +1610,10 @@ class cuda:
 
 class distributed:
     @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
     def is_initialized():
         return False
 
@@ -1784,6 +1789,10 @@ class cuda:
         return True
 
 class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
     @staticmethod
     def is_initialized():
         return False
@@ -2196,6 +2205,394 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
     print("test execution complete")
 
 
+def _run_checkpoint_validation_subprocess(
+    tmp_path: Path, test_name: str, checkpoint_code: str, training_args_body: str
+) -> tuple[int, str, str]:
+    """Run injected checkpoint code in a subprocess and return exit code and output."""
+    import subprocess
+    import sys
+
+    fsspec_stub = """
+class MockS3FileSystem:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def pipe(self, path, data):
+        pass
+
+    def cat(self, path):
+        return b"test"
+
+    def rm_file(self, path):
+        pass
+
+def filesystem(protocol, **kwargs):
+    return MockS3FileSystem()
+"""
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+
+class Tensor:
+    pass
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def train(self, resume_from_checkpoint=None, **train_kwargs):
+        return {"train_called": True, "resume_from": resume_from_checkpoint}
+"""
+
+    test_file = tmp_path / f"{test_name}.py"
+    test_code = f"""
+import sys
+import types
+
+fsspec_module = types.ModuleType('fsspec')
+exec('''{fsspec_stub}''', fsspec_module.__dict__)
+sys.modules['fsspec'] = fsspec_module
+
+callbacks_module = types.ModuleType('fsspec.callbacks')
+callbacks_module.Callback = type('Callback', (), {{}})
+sys.modules['fsspec.callbacks'] = callbacks_module
+fsspec_module.callbacks = callbacks_module
+
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+{checkpoint_code}
+
+from transformers import Trainer
+
+class TrainingArgs:
+{training_args_body}
+
+try:
+    Trainer(args=TrainingArgs())
+    print("NO_ERROR")
+    sys.exit(1)
+except ValueError as e:
+    print(str(e))
+    sys.exit(0)
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+def test_save_only_model_validation_error(tmp_path):
+    """Test save_only_model=True raises a validation error."""
+    print("Executing test: save_only_model validation error")
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/kubeflow-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    returncode, stdout, stderr = _run_checkpoint_validation_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_save_only_model_validation_error",
+        checkpoint_code=checkpoint_code,
+        training_args_body="    save_only_model = True\n",
+    )
+
+    if returncode != 0:
+        print(f"Test stderr:\n{stderr}")
+
+    assert returncode == 0
+    assert "save_only_model=True is incompatible with Kubeflow checkpointing" in stdout
+
+    print("test execution complete")
+
+
+def test_save_on_each_node_validation_error(tmp_path):
+    """Test save_on_each_node=True raises a validation error with S3."""
+    print("Executing test: save_on_each_node validation error")
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/kubeflow-checkpoints",
+        cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    returncode, stdout, stderr = _run_checkpoint_validation_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_save_on_each_node_validation_error",
+        checkpoint_code=checkpoint_code,
+        training_args_body="    save_on_each_node = True\n",
+    )
+
+    if returncode != 0:
+        print(f"Test stderr:\n{stderr}")
+
+    assert returncode == 0
+    assert "save_on_each_node=True is not supported when output_dir is an S3 URI" in stdout
+
+    print("test execution complete")
+
+
+def test_async_upload_worker_scaffolding():
+    """Test async upload worker scaffolding is present in generated code."""
+    print("Executing test: async upload worker scaffolding")
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/kubeflow-checkpoints",
+        cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    assert "LifoQueue" in checkpoint_code
+    assert "daemon=False" in checkpoint_code
+    assert "KubeflowCheckpointUploader" in checkpoint_code
+    assert "1 hour" in checkpoint_code
+    assert "self._upload_thread.join(timeout=" in checkpoint_code
+
+    print("test execution complete")
+
+
+def test_async_parallel_upload_scaffolding():
+    """Test parallel upload scaffolding is present in generated code."""
+    print("Executing test: async parallel upload scaffolding")
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/kubeflow-checkpoints",
+        cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    assert "ThreadPoolExecutor" in checkpoint_code
+    assert "as_completed" in checkpoint_code
+    assert "_parallel_upload_files" in checkpoint_code
+
+    print("test execution complete")
+
+
+def test_async_upload_execution(tmp_path):
+    """Integration test: async upload runs and cleans staging."""
+    print("Executing test: async upload execution")
+
+    import subprocess
+    import sys
+
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
+
+    output_dir = tmp_path / "checkpoints"
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir=str(output_dir),
+        cloud_remote_storage_uri="s3://test-bucket/model-checkpoints",
+        enable_jit_checkpoint=True,
+    )
+
+    fsspec_stub = """
+class MockS3FileSystem:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def ls(self, path, detail=False):
+        return []
+
+    def exists(self, path):
+        return False
+
+    def pipe(self, path, data):
+        print(f"PIPE={path}")
+
+    def cat(self, path):
+        return b"test"
+
+    def put_file(self, local, remote):
+        print(f"PUT_FILE={remote}")
+
+    def rm_file(self, path):
+        print(f"RM_FILE={path}")
+
+    def get(self, src, dst, recursive=False, callback=None):
+        pass
+
+    def du(self, path, total=True, maxdepth=None):
+        return 0
+
+def filesystem(protocol, **kwargs):
+    return MockS3FileSystem()
+"""
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 0
+        self.is_world_process_zero = True
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.model = None
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def train(self, resume_from_checkpoint=None):
+        return {"train_called": True, "resume_from": resume_from_checkpoint}
+"""
+
+    test_file = tmp_path / "test_async_upload_execution.py"
+
+    test_code = f"""
+import os
+import sys
+import types
+
+fsspec_module = types.ModuleType('fsspec')
+exec('''{fsspec_stub}''', fsspec_module.__dict__)
+sys.modules['fsspec'] = fsspec_module
+
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+{checkpoint_code}
+
+from transformers import TrainerCallback
+
+callback_class = None
+for name, obj in list(globals().items()):
+    if isinstance(obj, type) and issubclass(obj, TrainerCallback) and name != 'TrainerCallback':
+        callback_class = obj
+        break
+
+if not callback_class:
+    print("ERROR: JITCheckpointCallback not found")
+    sys.exit(1)
+
+callback = callback_class(cloud_remote_storage_uri="s3://test-bucket/model-checkpoints")
+
+class MockArgs:
+    output_dir = r"{output_dir}"
+    local_process_index = 0
+
+class MockState:
+    global_step = 3
+    is_world_process_zero = True
+
+checkpoint_path = os.path.join(MockArgs.output_dir, "checkpoint-3")
+os.makedirs(checkpoint_path, exist_ok=True)
+with open(os.path.join(checkpoint_path, "model.bin"), "w", encoding="utf-8") as f:
+    f.write("data")
+
+callback.on_save(MockArgs(), MockState(), None)
+callback._shutdown_upload_worker()
+
+if True:
+    staging_checkpoint = os.path.join(
+        MockArgs.output_dir, CHECKPOINT_STAGING_DIR, "checkpoint-3"
+    )
+    print(f"STAGING_CHECKPOINT_EXISTS={{os.path.exists(staging_checkpoint)}}")
+    print(f"CHECKPOINT_EXISTS={{os.path.exists(checkpoint_path)}}")
+
+print("TEST_COMPLETE=True")
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    output = result.stdout
+    print(f"Test output:\\n{output}")
+
+    if result.returncode != 0:
+        print(f"Test stderr:\\n{result.stderr}")
+
+    assert result.returncode == 0, f"Execution failed with return code {result.returncode}"
+    assert "TEST_COMPLETE=True" in output
+    assert f"PIPE=checkpoint-3/{CHECKPOINT_INCOMPLETE_MARKER}" in output
+    assert "PUT_FILE=checkpoint-3/model.bin" in output
+    assert f"RM_FILE=checkpoint-3/{CHECKPOINT_INCOMPLETE_MARKER}" in output
+    assert "STAGING_CHECKPOINT_EXISTS=False" in output
+    assert "CHECKPOINT_EXISTS=False" in output
+
+    print("test execution complete")
+
+
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -2278,6 +2675,7 @@ def test_s3_download_execution(test_case, tmp_path):
     import subprocess
     import sys
 
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
     from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
     checkpoint_code = get_jit_checkpoint_injection_code(
@@ -2290,18 +2688,16 @@ def test_s3_download_execution(test_case, tmp_path):
     checkpoints = test_case.config["checkpoints"]
     if checkpoints is None:
         # Simulate remote storage path not existing yet
-        ls_implementation = '        raise FileNotFoundError("Remote storage path does not exist")'
+        ls_implementation = (
+            '            raise FileNotFoundError("Remote storage path does not exist")'
+        )
     else:
         checkpoints_list = ", ".join([f'"{cp}"' for cp in checkpoints])
-        ls_implementation = f"        return [{checkpoints_list}]"
+        ls_implementation = f"            return [{checkpoints_list}]"
 
-    incomplete_checks = []
-    for marker in test_case.config["incomplete_markers"]:
-        incomplete_checks.append(
-            f'        if "{marker}" in path and "checkpoint-is-incomplete.txt" in path:\n'
-            f"            return True"
-        )
-    incomplete_logic = "\n".join(incomplete_checks) if incomplete_checks else "        pass"
+    incomplete_markers = ", ".join(
+        [f'"{marker}"' for marker in test_case.config["incomplete_markers"]]
+    )
 
     fsspec_stub = f"""
 class MockS3FileSystem:
@@ -2309,10 +2705,13 @@ class MockS3FileSystem:
         pass
 
     def ls(self, path, detail=False):
+        if path == "":
 {ls_implementation}
+        if path in [{incomplete_markers}]:
+            return [f"{{path}}/{CHECKPOINT_INCOMPLETE_MARKER}.node-0-rank-0"]
+        return []
 
     def exists(self, path):
-{incomplete_logic}
         return False
 
     def pipe(self, path, data):
@@ -2354,6 +2753,10 @@ def filesystem(protocol, **kwargs):
 
     torch_stub = """
 class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
     @staticmethod
     def is_initialized():
         return False
