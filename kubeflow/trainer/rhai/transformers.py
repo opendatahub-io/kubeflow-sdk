@@ -205,6 +205,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     """Checkpoint instrumentation injected into training pods."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import os
+    from pathlib import PurePosixPath
     from queue import Empty, LifoQueue
     import re
     import shutil
@@ -248,8 +249,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 if torch.cuda.is_available():
                     self.checkpoint_stream = torch.cuda.Stream()
                     _log("CUDA stream initialized for async checkpointing")
-            except (ImportError, AttributeError):
-                _log("CUDA not available, checkpointing will be synchronous")
+            except (AttributeError, RuntimeError, OSError) as e:
+                _log(f"CUDA not available, checkpointing will be synchronous: {e}")
 
         def setup_signal_handler(self):
             """Register SIGTERM signal handler for JIT checkpointing."""
@@ -303,7 +304,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         with open(sentinel_file, "w") as f:
                             f.write(f"Checkpoint started at step {current_step}")
                     except Exception as e:
-                        _log(f"Warning: Failed to write sentinel file: {e}")
+                        _log(
+                            f"Warning: Failed to write sentinel file: {e}. "
+                            "Check local disk space and write permissions in output_dir; "
+                            "this checkpoint may be treated as complete during resume."
+                        )
 
                 # Checkpoint using dedicated CUDA stream
                 if self.checkpoint_stream is not None:
@@ -326,12 +331,20 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     try:
                         os.remove(sentinel_file)
                     except Exception as e:
-                        _log(f"Warning: Failed to remove sentinel file: {e}")
+                        _log(
+                            f"Warning: Failed to remove sentinel file: {e}. "
+                            "Check permissions; a stale marker may cause this checkpoint "
+                            f"to be skipped. Remove it manually from: {sentinel_file}"
+                        )
 
                 _log(f"JIT checkpoint completed at step {current_step}")
 
             except Exception as e:
-                _log(f"Failed to save JIT checkpoint: {e}")
+                _log(
+                    f"Failed to save JIT checkpoint: {e}. "
+                    "Check local disk space, write permissions, and model save errors; "
+                    "training will resume from lastest periodic checkpoint."
+                )
                 import traceback
 
                 traceback.print_exc()
@@ -482,6 +495,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         def _start_upload_worker(self) -> None:
             """Start background upload worker."""
             if self._upload_queue is None:
+                # Use LIFO to prioritize the latest checkpoint
+                # when resuming after interruptions the latest state is picked.
                 self._upload_queue = LifoQueue()
                 self._shutdown_event = threading.Event()
                 self._upload_thread = threading.Thread(
@@ -494,11 +509,13 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         def _upload_worker_loop(self) -> None:
             """Upload worker loop."""
-            while not self._shutdown_event.is_set():
+            while True:
                 try:
                     # Use timeout to periodically check shutdown event
                     task = self._upload_queue.get(timeout=1.0)
                 except Empty:
+                    if self._shutdown_event.is_set():
+                        break
                     continue
 
                 try:
@@ -509,11 +526,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     with self._upload_error_lock:
                         self._upload_error = RuntimeError(
                             f"[Kubeflow] Background upload failed for {checkpoint_name}: {e}. "
-                            "This may be caused by network issues, S3 outage, or "
-                            "permission changes. Verify S3 connectivity and retry the training job."
+                            "To fix: verify S3 endpoint/credentials, bucket permissions, "
+                            "and network connectivity, then retry the training job."
                         )
                         self._upload_error.__cause__ = e
-                    _log(f"ERROR: Background upload failed for {checkpoint_name}: {e}")
+                    _log(
+                        f"ERROR: Background upload failed for {checkpoint_name}: {e}. "
+                        "Check S3 connectivity/permissions and retry."
+                    )
                 finally:
                     self._upload_queue.task_done()
 
@@ -530,23 +550,22 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     f"Upload started for {checkpoint_name}".encode(),
                 )
             except Exception as e:
-                _log(f"Warning: Failed to write .incomplete marker for {checkpoint_name}: {e}")
+                _log(
+                    f"Warning: Failed to write .incomplete marker for {checkpoint_name}: {e}. "
+                    "Check S3 write/delete permissions; resume safety may be affected."
+                )
 
             # Upload files in parallel
             _log(f"Starting parallel upload to S3: {checkpoint_name}")
 
             failed_files = self._parallel_upload_files(staging_path, checkpoint_name, total_size)
 
-            # Retry failed files if any
             if failed_files:
-                _log(f"Retrying {len(failed_files)} failed files for {checkpoint_name}")
-                remaining_failures = self._retry_failed_files(failed_files)
-
-                if remaining_failures:
-                    raise RuntimeError(
-                        f"Upload failed for {len(remaining_failures)} files after retry: "
-                        f"{[f[1] for f in remaining_failures[:5]]}"  # Show first 5
-                    )
+                raise RuntimeError(
+                    f"Upload failed for {len(failed_files)} files: "
+                    f"{[f[1] for f in failed_files[:5]]}. "  # Show first 5
+                    "To fix: check S3 permissions/space and retry."
+                )
 
             _log(f"Upload complete: {checkpoint_name}")
 
@@ -554,7 +573,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             try:
                 self.remote_fs.rm_file(incomplete_marker_path)
             except Exception as e:
-                _log(f"Warning: Failed to remove remote file '{incomplete_marker_path}': {e}")
+                _log(
+                    f"Warning: Failed to remove remote file '{incomplete_marker_path}': {e}. "
+                    "Check S3 delete permissions; stale markers will cause resume to skip "
+                    "this checkpoint."
+                )
 
             # Delete local staging checkpoint
             try:
@@ -563,7 +586,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             except Exception as cleanup_error:
                 _log(
                     f"Warning: Failed to delete local staging checkpoint {checkpoint_name}: "
-                    f"{cleanup_error}. Upload succeeded, but local cleanup failed."
+                    f"{cleanup_error}. Upload succeeded, but local cleanup failed. "
+                    "Staging data will be cleaned up when the pod terminates."
                 )
 
         def _parallel_upload_files(
@@ -577,7 +601,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     local_file = os.path.join(root, f)
                     # Compute relative path from staging_path
                     rel_path = os.path.relpath(local_file, staging_path)
-                    remote_file = f"{checkpoint_name}/{rel_path}"
+                    rel_path = rel_path.replace(os.sep, "/")
+                    remote_file = str(PurePosixPath(checkpoint_name) / rel_path)
                     files_to_upload.append((local_file, remote_file))
 
             if not files_to_upload:
@@ -595,22 +620,36 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             def upload_file(local_file: str, remote_file: str) -> bool:
                 """Upload single file, return True on success."""
                 nonlocal uploaded_bytes, last_update
-                try:
-                    self.remote_fs.put_file(local_file, remote_file)
+                last_error = None
+                for attempt in range(1, 4):  # 3 attempts total
+                    try:
+                        self.remote_fs.put_file(local_file, remote_file)
 
-                    # Update progress
-                    file_size = os.path.getsize(local_file)
-                    with lock:
-                        uploaded_bytes += file_size
-                        if time.time() - last_update >= 1:
-                            mb = uploaded_bytes / (1024 * 1024)
-                            pct = int((uploaded_bytes / total_size) * 100) if total_size else 0
-                            _log(f"Progress: {mb:.1f}/{total_size / (1024 * 1024):.1f} MB ({pct}%)")
-                            last_update = time.time()
+                        # Update progress
+                        file_size = os.path.getsize(local_file)
+                        with lock:
+                            uploaded_bytes += file_size
+                            if time.time() - last_update >= 1:
+                                mb = uploaded_bytes / (1024 * 1024)
+                                pct = int((uploaded_bytes / total_size) * 100) if total_size else 0
+                                _log(
+                                    f"Progress: {mb:.1f}"
+                                    f"/{total_size / (1024 * 1024):.1f} MB ({pct}%)"
+                                )
+                                last_update = time.time()
 
-                    return True
-                except Exception:
-                    return False
+                        return True
+                    except Exception as e:
+                        last_error = e
+                        if attempt < 3:
+                            _log(f"Retry {attempt}/3 for {remote_file}")
+                            time.sleep(1)
+
+                _log(
+                    f"ERROR: Upload failed after 3 attempts for {remote_file}: {last_error}. "
+                    "Check S3 connectivity/permissions and retry."
+                )
+                return False
 
             # Upload files in parallel
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -626,29 +665,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             return failed_files
 
-        def _retry_failed_files(self, failed_files: list[tuple[str, str]]) -> list[tuple[str, str]]:
-            """Retry failed files."""
-            remaining_failures = []
-
-            for local_file, remote_file in failed_files:
-                success = False
-                for attempt in range(1, 4):  # 3 attempts total
-                    try:
-                        self.remote_fs.put_file(local_file, remote_file)
-                        success = True
-                        break
-                    except Exception as e:
-                        if attempt == 3:
-                            _log(f"File upload failed after 3 attempts: {remote_file}: {e}")
-                        else:
-                            _log(f"Retry {attempt}/3 for {remote_file}")
-                            time.sleep(1)  # Brief delay before retry
-
-                if not success:
-                    remaining_failures.append((local_file, remote_file))
-
-            return remaining_failures
-
         def _shutdown_upload_worker(self) -> None:
             """Stop upload worker."""
             if self._upload_queue is not None and self._upload_thread is not None:
@@ -656,7 +672,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 self._shutdown_event.set()  # Signal shutdown
                 self._upload_thread.join(timeout=3600)  # Wait up to 1 hour
                 if self._upload_thread.is_alive():
-                    _log("Warning: Upload worker thread is still running after 1 hour timeout")
+                    _log(
+                        "Warning: Upload worker thread is still running after 1 hour timeout. "
+                        "Uploads may still be in progress or stalled. Check S3 logs/progress and "
+                        "consider increasing termination grace period or timeout if needed."
+                    )
                 else:
                     _log("Background upload worker stopped")
 
@@ -712,7 +732,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             "This may be caused by network issues, insufficient permissions, "
                             "or lack of disk space on the training node. "
                             "Verify access to the remote storage location, ensure adequate "
-                            "free disk space, and retry the training job."
+                            "free disk space, and retry the training job. "
+                            "If partial files were downloaded, delete the local checkpoint "
+                            "and retry."
                         ) from e
                     break
                 else:
@@ -841,7 +863,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         shutil.rmtree(staging_dir)
                         _log("Deleted staging directory", args=args)
                     except Exception as e:
-                        _log(f"Warning: Staging cleanup failed: {e}", args=args)
+                        _log(
+                            f"Warning: Staging cleanup failed: {e}. "
+                            "Staging data will be cleaned up when the pod terminates.",
+                            args=args,
+                        )
 
     def apply_checkpointing():
         """Setup monkey patch for Trainer to auto inject JIT checkpoint callback."""
@@ -884,7 +910,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
                             shutil.rmtree(checkpoint_path)
                         except Exception as e:
-                            print(f"[Kubeflow] Warning: Failed to delete checkpoint: {e}")
+                            print(
+                                f"[Kubeflow] Warning: Failed to delete checkpoint: {e}. "
+                                "Check permissions and delete manually if needed."
+                            )
                     continue
 
                 checkpoints.append((int(match.group(1)), checkpoint_path))
@@ -984,6 +1013,30 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             def _patched_train(resume_from_checkpoint=None, **train_kwargs):
                 """Patched train() that auto-resumes from latest checkpoint if available."""
+                if dist.is_available() and dist.is_initialized():
+                    rank = dist.get_rank()
+                    world_size = dist.get_world_size()
+                    print(
+                        f"[Kubeflow] Rank {rank}/{world_size} - "
+                        "Waiting for all ranks before training starts...",
+                        flush=True,
+                    )
+                    try:
+                        dist.barrier()
+                    except Exception as e:
+                        raise RuntimeError(
+                            "[Kubeflow] Barrier synchronization failed during train-start: "
+                            f"{e}. This typically indicates one or more training processes "
+                            "crashed or exited early. Check your training logs to identify "
+                            "which rank failed, verify all pods are healthy, and ensure "
+                            "distributed training is properly configured. Retrying the "
+                            "training job often resolves transient issues."
+                        ) from e
+                    print(
+                        f"[Kubeflow] Rank {rank}/{world_size} - "
+                        "All ranks synchronized, proceeding...",
+                        flush=True,
+                    )
 
                 # Only auto-resume if user didn't explicitly set it
                 if resume_from_checkpoint is None and training_args:
