@@ -7,13 +7,33 @@ on:
         description: 'Release version (e.g., v0.2.0+rhai0)'
         required: true
         type: string
+      acknowledge_cve_risk:
+        description: >-
+          Set to true to proceed with the release even if Snyk detects
+          High or Critical CVEs (e.g., after human review determines
+          they do not affect the SDK).
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+  security-events: write
 
 jobs:
+  snyk-scan:
+    name: Security gate
+    if: ${{ github.repository == 'opendatahub-io/kubeflow-sdk' }}
+    uses: ./.github/workflows/snyk-security-scan.yaml
+    with:
+      fail_on_cves: ${{ !inputs.acknowledge_cve_risk }}
+      sarif_category: odh-release-snyk-audit
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
   prepare:
     name: Prepare release branch
+    needs: [snyk-scan]
     if: ${{ github.repository == 'opendatahub-io/kubeflow-sdk' }}
     runs-on: ubuntu-latest
     outputs:
@@ -56,6 +76,11 @@ jobs:
           echo "Upstream version: $UPSTREAM_VERSION"
           echo "Release branch: $BRANCH"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Create or update release branch
         run: |
           set -euo pipefail
@@ -78,7 +103,10 @@ jobs:
           echo "Updated kubeflow/__init__.py:"
           cat kubeflow/__init__.py
 
-          git add kubeflow/__init__.py
+          # Regenerate requirements.txt from current lock file
+          uv export --format requirements-txt > requirements.txt
+
+          git add kubeflow/__init__.py requirements.txt
           git commit -m "chore: Set version to $VERSION for release" || echo "No changes to commit"
           git push origin "$BRANCH"
 
