@@ -552,7 +552,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             except Exception as e:
                 _log(
                     f"Warning: Failed to write .incomplete marker for {checkpoint_name}: {e}. "
-                    "Check S3 write/delete permissions; resume safety may be affected."
+                    "Upload will continue, but if it fails, we won't detect it. "
+                    "Check S3 write permissions to prevent corrupted checkpoints."
                 )
 
             # Upload files in parallel
@@ -574,9 +575,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 self.remote_fs.rm_file(incomplete_marker_path)
             except Exception as e:
                 _log(
-                    f"Warning: Failed to remove remote file '{incomplete_marker_path}': {e}. "
-                    "Check S3 delete permissions; stale markers will cause resume to skip "
-                    "this checkpoint."
+                    f"Warning: Failed to remove .incomplete marker '{incomplete_marker_path}': {e}. "
+                    "This checkpoint won't be used for auto-resume. "
+                    f"To use it, manually delete: {incomplete_marker_path}"
                 )
 
             # Delete local staging checkpoint
@@ -911,8 +912,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             shutil.rmtree(checkpoint_path)
                         except Exception as e:
                             print(
-                                f"[Kubeflow] Warning: Failed to delete checkpoint: {e}. "
-                                "Check permissions and delete manually if needed."
+                                f"[Kubeflow] Warning: Failed to delete incomplete checkpoint "
+                                f"'{checkpoint_path}': {e}. Manually delete it to free disk space."
                             )
                     continue
 
@@ -1481,6 +1482,11 @@ def get_trainer_cr_from_transformers_trainer(
     checkpoint_code = _build_checkpoint_code(trainer)
     if checkpoint_code:
         func_code = f"{checkpoint_code}\n\n{func_code}"
+        # Add cleanup call after user code to upload final model artifacts
+        if trainer.output_dir and trainer.output_dir.startswith("s3://"):
+            func_code = (
+                f"{func_code}\n# Upload final model artifacts to S3\nfinal_model_cloud_upload()\n"
+            )
 
     # Build the command directly with the wrapped function code
     func_file = os.path.basename(inspect.getfile(trainer.func))
