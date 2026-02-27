@@ -2584,9 +2584,10 @@ print("TEST_COMPLETE=True")
 
     assert result.returncode == 0, f"Execution failed with return code {result.returncode}"
     assert "TEST_COMPLETE=True" in output
-    assert f"PIPE=checkpoint-3/{CHECKPOINT_INCOMPLETE_MARKER}" in output
+    expected_marker = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-0-rank-0"
+    assert f"PIPE=checkpoint-3/{expected_marker}" in output
     assert "PUT_FILE=checkpoint-3/model.bin" in output
-    assert f"RM_FILE=checkpoint-3/{CHECKPOINT_INCOMPLETE_MARKER}" in output
+    assert f"RM_FILE=checkpoint-3/{expected_marker}" in output
     assert "STAGING_CHECKPOINT_EXISTS=False" in output
     assert "CHECKPOINT_EXISTS=False" in output
 

@@ -212,7 +212,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     import signal
     import threading
     import time
-    from typing import Optional
+    from typing import Callable, Optional
 
     import torch
     import torch.distributed as dist
@@ -483,6 +483,19 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             return ProgressCallback(operation, total_size)
 
+        def _retry_marker_op(self, op: Callable[[], None]) -> Optional[Exception]:
+            """Retry marker operation with backoff."""
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    op()
+                    return None
+                except Exception as e:
+                    last_error = e
+                    if attempt < 3:
+                        time.sleep(1)
+            return last_error
+
         def _check_upload_error(self) -> None:
             """Raise any background upload error."""
             with self._upload_error_lock:
@@ -541,20 +554,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             staging_path, checkpoint_name, total_size, incomplete_marker_name = task
             incomplete_marker_path = f"{checkpoint_name}/{incomplete_marker_name}"
 
-            # Create .incomplete sentinel so resume can skip in-flight uploads.
-            _log(f"Creating .incomplete marker in S3: {checkpoint_name}")
-            try:
-                self.remote_fs.pipe(
-                    incomplete_marker_path,
-                    f"Upload started for {checkpoint_name}".encode(),
-                )
-            except Exception as e:
-                _log(
-                    f"Warning: Failed to write .incomplete marker for {checkpoint_name}: {e}. "
-                    "Upload will continue, but if it fails, we won't detect it. "
-                    "Check S3 write permissions to prevent corrupted checkpoints."
-                )
-
             # Upload files in parallel
             _log(f"Starting parallel upload to S3: {checkpoint_name}")
 
@@ -569,14 +568,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             _log(f"Upload complete: {checkpoint_name}")
 
-            # Delete .incomplete sentinel for this uploader
-            try:
-                self.remote_fs.rm_file(incomplete_marker_path)
-            except Exception as e:
+            # Delete incomplete sentinel for this uploader
+            remove_error = self._retry_marker_op(
+                lambda: self.remote_fs.rm_file(incomplete_marker_path)
+            )
+            if remove_error:
                 _log(
-                    f"Warning: Failed to remove .incomplete marker '{incomplete_marker_path}': {e}. "
-                    "This checkpoint won't be used for auto-resume. "
-                    f"To use it, manually delete: {incomplete_marker_path}"
+                    f"Warning: Failed to remove incomplete marker '{incomplete_marker_path}': "
+                    f"{remove_error}. "
+                    "This checkpoint won't be used during training resume "
+                    f"To be able to use it, manually delete: {incomplete_marker_path}"
                 )
 
             # Delete local staging checkpoint
@@ -797,6 +798,23 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-"
                         f"rank-{args.local_process_index}"
                     )
+                    # Create marker at enqueue time so resume won't treat queued uploads
+                    # as complete if the node specific upload worker hasn't started yet.
+                    marker_path = f"{checkpoint_name}/{marker_name}"
+                    marker_error = self._retry_marker_op(
+                        lambda: self.remote_fs.pipe(
+                            marker_path,
+                            f"Upload queued for {checkpoint_name}".encode(),
+                        )
+                    )
+                    if marker_error:
+                        _log(
+                            f"Warning: Failed to write incomplete marker for {checkpoint_name}: "
+                            f"{marker_error}. "
+                            "Upload will continue, but if it fails, we won't detect it during "
+                            "resume. Check S3 write permissions to prevent corrupted checkpoints."
+                            "Consider deleting the checkpoint file manually."
+                        )
                     task = (
                         staging_checkpoint_path,
                         checkpoint_name,
@@ -1475,11 +1493,6 @@ def get_trainer_cr_from_transformers_trainer(
     checkpoint_code = _build_checkpoint_code(trainer)
     if checkpoint_code:
         func_code = f"{checkpoint_code}\n\n{func_code}"
-        # Add cleanup call after user code to upload final model artifacts
-        if trainer.output_dir and trainer.output_dir.startswith("s3://"):
-            func_code = (
-                f"{func_code}\n# Upload final model artifacts to S3\nfinal_model_cloud_upload()\n"
-            )
 
     # Build the command directly with the wrapped function code
     func_file = os.path.basename(inspect.getfile(trainer.func))
