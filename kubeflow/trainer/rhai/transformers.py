@@ -281,15 +281,12 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 current_step = self.trainer.state.global_step
                 _log(f"Starting JIT checkpoint at step {current_step}")
 
-                # Get rank for distributed training. Fall back to True for single-process
-                # runs or if accelerate is unavailable.
+                # Get local rank 0 for distributed training.
+                # Fall back to True for single-process runs.
                 try:
-                    from accelerate import PartialState
-
-                    is_main_process = PartialState().is_main_process
+                    is_local_rank0 = self.trainer.args.local_process_index == 0
                 except Exception:
-                    # accelerate not installed or PartialState unavailable - assume single process
-                    is_main_process = True
+                    is_local_rank0 = int(os.environ.get("LOCAL_RANK", "0")) == 0
 
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
@@ -299,7 +296,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
                 # Create sentinel file to mark incomplete checkpoint (only rank 0)
                 sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
-                if is_main_process:
+                if is_local_rank0:
                     try:
                         with open(sentinel_file, "w") as f:
                             f.write(f"Checkpoint started at step {current_step}")
@@ -329,7 +326,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
                 # Remove sentinel on success (only rank 0)
-                if is_main_process and os.path.exists(sentinel_file):
+                if is_local_rank0 and os.path.exists(sentinel_file):
                     try:
                         os.remove(sentinel_file)
                     except Exception as e:
@@ -885,15 +882,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if not output_dir or not os.path.exists(output_dir):
                 return None
 
-            # Determine if this is rank 0 (main process). Fall back to True for single-process
-            # runs or if accelerate is unavailable.
-            try:
-                from accelerate import PartialState
-
-                is_rank_0 = PartialState().is_main_process
-            except Exception:
-                # accelerate not installed or PartialState unavailable - assume single process
-                is_rank_0 = True
+            # Only global rank-0 deletes incomplete checkpoints
+            is_global_rank_0 = True  # Default for single node process
+            if dist.is_available() and dist.is_initialized():
+                is_global_rank_0 = dist.get_rank() == 0
 
             checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
             checkpoints = []
@@ -906,9 +898,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 checkpoint_path = os.path.join(output_dir, name)
                 incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
 
-                # Delete incomplete checkpoints (rank 0 only to avoid race condition)
+                # Delete incomplete checkpoints (global rank 0 only to avoid race condition)
                 if os.path.exists(incomplete_marker):
-                    if is_rank_0:
+                    if is_global_rank_0:
                         try:
                             _log(f"Deleting incomplete checkpoint: {checkpoint_path}")
                             shutil.rmtree(checkpoint_path)
