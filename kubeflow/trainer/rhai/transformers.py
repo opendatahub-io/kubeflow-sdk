@@ -307,7 +307,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         _log(
                             f"Warning: Failed to write sentinel file: {e}. "
                             "Check local disk space and write permissions in output_dir; "
-                            "this checkpoint may be treated as complete during resume."
+                            "this checkpoint will be treated as complete during resume."
+                            "Please manually verify if the checkpoint is indeed complete"
+                            f"{checkpoint_path}"
                         )
 
                 # Checkpoint using dedicated CUDA stream
@@ -908,12 +910,13 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 if os.path.exists(incomplete_marker):
                     if is_rank_0:
                         try:
-                            print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
+                            _log(f"Deleting incomplete checkpoint: {checkpoint_path}")
                             shutil.rmtree(checkpoint_path)
                         except Exception as e:
-                            print(
-                                f"[Kubeflow] Warning: Failed to delete incomplete checkpoint "
-                                f"'{checkpoint_path}': {e}. Manually delete it to free disk space."
+                            _log(
+                                "Warning: Failed to delete incomplete checkpoint "
+                                f"'{checkpoint_path}': {e}. "
+                                "Manually delete it to free disk space."
                             )
                     continue
 
@@ -922,7 +925,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if checkpoints:
                 checkpoints.sort(reverse=True)
                 latest = checkpoints[0][1]
-                print(f"[Kubeflow] Found latest checkpoint: {latest}")
+                _log(f"Found latest checkpoint: {latest}")
                 return latest
 
             return None
@@ -954,16 +957,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 # Apply output_dir if provided by user
                 if "output_dir" in checkpoint_config:
                     training_args.output_dir = checkpoint_config["output_dir"]
-                    print(
-                        f"[Kubeflow] Applied output_dir: {checkpoint_config['output_dir']}",
-                        flush=True,
+                    _log(
+                        f"Applied output_dir: {checkpoint_config['output_dir']}",
+                        args=training_args,
                     )
 
                 if "save_strategy" in checkpoint_config:
                     training_args.save_strategy = checkpoint_config["save_strategy"]
-                    print(
-                        f"[Kubeflow] Applied save_strategy: {checkpoint_config['save_strategy']}",
-                        flush=True,
+                    _log(
+                        f"Applied save_strategy: {checkpoint_config['save_strategy']}",
+                        args=training_args,
                     )
 
                 if (
@@ -971,17 +974,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     and checkpoint_config["save_steps"] is not None
                 ):
                     training_args.save_steps = checkpoint_config["save_steps"]
-                    print(
-                        f"[Kubeflow] Applied save_steps: {checkpoint_config['save_steps']}",
-                        flush=True,
+                    _log(
+                        f"Applied save_steps: {checkpoint_config['save_steps']}",
+                        args=training_args,
                     )
 
                 if "save_total_limit" in checkpoint_config:
                     training_args.save_total_limit = checkpoint_config["save_total_limit"]
-                    print(
-                        f"[Kubeflow] Applied save_total_limit: "
-                        f"{checkpoint_config['save_total_limit']}",
-                        flush=True,
+                    _log(
+                        f"Applied save_total_limit: {checkpoint_config['save_total_limit']}",
+                        args=training_args,
                     )
 
                 if checkpoint_config.get("cloud_remote_storage_uri") and getattr(
@@ -1000,7 +1002,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     callbacks = list(callbacks)
                 if not any(isinstance(cb, JITCheckpointCallback) for cb in callbacks):
                     callbacks.append(_jit_checkpoint_callback)
-                    print("[Kubeflow] Auto-injected JIT checkpoint callback", flush=True)
+                    _log("Auto-injected JIT checkpoint callback", args=training_args)
                 kwargs["callbacks"] = callbacks
 
             # Call original __init__
@@ -1017,10 +1019,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 if dist.is_available() and dist.is_initialized():
                     rank = dist.get_rank()
                     world_size = dist.get_world_size()
-                    print(
-                        f"[Kubeflow] Rank {rank}/{world_size} - "
+                    _log(
+                        f"Rank {rank}/{world_size} - "
                         "Waiting for all ranks before training starts...",
-                        flush=True,
+                        args=training_args,
                     )
                     try:
                         dist.barrier()
@@ -1033,10 +1035,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             "distributed training is properly configured. Retrying the "
                             "training job often resolves transient issues."
                         ) from e
-                    print(
-                        f"[Kubeflow] Rank {rank}/{world_size} - "
-                        "All ranks synchronized, proceeding...",
-                        flush=True,
+                    _log(
+                        f"Rank {rank}/{world_size} - All ranks synchronized, proceeding...",
+                        args=training_args,
                     )
 
                 # Only auto-resume if user didn't explicitly set it
@@ -1044,7 +1045,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     latest_checkpoint = _find_latest_checkpoint(training_args.output_dir)
                     if latest_checkpoint:
                         resume_from_checkpoint = latest_checkpoint
-                        print(f"[Kubeflow] Auto-resuming from: {latest_checkpoint}")
+                        _log(f"Auto-resuming from: {latest_checkpoint}", args=training_args)
                 return _original_train(
                     resume_from_checkpoint=resume_from_checkpoint, **train_kwargs
                 )
@@ -1053,7 +1054,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         # Apply monkey-patch
         _TransformersTrainer.__init__ = _patched_trainer_init
-        print("[Kubeflow] Trainer auto-instrumentation enabled", flush=True)
+        _log("Trainer auto-instrumentation enabled")
 
     enable_jit = checkpoint_config.get("enable_jit", False)
     return (
