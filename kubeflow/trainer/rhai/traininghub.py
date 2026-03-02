@@ -526,7 +526,8 @@ def _create_training_hub_progression_instrumentation(
                                 files_removed += 1
                                 filename = os.path.basename(file_path)
                                 print(
-                                    f"[Kubeflow] Removed stale metrics file: {filename}", flush=True
+                                    f"[Kubeflow] Removed stale metrics file: {filename}",
+                                    flush=True,
                                 )
                             except OSError as e:
                                 filename = os.path.basename(file_path)
@@ -764,12 +765,38 @@ def _render_user_func_code(func: Callable, func_args: Optional[dict]) -> tuple[s
     return func_code, func_file
 
 
-def _compose_exec_script(func_code: str, func_file: str) -> str:
-    """Compose the final exec script body using the common template."""
-    return constants.EXEC_FUNC_SCRIPT.replace("__ENTRYPOINT__", "python").format(
-        func_code=func_code,
-        func_file=func_file,
-    )
+def _get_command_from_runtime(
+    runtime: types.Runtime,
+    func_code: str,
+    func_file: str,
+    install_snippet: str,
+) -> list[str]:
+    """Build command using runtime's command template (matches CustomTrainer pattern).
+
+    Args:
+        runtime: Runtime configuration with command template
+        func_code: The training function code to execute
+        func_file: The filename to write the code to
+        install_snippet: Package installation script to prepend
+
+    Returns:
+        Command list ready for trainer_crd.command/args
+
+    Note:
+        This matches CustomTrainer's approach of using runtime.trainer.command directly,
+        ensuring consistent behavior across all trainer types.
+    """
+    command = []
+    for c in runtime.trainer.command:
+        if "{func_file}" in c:
+            # Format the runtime's command template with our code
+            exec_script = c.format(func_code=func_code, func_file=func_file)
+            if install_snippet:
+                exec_script = install_snippet + exec_script
+            command.append(exec_script)
+        else:
+            command.append(c)
+    return command
 
 
 def get_training_hub_instrumentation_wrapper(
@@ -857,6 +884,24 @@ def get_trainer_cr_from_training_hub_trainer(
         Distributed training settings (num_nodes, resources) should be configured
         via TrainJob spec.mlPolicy, not in the trainer configuration.
     """
+    # Determine the correct entrypoint command based on algorithm behavior.
+    # Algorithms that manage their own distributed training (SFT, OSFT) internally
+    # launch torchrun as a subprocess, so we use `python` to avoid nested torchrun.
+    # Algorithms that don't (LoRA) expect to run inside a torchrun process.
+    algorithm_manages_distributed = False
+    if trainer.algorithm:
+        from kubeflow.trainer.algorithms import get_algorithm_pod_metadata as _get_meta
+
+        _meta = _get_meta(trainer.algorithm.value)
+        algorithm_manages_distributed = _meta.get("manages_own_distributed", False)
+
+    if algorithm_manages_distributed:
+        # SFT/OSFT: use plain python to avoid nested torchrun
+        runtime.trainer.set_command(constants.DEFAULT_COMMAND)
+    else:
+        # LoRA or no algorithm: use torchrun
+        runtime.trainer.set_command(constants.TORCH_COMMAND)
+
     trainer_crd = models.TrainerV1alpha1Trainer()
 
     # Derive topology (nnodes, nproc_per_node) from func_args, if provided.
@@ -884,8 +929,9 @@ def get_trainer_cr_from_training_hub_trainer(
 
     install_snippet = _build_install_snippet(trainer.packages_to_install, trainer.pip_index_urls)
 
-    # Primary case: no user function; generate wrapper that imports and calls algorithm(**func_args)
+    # Generate the training function code based on mode
     if trainer.func is None:
+        # Primary case: no user function; generate wrapper that calls algorithm(**func_args)
         if not trainer.algorithm:
             raise ValueError("TrainingHubTrainer requires 'algorithm' when 'func' is not provided")
 
@@ -894,55 +940,40 @@ def get_trainer_cr_from_training_hub_trainer(
         algorithm_name = trainer.algorithm.value
 
         # Resolve algorithm metadata from centralized registry
-        # This validates the algorithm is supported and retrieves its metadata
         algorithm_metadata = get_algorithm_pod_metadata(algorithm_name)
 
-        raw_code = _render_algorithm_wrapper(algorithm_metadata, trainer.func_args)
+        func_code = _render_algorithm_wrapper(algorithm_metadata, trainer.func_args)
+        func_file = "training_script.py"
+    else:
+        # Secondary case: user provided function; embed their function and call with kwargs
+        func_code, func_file = _render_user_func_code(trainer.func, trainer.func_args)
+        algorithm_name = trainer.algorithm.value if trainer.algorithm else None
 
-        # Inject progress tracking code if enabled
-        if trainer.enable_progression_tracking:
-            # Use the same default as the wrapper if ckpt_output_dir is not provided.
-            ckpt_dir = "/tmp/checkpoints"
-            if trainer.func_args and "ckpt_output_dir" in trainer.func_args:
-                ckpt_dir = trainer.func_args["ckpt_output_dir"]
+    # Add progress tracking instrumentation if enabled (common for both modes)
+    if trainer.enable_progression_tracking:
+        # Determine checkpoint directory (algorithm mode vs user function mode)
+        ckpt_dir = "/tmp/checkpoints" if trainer.func is None else "/tmp/training_metrics"
 
+        # Override with user-provided value if available
+        if trainer.func_args and "ckpt_output_dir" in trainer.func_args:
+            ckpt_dir = trainer.func_args["ckpt_output_dir"]
+
+        # Only add instrumentation if algorithm is specified
+        if algorithm_name:
             progress_code = get_training_hub_instrumentation_wrapper(
                 algorithm=algorithm_name,
                 ckpt_output_dir=ckpt_dir,
                 metrics_port=trainer.metrics_port,
             )
-            raw_code = progress_code + "\n" + raw_code
-
-        exec_script = _compose_exec_script(raw_code, "training_script.py")
-        full_script = install_snippet + exec_script
-
-        trainer_crd.command = ["bash", "-c"]
-        trainer_crd.args = [full_script]
-    else:
-        # Secondary case: user provided function; embed their function and call with kwargs
-        func_code, func_file = _render_user_func_code(trainer.func, trainer.func_args)
-
-        # Inject progress tracking code if enabled (for custom functions)
-        # Try to extract ckpt_output_dir from the function code or use default
-        if trainer.enable_progression_tracking and trainer.algorithm:
-            # For custom functions, use a default metrics directory
-            # User should ensure their function writes to this directory
-            ckpt_dir = "/tmp/training_metrics"
-            if trainer.func_args and "ckpt_output_dir" in trainer.func_args:
-                ckpt_dir = trainer.func_args["ckpt_output_dir"]
-
-            progress_code = get_training_hub_instrumentation_wrapper(
-                algorithm=trainer.algorithm.value,
-                ckpt_output_dir=ckpt_dir,
-                metrics_port=trainer.metrics_port,
-            )
             func_code = progress_code + "\n" + func_code
 
-        exec_script = _compose_exec_script(func_code, func_file)
-        full_script = install_snippet + exec_script
-
-        trainer_crd.command = ["bash", "-c"]
-        trainer_crd.args = [full_script]
+    # Build command using runtime's template (common for both modes)
+    trainer_crd.command = _get_command_from_runtime(
+        runtime=runtime,
+        func_code=func_code,
+        func_file=func_file,
+        install_snippet=install_snippet,
+    )
 
     # Add environment variables to the Trainer if provided by user
     trainer_crd.env = (

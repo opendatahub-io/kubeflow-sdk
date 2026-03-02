@@ -40,11 +40,16 @@ class AlgorithmSpec:
             Used for metrics reading and cleanup operations.
         validate: Validation function that takes a training config and raises
             ValueError if the config is invalid for this algorithm.
+        manages_own_distributed: Whether the algorithm internally launches torchrun
+            (or equivalent) as a subprocess. When True, the Training Hub entrypoint
+            uses `python` to avoid nested torchrun. When False, the entrypoint uses
+            `torchrun` so the algorithm runs inside a torchrun process.
     """
 
     name: str
     metrics_file_patterns: Iterable[str]
     validate: Callable[[Any], None]
+    manages_own_distributed: bool = False
 
     def __post_init__(self):
         """Validate the AlgorithmSpec at creation time.
@@ -119,16 +124,19 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
         name="sft",
         metrics_file_patterns=("training_params_and_metrics_global*.jsonl",),
         validate=_no_op_validate,
+        manages_own_distributed=True,
     ),
     "osft": AlgorithmSpec(
         name="osft",
         metrics_file_patterns=("training_metrics_*.jsonl",),
         validate=_no_op_validate,
+        manages_own_distributed=True,
     ),
     "lora_sft": AlgorithmSpec(
         name="lora_sft",
         metrics_file_patterns=(),  # LoRA uses HF Trainer logging, not JSONL metrics files
         validate=_no_op_validate,
+        manages_own_distributed=False,
     ),
 }
 
@@ -219,6 +227,7 @@ def get_algorithm_pod_metadata(name: str) -> dict:
             "name": name,
             "metrics_file_pattern": None,
             "metrics_file_rank0": None,
+            "manages_own_distributed": spec.manages_own_distributed,
         }
 
     # Use first pattern for algorithms with metrics
@@ -231,4 +240,5 @@ def get_algorithm_pod_metadata(name: str) -> dict:
         "name": name,
         "metrics_file_pattern": pattern,
         "metrics_file_rank0": rank0_file,
+        "manages_own_distributed": spec.manages_own_distributed,
     }

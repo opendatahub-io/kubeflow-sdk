@@ -425,8 +425,8 @@ def test_progression_tracking_disabled_no_server():
 
     trainer_crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer)
 
-    # Command is split into command and args, script is in args[0]
-    script = trainer_crd.args[0] if trainer_crd.args else ""
+    # Script is in command (matches CustomTrainer pattern after refactor)
+    script = " ".join(trainer_crd.command) if trainer_crd.command else ""
     # Should NOT contain progression tracking code
     assert "[Kubeflow] Initializing Training Hub progression tracking" not in script
     assert "TrainingHubMetricsHandler" not in script
@@ -457,8 +457,8 @@ def test_progression_tracking_enabled_has_server():
 
     trainer_crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer)
 
-    # Command is split into command and args, script is in args[0]
-    script = trainer_crd.args[0] if trainer_crd.args else ""
+    # Script is in command (matches CustomTrainer pattern after refactor)
+    script = " ".join(trainer_crd.command) if trainer_crd.command else ""
     # Should contain progression tracking code
     assert "[Kubeflow]" in script  # Message is in the script
     assert "TrainingHubMetricsHandler" in script
@@ -856,6 +856,85 @@ def test_instrumentation_cleanup_continues_on_error():
 
     # Verify error handling is present
     assert "Warning: Metrics cleanup failed" in wrapper, "Should log cleanup failures"
+
+    print("test execution complete")
+
+
+def test_traininghub_runtime_without_command_uses_algorithm_default():
+    """Test that TrainingHub sets correct command based on algorithm when no command set."""
+    print("Executing test: Runtime without command uses algorithm-based default")
+
+    from kubeflow.trainer.rhai.traininghub import get_trainer_cr_from_training_hub_trainer
+    from kubeflow.trainer.types import types
+
+    # SFT (manages own distributed) should get python
+    runtime_sft = types.Runtime(
+        name="torch-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:latest",
+        ),
+    )
+
+    trainer_sft = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.SFT,
+        func_args={"data_path": "/data/train.jsonl", "ckpt_output_dir": "/tmp/checkpoints"},
+    )
+
+    trainer_crd_sft = get_trainer_cr_from_training_hub_trainer(runtime_sft, trainer_sft)
+    command_str_sft = " ".join(trainer_crd_sft.command)
+    assert "python" in command_str_sft, f"SFT should default to python: {command_str_sft}"
+
+    # LoRA (does NOT manage own distributed) should get torchrun
+    runtime_lora = types.Runtime(
+        name="torch-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:latest",
+        ),
+    )
+
+    trainer_lora = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.LORA_SFT,
+        func_args={"data_path": "/data/train.jsonl", "ckpt_output_dir": "/tmp/checkpoints"},
+    )
+
+    trainer_crd_lora = get_trainer_cr_from_training_hub_trainer(runtime_lora, trainer_lora)
+    command_str_lora = " ".join(trainer_crd_lora.command)
+    assert "torchrun" in command_str_lora, f"LoRA should default to torchrun: {command_str_lora}"
+
+    print("test execution complete")
+
+
+def test_osft_algorithm_uses_python_entrypoint():
+    """Test that OSFT algorithm uses python entrypoint (manages own distributed training)."""
+    print("Executing test: OSFT algorithm uses python entrypoint")
+
+    from kubeflow.trainer.rhai.traininghub import get_trainer_cr_from_training_hub_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="torch-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:latest",
+        ),
+    )
+    runtime.trainer.set_command(constants.TORCH_COMMAND)
+
+    trainer = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.OSFT,
+        func_args={"data_path": "/data/train.jsonl", "ckpt_output_dir": "/tmp/checkpoints"},
+    )
+
+    trainer_crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer)
+    command_str = " ".join(trainer_crd.command)
+
+    assert "python" in command_str, f"OSFT should use python: {command_str}"
+    assert "torchrun" not in command_str, f"OSFT should NOT use torchrun: {command_str}"
 
     print("test execution complete")
 

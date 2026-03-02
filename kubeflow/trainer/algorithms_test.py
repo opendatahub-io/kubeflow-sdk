@@ -406,7 +406,12 @@ def test_pod_metadata_has_all_required_keys():
     """Test that pod metadata contains all required keys for all algorithms."""
     print("Executing test: pod_metadata_has_all_required_keys")
 
-    required_keys = {"name", "metrics_file_pattern", "metrics_file_rank0"}
+    required_keys = {
+        "name",
+        "metrics_file_pattern",
+        "metrics_file_rank0",
+        "manages_own_distributed",
+    }
 
     for algorithm_name in ALGORITHMS:
         print("  Checking algorithm:", algorithm_name)

@@ -248,7 +248,7 @@ def get_custom_trainer(
             "\n\nread -r -d '' SCRIPT << EOM\n\nfunc=lambda: "
             'print("Hello World"),\n\n<lambda>(**'
             "{'learning_rate': 0.001, 'batch_size': 32})\n\nEOM\nprintf \"%s\" "
-            '"$SCRIPT" > "backend_test.py"\ntorchrun "backend_test.py"',
+            '"$SCRIPT" > "backend_test.py"\ntorchrun --nnodes=${PET_NNODES:-1} --nproc-per-node=${PET_NPROC_PER_NODE:-1} --node-rank=${PET_NODE_RANK:-0} --rdzv-backend=c10d --rdzv-endpoint=${PET_MASTER_ADDR:-localhost}:${PET_MASTER_PORT:-29500} --rdzv-id=1 "backend_test.py"',
         ],
         numNodes=2,
         env=env,
