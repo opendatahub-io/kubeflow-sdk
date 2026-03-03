@@ -24,6 +24,7 @@ from kubeflow.trainer.algorithms import (
     get_algorithm_pod_metadata,
     get_algorithm_spec,
 )
+from kubeflow.trainer.constants import constants
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 
 
@@ -35,6 +36,7 @@ def test_algorithm_spec_is_frozen():
         name="test",
         metrics_file_patterns=("pattern_*.jsonl",),
         validate=lambda x: None,
+        entrypoint=("python",),
     )
 
     # Attempt to modify frozen dataclass should raise FrozenInstanceError or AttributeError
@@ -53,6 +55,7 @@ def test_algorithm_spec_validation_empty_name():
             name="",
             metrics_file_patterns=("pattern_*.jsonl",),
             validate=lambda x: None,
+            entrypoint=("python",),
         )
 
     print("test execution complete")
@@ -67,6 +70,7 @@ def test_algorithm_spec_validation_uppercase_name():
             name="SFT",
             metrics_file_patterns=("pattern_*.jsonl",),
             validate=lambda x: None,
+            entrypoint=("python",),
         )
 
     print("test execution complete")
@@ -81,6 +85,7 @@ def test_algorithm_spec_allows_empty_patterns():
         name="test",
         metrics_file_patterns=(),
         validate=lambda x: None,
+        entrypoint=("python",),
     )
 
     assert spec.name == "test"
@@ -98,6 +103,7 @@ def test_algorithm_spec_validation_non_callable_validate():
             name="test",
             metrics_file_patterns=("pattern_*.jsonl",),
             validate="not a function",  # type: ignore[arg-type]
+            entrypoint=("python",),
         )
 
     print("test execution complete")
@@ -386,6 +392,7 @@ def test_get_algorithm_pod_metadata_no_metrics():
             name="test_no_metrics",
             metrics_file_patterns=(),
             validate=_no_op_validate,
+            entrypoint=constants.TORCH_COMMAND,
         )
 
         metadata = get_algorithm_pod_metadata("test_no_metrics")
@@ -410,7 +417,6 @@ def test_pod_metadata_has_all_required_keys():
         "name",
         "metrics_file_pattern",
         "metrics_file_rank0",
-        "manages_own_distributed",
     }
 
     for algorithm_name in ALGORITHMS:
@@ -474,12 +480,12 @@ def test_pod_metadata_self_contained():
         # Verify metadata is a plain dict (serializable to pod code)
         assert isinstance(metadata, dict)
 
-        # Verify all values are basic Python types (str, int, bool, None, etc.)
+        # Verify all values are basic Python types (str, int, bool, tuple, None, etc.)
         # Pod code should not need to import anything to use this metadata
         for key, value in metadata.items():
             assert isinstance(key, str), f"Metadata key should be string, got {type(key)}"
             # None is allowed for algorithms without metrics
-            assert isinstance(value, (str, int, bool, type(None))), (
+            assert isinstance(value, (str, int, bool, tuple, type(None))), (
                 f"Metadata value for key '{key}' should be basic type, got {type(value).__name__}"
             )
 
@@ -720,6 +726,7 @@ def test_algorithm_without_metrics_integration():
             name="test_no_metrics",
             metrics_file_patterns=(),
             validate=_no_op_validate,
+            entrypoint=constants.TORCH_COMMAND,
         )
 
         # Test get_algorithm_spec

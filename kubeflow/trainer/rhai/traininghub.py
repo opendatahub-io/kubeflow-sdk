@@ -884,23 +884,15 @@ def get_trainer_cr_from_training_hub_trainer(
         Distributed training settings (num_nodes, resources) should be configured
         via TrainJob spec.mlPolicy, not in the trainer configuration.
     """
-    # Determine the correct entrypoint command based on algorithm behavior.
-    # Algorithms that manage their own distributed training (SFT, OSFT) internally
-    # launch torchrun as a subprocess, so we use `python` to avoid nested torchrun.
-    # Algorithms that don't (LoRA) expect to run inside a torchrun process.
-    algorithm_manages_distributed = False
+    # Determine the correct entrypoint command based on algorithm.
+    # Each algorithm specifies its own entrypoint in the registry.
+    entrypoint = constants.TORCH_COMMAND
     if trainer.algorithm:
-        from kubeflow.trainer.algorithms import get_algorithm_pod_metadata as _get_meta
+        from kubeflow.trainer.algorithms import get_algorithm_spec
 
-        _meta = _get_meta(trainer.algorithm.value)
-        algorithm_manages_distributed = _meta.get("manages_own_distributed", False)
+        entrypoint = get_algorithm_spec(trainer.algorithm.value).entrypoint
 
-    if algorithm_manages_distributed:
-        # SFT/OSFT: use plain python to avoid nested torchrun
-        runtime.trainer.set_command(constants.DEFAULT_COMMAND)
-    else:
-        # LoRA or no algorithm: use torchrun
-        runtime.trainer.set_command(constants.TORCH_COMMAND)
+    runtime.trainer.set_command(entrypoint)
 
     trainer_crd = models.TrainerV1alpha1Trainer()
 
