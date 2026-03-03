@@ -576,8 +576,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 _log(
                     f"Warning: Failed to remove incomplete marker '{incomplete_marker_path}': "
                     f"{remove_error}. "
-                    "This checkpoint won't be used during training resume "
-                    f"To be able to use it, manually delete: {incomplete_marker_path}"
+                    "The checkpoint is complete but cannot be loaded during training resume "
+                    f"because the marker still exists. Manually delete: {incomplete_marker_path}"
                 )
 
             # Delete local staging checkpoint
@@ -811,8 +811,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         _log(
                             f"Warning: Failed to write incomplete marker for {checkpoint_name}: "
                             f"{marker_error}. "
-                            "Upload will continue, but if it fails, we won't detect it during "
-                            "resume. Check S3 write permissions to prevent corrupted checkpoints."
+                            "Upload will continue, but if it fails, partial uploads cannot be detected during "
+                            "resume. Check S3 write permissions to prevent corrupted checkpoints. "
                             "Consider deleting the checkpoint file manually."
                         )
                     task = (
@@ -926,7 +926,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             _log(
                                 "Warning: Failed to delete incomplete checkpoint "
                                 f"'{checkpoint_path}': {e}. "
-                                "Manually delete it to free disk space."
+                                "Manually delete it to free up storage."
                             )
                     continue
 
