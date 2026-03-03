@@ -16,11 +16,16 @@ from collections.abc import Callable, Iterator
 import copy
 import logging
 import multiprocessing
+import os
 import random
 import re
 import string
 import time
+<<<<<<< HEAD
 from typing import Any, Optional, Union, get_args
+=======
+from typing import Any
+>>>>>>> upstream/main
 import uuid
 
 from kubeflow_trainer_api import models
@@ -60,69 +65,170 @@ class KubernetesBackend(RuntimeBackend):
 
         self.namespace = cfg.namespace
 
-    def list_runtimes(self) -> list[types.Runtime]:
-        result = []
+        # Perform control-plane version metadata verification.
+        self.verify_backend()
+
+    def verify_backend(self) -> None:
+        """Verify that the Trainer control plane exposes version metadata.
+
+        This check only ensures that the public control-plane ConfigMap exists
+        and contains a ``kubeflow_trainer_version`` field. It does not
+        enforce version compatibility and never raises.
+        """
+
+        system_namespace = os.getenv("KUBEFLOW_SYSTEM_NAMESPACE", "kubeflow-system")
+        config_map_name = "kubeflow-trainer-public"
+
         try:
-            thread = self.custom_api.list_cluster_custom_object(
-                constants.GROUP,
-                constants.VERSION,
-                constants.CLUSTER_TRAINING_RUNTIME_PLURAL,
-                async_req=True,
+            _ = self.core_api.read_namespaced_config_map(
+                name=config_map_name,
+                namespace=system_namespace,
+            ).data["kubeflow_trainer_version"]
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Trainer control-plane version info is not available: "
+                f"unable to read 'kubeflow_trainer_version' from ConfigMap "
+                f"'{config_map_name}' in namespace '{system_namespace}': {e}"
             )
+            return
 
-            runtime_list = models.TrainerV1alpha1ClusterTrainingRuntimeList.from_dict(
-                thread.get(common_constants.DEFAULT_TIMEOUT)
+    def list_runtimes(self) -> list[types.Runtime]:
+        """List available runtimes, preferring namespaced over cluster-scoped for duplicates.
+
+        If a TrainingRuntime with the same name exists in both the namespace and cluster scope,
+        only the namespaced runtime is returned. Cluster-scoped runtimes are still returned
+        when there is no namespaced runtime with the same name.
+        """
+        result: list[types.Runtime] = []
+
+        cluster_thread = self.custom_api.list_cluster_custom_object(
+            constants.GROUP,
+            constants.VERSION,
+            constants.CLUSTER_TRAINING_RUNTIME_PLURAL,
+            async_req=True,
+        )
+
+        namespace_thread = self.custom_api.list_namespaced_custom_object(
+            constants.GROUP,
+            constants.VERSION,
+            self.namespace,
+            constants.TRAINING_RUNTIME_PLURAL,
+            async_req=True,
+        )
+
+        # Fetch namespace-scoped TrainingRuntimes.
+        namespace_runtimes = None
+        try:
+            namespace_runtimes = models.TrainerV1alpha1TrainingRuntimeList.from_dict(
+                namespace_thread.get(common_constants.DEFAULT_TIMEOUT)
             )
+        except multiprocessing.TimeoutError as e:
+            raise TimeoutError(f"Timeout to list {constants.TRAINING_RUNTIME_KIND}s") from e
+        except client.ApiException as e:
+            if e.status != 404:
+                raise RuntimeError(f"Failed to list {constants.TRAINING_RUNTIME_KIND}s") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to list {constants.TRAINING_RUNTIME_KIND}s") from e
 
-            if not runtime_list:
-                return result
+        # Fetch cluster-scoped ClusterTrainingRuntimes.
+        cluster_runtimes = None
+        try:
+            cluster_runtimes = models.TrainerV1alpha1ClusterTrainingRuntimeList.from_dict(
+                cluster_thread.get(common_constants.DEFAULT_TIMEOUT)
+            )
+        except multiprocessing.TimeoutError as e:
+            raise TimeoutError(f"Timeout to list {constants.CLUSTER_TRAINING_RUNTIME_KIND}s") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to list {constants.CLUSTER_TRAINING_RUNTIME_KIND}s") from e
 
-            for runtime in runtime_list.items:
+        # Collect runtimes in a map, preferring namespaced over cluster-scoped
+        runtimes_by_name = {}
+
+        # Add namespaced runtimes first (they have priority)
+        if namespace_runtimes:
+            for runtime in namespace_runtimes.items:
+                if runtime.metadata and runtime.metadata.name:
+                    runtimes_by_name[runtime.metadata.name] = runtime
+
+        # Add cluster runtimes only if not already present
+        if cluster_runtimes:
+            for runtime in cluster_runtimes.items:
+                if runtime.metadata and runtime.metadata.name:
+                    runtimes_by_name.setdefault(runtime.metadata.name, runtime)
+
+        try:
+            for runtime in runtimes_by_name.values():
                 if not (
                     runtime.metadata
                     and runtime.metadata.labels
                     and constants.RUNTIME_FRAMEWORK_LABEL in runtime.metadata.labels
                 ):
                     logger.warning(
-                        f"Runtime {runtime.metadata.name} must have "  # type: ignore
-                        f"{constants.RUNTIME_FRAMEWORK_LABEL} label."
+                        "Runtime %s missing %s label",
+                        runtime.metadata.name if runtime.metadata else "<unknown>",
+                        constants.RUNTIME_FRAMEWORK_LABEL,
                     )
                     continue
+
                 result.append(self.__get_runtime_from_cr(runtime))
-
-        except multiprocessing.TimeoutError as e:
-            raise TimeoutError(f"Timeout to list {constants.CLUSTER_TRAINING_RUNTIME_KIND}s") from e
-        except Exception as e:
-            raise RuntimeError(f"Failed to list {constants.CLUSTER_TRAINING_RUNTIME_KIND}s") from e
-
+        except Exception:
+            logger.exception(
+                "Failed to parse runtime %s",
+                runtime.metadata.name if runtime.metadata else "<unknown>",
+            )
+            raise
         return result
 
     def get_runtime(self, name: str) -> types.Runtime:
-        """Get the Runtime object"""
+        """Prefer namespaced runtime, fall back to cluster-scoped only if it does not exist"""
+        try:
+            ns_thread = self.custom_api.get_namespaced_custom_object(
+                constants.GROUP,
+                constants.VERSION,
+                self.namespace,
+                constants.TRAINING_RUNTIME_PLURAL,
+                name,
+                async_req=True,
+            )
+            runtime = models.TrainerV1alpha1TrainingRuntime.from_dict(
+                ns_thread.get(common_constants.DEFAULT_TIMEOUT)
+            )
+            return self.__get_runtime_from_cr(runtime)
+
+        except multiprocessing.TimeoutError as e:
+            raise TimeoutError(
+                f"Timeout to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
+            ) from e
+        except client.ApiException as e:
+            if e.status != 404:
+                raise RuntimeError(
+                    f"Failed to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
+                ) from e
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
+            ) from e
 
         try:
-            thread = self.custom_api.get_cluster_custom_object(
+            cluster_thread = self.custom_api.get_cluster_custom_object(
                 constants.GROUP,
                 constants.VERSION,
                 constants.CLUSTER_TRAINING_RUNTIME_PLURAL,
                 name,
                 async_req=True,
             )
-
             runtime = models.TrainerV1alpha1ClusterTrainingRuntime.from_dict(
-                thread.get(common_constants.DEFAULT_TIMEOUT)  # type: ignore
+                cluster_thread.get(common_constants.DEFAULT_TIMEOUT)
             )
-
+            return self.__get_runtime_from_cr(runtime)
         except multiprocessing.TimeoutError as e:
             raise TimeoutError(
-                f"Timeout to get {constants.CLUSTER_TRAINING_RUNTIME_PLURAL}: {name}"
+                f"Timeout to get {constants.CLUSTER_TRAINING_RUNTIME_KIND}: {name}"
             ) from e
         except Exception as e:
             raise RuntimeError(
-                f"Failed to get {constants.CLUSTER_TRAINING_RUNTIME_PLURAL}: {name}"
+                f"Failed to get Runtime: {name} (checked both namespaced and cluster scope)"
             ) from e
-
-        return self.__get_runtime_from_cr(runtime)  # type: ignore
 
     def get_runtime_packages(self, runtime: types.Runtime):
         if runtime.trainer.trainer_type == types.TrainerType.BUILTIN_TRAINER:
@@ -175,6 +281,7 @@ class KubernetesBackend(RuntimeBackend):
 
     def train(
         self,
+<<<<<<< HEAD
         runtime: Optional[Union[str, types.Runtime]] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
@@ -186,6 +293,15 @@ class KubernetesBackend(RuntimeBackend):
             ]
         ] = None,
         options: Optional[list] = None,
+=======
+        runtime: str | types.Runtime | None = None,
+        initializer: types.Initializer | None = None,
+        trainer: types.CustomTrainer
+        | types.CustomTrainerContainer
+        | types.BuiltinTrainer
+        | None = None,
+        options: list | None = None,
+>>>>>>> upstream/main
     ) -> str:
         # Process options to extract configuration
         job_spec = {}
@@ -268,7 +384,7 @@ class KubernetesBackend(RuntimeBackend):
 
         return train_job_name
 
-    def list_jobs(self, runtime: Optional[types.Runtime] = None) -> list[types.TrainJob]:
+    def list_jobs(self, runtime: types.Runtime | None = None) -> list[types.TrainJob]:
         result = []
         try:
             thread = self.custom_api.list_namespaced_custom_object(
@@ -365,7 +481,7 @@ class KubernetesBackend(RuntimeBackend):
         status: set[str] = {constants.TRAINJOB_COMPLETE},
         timeout: int = 600,
         polling_interval: int = 2,
-        callbacks: Optional[list[Callable[[types.TrainJob], None]]] = None,
+        callbacks: list[Callable[[types.TrainJob], None]] | None = None,
     ) -> types.TrainJob:
         job_statuses = {
             constants.TRAINJOB_CREATED,
@@ -478,7 +594,8 @@ class KubernetesBackend(RuntimeBackend):
 
     def __get_runtime_from_cr(
         self,
-        runtime_cr: models.TrainerV1alpha1ClusterTrainingRuntime,
+        runtime_cr: models.TrainerV1alpha1ClusterTrainingRuntime
+        | models.TrainerV1alpha1TrainingRuntime,
     ) -> types.Runtime:
         if not (
             runtime_cr.metadata
@@ -488,7 +605,10 @@ class KubernetesBackend(RuntimeBackend):
             and runtime_cr.spec.template.spec
             and runtime_cr.spec.template.spec.replicated_jobs
         ):
-            raise Exception(f"ClusterTrainingRuntime CR is invalid: {runtime_cr}")
+            raise Exception(
+                f"{runtime_cr} is invalid — missing one or more required fields: "
+                f"metadata.name, spec.ml_policy, spec.template.spec.replicated_jobs."
+            )
 
         if not (
             runtime_cr.metadata.labels
@@ -655,6 +775,7 @@ class KubernetesBackend(RuntimeBackend):
 
     def _get_trainjob_spec(
         self,
+<<<<<<< HEAD
         runtime: Optional[Union[str, types.Runtime]] = None,
         initializer: Optional[types.Initializer] = None,
         trainer: Optional[
@@ -669,6 +790,18 @@ class KubernetesBackend(RuntimeBackend):
         spec_labels: Optional[dict[str, str]] = None,
         spec_annotations: Optional[dict[str, str]] = None,
         pod_template_overrides: Optional[models.IoK8sApiCoreV1PodTemplateSpec] = None,
+=======
+        runtime: str | types.Runtime | None = None,
+        initializer: types.Initializer | None = None,
+        trainer: types.CustomTrainer
+        | types.CustomTrainerContainer
+        | types.BuiltinTrainer
+        | None = None,
+        trainer_overrides: dict[str, Any] | None = None,
+        spec_labels: dict[str, str] | None = None,
+        spec_annotations: dict[str, str] | None = None,
+        pod_template_overrides: models.IoK8sApiCoreV1PodTemplateSpec | None = None,
+>>>>>>> upstream/main
     ) -> models.TrainerV1alpha1TrainJobSpec:
         """Get TrainJob spec from the given parameters"""
 
