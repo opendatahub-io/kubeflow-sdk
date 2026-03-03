@@ -155,9 +155,8 @@ MPI_COMMAND = (
 DEFAULT_TRAINING_RUNTIME = os.getenv("DEFAULT_TRAINING_RUNTIME", "torch-distributed")
 
 # The default container command for the Torch CustomTrainer.
-# Rendezvous args are required for multi-node distributed training.
-# TODO: Remove explicit rendezvous args once upstream Kubeflow Trainer torch plugin
-# sets PET_RDZV_* env vars (currently only sets PET_NNODES, PET_MASTER_ADDR, etc.).
+# torchrun automatically uses c10d rendezvous with PET_MASTER_ADDR/PET_MASTER_PORT
+# when nnodes > 1. Explicit --rdzv-* flags are not needed.
 TORCH_COMMAND = (
     "bash",
     "-c",
@@ -166,10 +165,7 @@ TORCH_COMMAND = (
         "torchrun"
         " --nnodes=${{PET_NNODES:-1}}"
         " --nproc-per-node=${{PET_NPROC_PER_NODE:-1}}"
-        " --node-rank=${{PET_NODE_RANK:-0}}"
-        " --rdzv-backend=c10d"
-        " --rdzv-endpoint=${{PET_MASTER_ADDR:-localhost}}:${{PET_MASTER_PORT:-29500}}"
-        " --rdzv-id=1",
+        " --node-rank=${{PET_NODE_RANK:-0}}",
     ),
 )
 # The Torch env name for the number of procs per node (e.g. number of GPUs per Pod).
