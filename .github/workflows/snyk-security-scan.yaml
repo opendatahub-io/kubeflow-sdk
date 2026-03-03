@@ -1,3 +1,7 @@
+# Reusable Snyk vulnerability scan.
+# Called from rebase-upstream.yaml (informational) and odh-release.yaml (release gate).
+# Generates requirements.txt from uv.lock so Snyk scans the actual locked dependencies,
+# then uploads SARIF results to the GitHub Security tab.
 name: Snyk Security Scan
 
 on:
@@ -47,9 +51,15 @@ jobs:
         with:
           enable-cache: true
 
+      # Snyk needs requirements.txt to resolve the dependency tree.
+      # This is the same command used by update-requirements.yaml but ephemeral
+      # here -- callers are responsible for committing the file if needed.
       - name: Generate requirements.txt
         run: uv export --format requirements-txt > requirements.txt
 
+      # continue-on-error: true lets subsequent steps run regardless of whether
+      # Snyk finds vulnerabilities (exit 1) or encounters a scan error (exit 2-3).
+      # The actual pass/fail decision is deferred to the "Evaluate CVE gate" step.
       - name: Run Snyk to check for vulnerabilities
         id: snyk
         uses: snyk/actions/python@master
@@ -76,18 +86,27 @@ jobs:
           sarif_file: snyk-results.sarif
           category: ${{ inputs.sarif_category }}
 
+      # Distinguish "CVEs found" (failure + SARIF exists) from "scan broke"
+      # (failure + no SARIF). Only the former should set cves_found=true.
       - name: Set CVE result output
         id: result
         if: always()
         run: |
-          if [ "${{ steps.snyk.outcome }}" = "failure" ]; then
+          if [ "${{ steps.snyk.outcome }}" = "failure" ] && [ "${{ steps.check-sarif.outputs.sarif_exists }}" = "true" ]; then
             echo "cves_found=true" >> "$GITHUB_OUTPUT"
           else
             echo "cves_found=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # When fail_on_cves is true, block on ANY Snyk failure -- both real CVEs
+      # and scan errors. A release should not proceed if we cannot verify safety.
+      # The error message differentiates the two scenarios for the operator.
       - name: Evaluate CVE gate
         if: inputs.fail_on_cves && steps.snyk.outcome == 'failure'
         run: |
-          echo "::error::Snyk detected High or Critical CVEs. Review findings in the Security tab or re-run with the CVE bypass option."
+          if [ "${{ steps.check-sarif.outputs.sarif_exists }}" = "true" ]; then
+            echo "::error::Snyk detected High or Critical CVEs. Review findings in the Security tab or re-run with the CVE bypass option."
+          else
+            echo "::error::Snyk scan failed (possible authentication, network, or runtime error). No SARIF report was generated. Check the 'Run Snyk' step logs."
+          fi
           exit 1

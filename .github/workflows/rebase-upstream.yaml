@@ -23,6 +23,7 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # Outputs are consumed by the snyk-scan job (separate runner)
     outputs:
       has_changes: ${{ steps.diffcheck.outputs.has_changes }}
       head_branch: ${{ env.HEAD_BRANCH }}
@@ -168,6 +169,8 @@ jobs:
         with:
           enable-cache: true
 
+      # Keep requirements.txt in sync after the upstream merge.
+      # Committed here so the change is included in the sync PR.
       - name: Update requirements.txt
         run: |
           uv export --format requirements-txt > requirements.txt
@@ -246,6 +249,8 @@ jobs:
               --body "$BODY"
           fi
 
+  # Informational Snyk scan on the sync branch -- results appear in the
+  # Security tab but do not block the PR (fail_on_cves: false).
   snyk-scan:
     needs: sync
     if: needs.sync.outputs.has_changes == 'true'

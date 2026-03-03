@@ -21,6 +21,9 @@ permissions:
   security-events: write
 
 jobs:
+  # Security gate: must pass before any release work begins.
+  # Blocks on High/Critical CVEs unless the operator explicitly sets
+  # acknowledge_cve_risk=true after reviewing the findings.
   snyk-scan:
     name: Security gate
     if: ${{ github.repository == 'opendatahub-io/kubeflow-sdk' }}
@@ -33,7 +36,7 @@ jobs:
 
   prepare:
     name: Prepare release branch
-    needs: [snyk-scan]
+    needs: [snyk-scan]  # Gated behind the security scan
     if: ${{ github.repository == 'opendatahub-io/kubeflow-sdk' }}
     runs-on: ubuntu-latest
     outputs:
@@ -103,8 +106,10 @@ jobs:
           echo "Updated kubeflow/__init__.py:"
           cat kubeflow/__init__.py
 
-          # Regenerate requirements.txt from current lock file
-          uv export --format requirements-txt > requirements.txt
+          # Regenerate requirements.txt from current lock file.
+          # --locked fails if uv.lock is stale vs pyproject.toml, preventing
+          # silent re-resolution during a release.
+          uv export --locked --format requirements-txt > requirements.txt
 
           git add kubeflow/__init__.py requirements.txt
           git commit -m "chore: Set version to $VERSION for release" || echo "No changes to commit"
