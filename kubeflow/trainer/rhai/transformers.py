@@ -909,6 +909,59 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             checkpoint_config.get("cloud_remote_storage_uri")
         )
 
+        # Monkey-patch save_model() to upload final model to S3 immediately after save
+        _original_save_model = _TransformersTrainer.save_model
+
+        def _patched_save_model(
+            self,
+            output_dir: str | None = None,
+            _internal_call: bool = False,
+        ):
+            """Save model and upload to S3 if remote storage configured.
+
+            Only uploads when _internal_call=False (user-initiated saves like final model).
+            Periodic checkpoints (_internal_call=True) are already handled by JIT checkpoint infrastructure.
+            """
+            # Call original save_model (handles all distributed training logic)
+            result = _original_save_model(
+                self,
+                output_dir=output_dir,
+                _internal_call=_internal_call,
+            )
+
+            # Upload after save ONLY for user-initiated saves (final model, not periodic checkpoints)
+            if (
+                not _internal_call
+                and _jit_checkpoint_callback.remote_fs
+                and output_dir
+                and os.path.exists(output_dir)
+            ):
+                # Barrier to ensure all ranks finished saving
+                _jit_checkpoint_callback._wait_for_all_ranks("final_save")
+
+                # Upload from local rank 0 only (works for all strategies - DDP/FSDP/DeepSpeed)
+                if self.args.local_process_index == 0:
+                    # Determine checkpoint name from output_dir
+                    checkpoint_name = os.path.basename(output_dir)
+
+                    # Queue upload using existing infrastructure
+                    total_size = _jit_checkpoint_callback._calculate_local_dir_size(output_dir)
+                    _jit_checkpoint_callback._start_upload_worker()
+
+                    node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
+                    marker_name = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-rank-{self.args.local_process_index}"
+
+                    task = (output_dir, checkpoint_name, total_size, marker_name)
+                    _jit_checkpoint_callback._upload_queue.put(task)
+                    _log(
+                        f"[Kubeflow] Queued final model for upload: {checkpoint_name}",
+                        args=self.args,
+                    )
+
+            return result
+
+        _TransformersTrainer.save_model = _patched_save_model
+
         def _find_latest_checkpoint(output_dir):
             """Find the latest checkpoint and deleting incomplete ones."""
             if not output_dir or not os.path.exists(output_dir):
