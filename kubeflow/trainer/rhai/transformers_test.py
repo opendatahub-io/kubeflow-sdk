@@ -2987,5 +2987,35 @@ def test_output_dir_normalization(test_case):
     print("test execution complete")
 
 
+def test_s3_access_retry_code_generation():
+    """Test that S3 access verification includes 3-retry logic in generated code."""
+    print("Executing test: S3 retry logic in generated code")
+
+    # Generate checkpoint injection code with S3 config
+    code = get_jit_checkpoint_injection_code(
+        output_dir="/mnt/checkpoints",
+        cloud_remote_storage_uri="s3://test-bucket/path",
+        enable_jit_checkpoint=True,
+        verify_cloud_storage_access=True,
+    )
+
+    # Verify retry logic is present in generated code
+    assert "for attempt in range(1, 4):" in code, "3-attempt retry loop not found"
+    assert "last_error = None" in code, "Error tracking not found"
+    assert "last_error = e" in code, "Error capture not found"
+    assert "if attempt < 3:" in code, "Retry condition not found"
+    assert "time.sleep(1)" in code, "Backoff sleep not found"
+    assert "if last_error:" in code, "Error re-raise check not found"
+    assert "raise last_error" in code, "Error propagation not found"
+
+    # Verify code structure contains the access verification section
+    assert "verify_cloud_storage_access" in code
+    assert 'self.remote_fs.pipe(test_file, b"test")' in code
+    assert "self.remote_fs.cat(test_file)" in code
+    assert "self.remote_fs.rm_file(test_file)" in code
+
+    print("test execution complete")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

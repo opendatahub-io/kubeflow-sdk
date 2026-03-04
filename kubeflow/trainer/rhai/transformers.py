@@ -398,9 +398,21 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Verify storage access by writing/reading test file (if enabled)
                     if checkpoint_config.get("verify_cloud_storage_access", True):
                         test_file = ".kubeflow-access-test"
-                        self.remote_fs.pipe(test_file, b"test")
-                        self.remote_fs.cat(test_file)
-                        self.remote_fs.rm_file(test_file)
+                        last_error = None
+                        for attempt in range(1, 4):  # 3 attempts with backoff
+                            try:
+                                self.remote_fs.pipe(test_file, b"test")
+                                self.remote_fs.cat(test_file)
+                                self.remote_fs.rm_file(test_file)
+                                last_error = None
+                                break  # Success
+                            except Exception as e:
+                                last_error = e
+                                if attempt < 3:
+                                    time.sleep(1)
+
+                        if last_error:
+                            raise last_error  # Re-raise to outer except
 
                     _log(f"Cloud storage configured: {cloud_remote_storage_uri} ({protocol})")
                 except Exception as e:
