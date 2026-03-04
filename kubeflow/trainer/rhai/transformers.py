@@ -281,11 +281,12 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 current_step = self.trainer.state.global_step
                 _log(f"Starting JIT checkpoint at step {current_step}")
 
-                # Get global rank 0 for distributed training.
-                # Fall back to True for single-process runs.
-                is_global_rank0 = True
-                if dist.is_available() and dist.is_initialized():
-                    is_global_rank0 = dist.get_rank() == 0
+                # Build per-rank marker filename
+                node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
+                try:
+                    local_rank = self.trainer.args.local_process_index
+                except Exception:
+                    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
@@ -293,20 +294,20 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 )
                 os.makedirs(checkpoint_path, exist_ok=True)
 
-                # Create sentinel file to mark incomplete checkpoint (only global rank 0)
-                sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
-                if is_global_rank0:
-                    try:
-                        with open(sentinel_file, "w") as f:
-                            f.write(f"Checkpoint started at step {current_step}")
-                    except Exception as e:
-                        _log(
-                            f"Warning: Failed to write sentinel file: {e}. "
-                            "Check local disk space and write permissions in output_dir; "
-                            "this checkpoint will be treated as complete during resume."
-                            "Please manually verify if the checkpoint is indeed complete"
-                            f"{checkpoint_path}"
-                        )
+                # Each rank creates its own sentinel to track per-rank completion
+                sentinel_name = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-rank-{local_rank}"
+                sentinel_file = os.path.join(checkpoint_path, sentinel_name)
+                try:
+                    with open(sentinel_file, "w") as f:
+                        f.write(f"Checkpoint started at step {current_step}")
+                except Exception as e:
+                    _log(
+                        f"Warning: Failed to write sentinel file: {e}. "
+                        "Check local disk space and write permissions in output_dir; "
+                        "this checkpoint will be treated as complete during resume. "
+                        "Please manually verify if the checkpoint is indeed complete: "
+                        f"{checkpoint_path}"
+                    )
 
                 # Checkpoint using dedicated CUDA stream
                 if self.checkpoint_stream is not None:
@@ -324,8 +325,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Fallback if no CUDA stream
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
-                # Remove sentinel on success (only global rank 0)
-                if is_global_rank0 and os.path.exists(sentinel_file):
+                # Remove sentinel on success (each rank removes its own)
+                if os.path.exists(sentinel_file):
                     try:
                         os.remove(sentinel_file)
                     except Exception as e:
@@ -928,10 +929,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     continue
 
                 checkpoint_path = os.path.join(output_dir, name)
-                incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
+
+                # Check for any incomplete marker files (supports per-rank markers)
+                has_incomplete = any(
+                    f.startswith(CHECKPOINT_INCOMPLETE_MARKER) for f in os.listdir(checkpoint_path)
+                )
 
                 # Delete incomplete checkpoints (global rank 0 only to avoid race condition)
-                if os.path.exists(incomplete_marker):
+                if has_incomplete:
                     if is_global_rank_0:
                         try:
                             _log(f"Deleting incomplete checkpoint: {checkpoint_path}")
