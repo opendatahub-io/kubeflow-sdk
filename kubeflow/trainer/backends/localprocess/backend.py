@@ -261,6 +261,8 @@ class LocalProcessBackend(RuntimeBackend):
         self.__local_jobs.remove(_job)
 
     def __get_job_status(self, job: LocalBackendJobs) -> str:
+        if not job.steps:
+            return constants.TRAINJOB_CREATED
         statuses = [_step.job.status for _step in job.steps]
         # if status is running or failed will take precedence over completed
         if constants.TRAINJOB_FAILED in statuses:
@@ -270,7 +272,7 @@ class LocalProcessBackend(RuntimeBackend):
         elif constants.TRAINJOB_CREATED in statuses:
             status = constants.TRAINJOB_CREATED
         else:
-            status = constants.TRAINJOB_CREATED
+            status = constants.TRAINJOB_COMPLETE
 
         return status
 
