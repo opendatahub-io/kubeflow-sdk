@@ -520,7 +520,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         def _start_upload_worker(self) -> None:
             """Start background upload worker."""
-            if self._upload_queue is None:
+            # Start worker if queue doesn't exist OR if the worker thread is not alive
+            upload_thread = getattr(self, "_upload_thread", None)
+            worker_alive = upload_thread is not None and upload_thread.is_alive()
+            if self._upload_queue is None or not worker_alive:
                 # Use LIFO to prioritize the latest checkpoint
                 # when resuming after interruptions the latest state is picked.
                 self._upload_queue = LifoQueue()
@@ -957,6 +960,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         f"[Kubeflow] Queued final model for upload: {checkpoint_name}",
                         args=self.args,
                     )
+
+                    # Wait for final model upload to complete
+                    _jit_checkpoint_callback._shutdown_upload_worker()
 
             return result
 
