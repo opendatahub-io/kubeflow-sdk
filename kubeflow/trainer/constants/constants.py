@@ -155,18 +155,10 @@ MPI_COMMAND = (
 DEFAULT_TRAINING_RUNTIME = os.getenv("DEFAULT_TRAINING_RUNTIME", "torch-distributed")
 
 # The default container command for the Torch CustomTrainer.
-# torchrun automatically uses c10d rendezvous with PET_MASTER_ADDR/PET_MASTER_PORT
-# when nnodes > 1. Explicit --rdzv-* flags are not needed.
 TORCH_COMMAND = (
     "bash",
     "-c",
-    EXEC_FUNC_SCRIPT.replace(
-        "__ENTRYPOINT__",
-        "torchrun"
-        " --nnodes=${{PET_NNODES:-1}}"
-        " --nproc-per-node=${{PET_NPROC_PER_NODE:-1}}"
-        " --node-rank=${{PET_NODE_RANK:-0}}",
-    ),
+    EXEC_FUNC_SCRIPT.replace("__ENTRYPOINT__", "torchrun"),
 )
 # The Torch env name for the number of procs per node (e.g. number of GPUs per Pod).
 TORCH_ENV_NUM_PROC_PER_NODE = "PET_NPROC_PER_NODE"
