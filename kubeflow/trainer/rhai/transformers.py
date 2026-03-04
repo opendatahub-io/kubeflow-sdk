@@ -281,12 +281,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 current_step = self.trainer.state.global_step
                 _log(f"Starting JIT checkpoint at step {current_step}")
 
-                # Get local rank 0 for distributed training.
+                # Get global rank 0 for distributed training.
                 # Fall back to True for single-process runs.
-                try:
-                    is_local_rank0 = self.trainer.args.local_process_index == 0
-                except Exception:
-                    is_local_rank0 = int(os.environ.get("LOCAL_RANK", "0")) == 0
+                is_global_rank0 = True
+                if dist.is_available() and dist.is_initialized():
+                    is_global_rank0 = dist.get_rank() == 0
 
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
@@ -294,9 +293,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 )
                 os.makedirs(checkpoint_path, exist_ok=True)
 
-                # Create sentinel file to mark incomplete checkpoint (only rank 0)
+                # Create sentinel file to mark incomplete checkpoint (only global rank 0)
                 sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
-                if is_local_rank0:
+                if is_global_rank0:
                     try:
                         with open(sentinel_file, "w") as f:
                             f.write(f"Checkpoint started at step {current_step}")
@@ -325,8 +324,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Fallback if no CUDA stream
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
-                # Remove sentinel on success (only rank 0)
-                if is_local_rank0 and os.path.exists(sentinel_file):
+                # Remove sentinel on success (only global rank 0)
+                if is_global_rank0 and os.path.exists(sentinel_file):
                     try:
                         os.remove(sentinel_file)
                     except Exception as e:
@@ -409,6 +408,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             except Exception as e:
                                 last_error = e
                                 if attempt < 3:
+                                    _log(
+                                        f"Cloud storage access verification failed (attempt {attempt}/3), retrying..."
+                                    )
                                     time.sleep(1)
 
                         if last_error:
