@@ -360,7 +360,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             self.cloud_remote_storage_uri = cloud_remote_storage_uri
             self.remote_fs = None
             # Async upload state
-            self._upload_queue = None  # LifoQueue for background uploads
+            self.upload_queue = None  # LifoQueue for background uploads
             self._upload_thread = None  # Background worker thread
             self._shutdown_event = None  # Event to signal shutdown
             self._upload_error = None  # Store background thread errors
@@ -428,7 +428,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         f"This check can be disabled by setting verify_cloud_storage_access=False."
                     ) from e
 
-        def _wait_for_all_ranks(self, operation: str) -> None:
+        def wait_for_all_ranks(self, operation: str) -> None:
             """Barrier across ranks."""
             # Avoid barrier in single-process or when torch.distributed is not initialized.
             if not dist.is_available() or not dist.is_initialized():
@@ -447,7 +447,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     "Retrying the training job often resolves transient issues."
                 ) from e
 
-        def _calculate_local_dir_size(self, path: str) -> int:
+        def calculate_local_dir_size(self, path: str) -> int:
             """Calculate total size of local directory."""
             import contextlib
 
@@ -518,15 +518,15 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     self._upload_error = None  # Clear after reading
                     raise error
 
-        def _start_upload_worker(self) -> None:
+        def start_upload_worker(self) -> None:
             """Start background upload worker."""
             # Start worker if queue doesn't exist OR if the worker thread is not alive
             upload_thread = getattr(self, "_upload_thread", None)
             worker_alive = upload_thread is not None and upload_thread.is_alive()
-            if self._upload_queue is None or not worker_alive:
+            if self.upload_queue is None or not worker_alive:
                 # Use LIFO to prioritize the latest checkpoint
                 # when resuming after interruptions the latest state is picked.
-                self._upload_queue = LifoQueue()
+                self.upload_queue = LifoQueue()
                 self._shutdown_event = threading.Event()
                 self._upload_thread = threading.Thread(
                     target=self._upload_worker_loop,
@@ -541,7 +541,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             while True:
                 try:
                     # Use timeout to periodically check shutdown event
-                    task = self._upload_queue.get(timeout=1.0)
+                    task = self.upload_queue.get(timeout=1.0)
                 except Empty:
                     if self._shutdown_event.is_set():
                         break
@@ -564,7 +564,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         "Check S3 connectivity/permissions and retry."
                     )
                 finally:
-                    self._upload_queue.task_done()
+                    self.upload_queue.task_done()
 
         def _upload_checkpoint_to_cloud(self, task: tuple) -> None:
             """Upload checkpoint."""
@@ -683,9 +683,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             return failed_files
 
-        def _shutdown_upload_worker(self) -> None:
+        def shutdown_upload_worker(self) -> None:
             """Stop upload worker."""
-            if self._upload_queue is not None and self._upload_thread is not None:
+            if self.upload_queue is not None and self._upload_thread is not None:
                 _log("Waiting for background uploads to complete...")
                 self._shutdown_event.set()  # Signal shutdown
                 self._upload_thread.join(timeout=3600)  # Wait up to 1 hour
@@ -764,7 +764,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     )
 
             # Barrier to wait for local rank 0 checkpoint download to complete
-            self._wait_for_all_ranks("download")
+            self.wait_for_all_ranks("download")
 
         def on_save(self, args, state, control, **kwargs):
             """Stage checkpoint and queue async upload."""
@@ -773,7 +773,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 return
 
             # Barrier before staging checkpoint to ensure all ranks finished saving their files
-            self._wait_for_all_ranks("save")
+            self.wait_for_all_ranks("save")
 
             # Check for background upload errors and propagate to main thread
             self._check_upload_error()
@@ -805,10 +805,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     shutil.move(checkpoint_path, staging_checkpoint_path)
 
                     # Calculate directory size for progress tracking
-                    total_size = self._calculate_local_dir_size(staging_checkpoint_path)
+                    total_size = self.calculate_local_dir_size(staging_checkpoint_path)
 
                     # Start upload worker if not yet running
-                    self._start_upload_worker()
+                    self.start_upload_worker()
                     # Queue upload task (non-blocking, training continues immediately)
                     node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
                     marker_name = (
@@ -838,7 +838,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         total_size,
                         marker_name,
                     )
-                    self._upload_queue.put(task)
+                    self.upload_queue.put(task)
                     _log(
                         f"Queued checkpoint for async upload: {checkpoint_name}",
                         args=args,
@@ -886,7 +886,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             is_local_rank_0 = args.local_process_index == 0
             if is_local_rank_0:
                 # Shutdown background upload worker and wait for all uploads to complete
-                self._shutdown_upload_worker()
+                self.shutdown_upload_worker()
 
                 # Check for any errors that occurred during final uploads
                 self._check_upload_error()
@@ -913,60 +913,61 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         )
 
         # Monkey-patch save_model() to upload final model to S3 immediately after save
-        _original_save_model = _TransformersTrainer.save_model
+        if hasattr(_TransformersTrainer, "save_model"):
+            _original_save_model = _TransformersTrainer.save_model
 
-        def _patched_save_model(
-            self,
-            output_dir: str | None = None,
-            _internal_call: bool = False,
-        ):
-            """Save model and upload to S3 if remote storage configured.
-
-            Only uploads when _internal_call=False (user-initiated saves like final model).
-            Periodic checkpoints (_internal_call=True) are already handled by JIT checkpoint infrastructure.
-            """
-            # Call original save_model (handles all distributed training logic)
-            result = _original_save_model(
+            def _patched_save_model(
                 self,
-                output_dir=output_dir,
-                _internal_call=_internal_call,
-            )
-
-            # Upload after save ONLY for user-initiated saves (final model, not periodic checkpoints)
-            if (
-                not _internal_call
-                and _jit_checkpoint_callback.remote_fs
-                and output_dir
-                and os.path.exists(output_dir)
+                output_dir: str | None = None,
+                _internal_call: bool = False,
             ):
-                # Barrier to ensure all ranks finished saving
-                _jit_checkpoint_callback._wait_for_all_ranks("final_save")
+                """Save model and upload to S3 if remote storage configured.
 
-                # Upload from local rank 0 only (works for all strategies - DDP/FSDP/DeepSpeed)
-                if self.args.local_process_index == 0:
-                    # Determine checkpoint name from output_dir
-                    checkpoint_name = os.path.basename(output_dir)
+                Only uploads when _internal_call=False (user-initiated saves like final model).
+                Periodic checkpoints (_internal_call=True) are already handled by JIT checkpoint infrastructure.
+                """
+                # Call original save_model (handles all distributed training logic)
+                result = _original_save_model(
+                    self,
+                    output_dir=output_dir,
+                    _internal_call=_internal_call,
+                )
 
-                    # Queue upload using existing infrastructure
-                    total_size = _jit_checkpoint_callback._calculate_local_dir_size(output_dir)
-                    _jit_checkpoint_callback._start_upload_worker()
+                # Upload after save ONLY for user-initiated saves (final model, not periodic checkpoints)
+                if (
+                    not _internal_call
+                    and _jit_checkpoint_callback.remote_fs
+                    and output_dir
+                    and os.path.exists(output_dir)
+                ):
+                    # Barrier to ensure all ranks finished saving
+                    _jit_checkpoint_callback.wait_for_all_ranks("final_save")
 
-                    node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
-                    marker_name = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-rank-{self.args.local_process_index}"
+                    # Upload from local rank 0 only (works for all strategies - DDP/FSDP/DeepSpeed)
+                    if self.args.local_process_index == 0:
+                        # Determine checkpoint name from output_dir
+                        checkpoint_name = os.path.basename(output_dir)
 
-                    task = (output_dir, checkpoint_name, total_size, marker_name)
-                    _jit_checkpoint_callback._upload_queue.put(task)
-                    _log(
-                        f"[Kubeflow] Queued final model for upload: {checkpoint_name}",
-                        args=self.args,
-                    )
+                        # Queue upload using existing infrastructure
+                        total_size = _jit_checkpoint_callback.calculate_local_dir_size(output_dir)
+                        _jit_checkpoint_callback.start_upload_worker()
 
-                    # Wait for final model upload to complete
-                    _jit_checkpoint_callback._shutdown_upload_worker()
+                        node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
+                        marker_name = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-rank-{self.args.local_process_index}"
 
-            return result
+                        task = (output_dir, checkpoint_name, total_size, marker_name)
+                        _jit_checkpoint_callback.upload_queue.put(task)
+                        _log(
+                            f"[Kubeflow] Queued final model for upload: {checkpoint_name}",
+                            args=self.args,
+                        )
 
-        _TransformersTrainer.save_model = _patched_save_model
+                        # Wait for final model upload to complete
+                        _jit_checkpoint_callback.shutdown_upload_worker()
+
+                return result
+
+            _TransformersTrainer.save_model = _patched_save_model
 
         def _find_latest_checkpoint(output_dir):
             """Find the latest checkpoint and deleting incomplete ones."""
