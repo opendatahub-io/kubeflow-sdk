@@ -12,6 +12,8 @@ Adding a New Algorithm:
             name="my_algorithm",
             metrics_file_patterns=("my_metrics_*.jsonl",),
             validate=_no_op_validate,
+            # Runs inside torchrun
+            entrypoint=constants.TORCH_COMMAND,
         ),
 
     Example without metrics files (no progress tracking):
@@ -19,12 +21,16 @@ Adding a New Algorithm:
             name="my_algorithm",
             metrics_file_patterns=(),  # Empty tuple for no metrics
             validate=_no_op_validate,
+            # Internally launches torchrun as a subprocess
+            entrypoint=constants.DEFAULT_COMMAND,
         ),
 """
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
+
+from kubeflow.trainer.constants import constants
 
 
 @dataclass(frozen=True)
@@ -40,11 +46,16 @@ class AlgorithmSpec:
             Used for metrics reading and cleanup operations.
         validate: Validation function that takes a training config and raises
             ValueError if the config is invalid for this algorithm.
+        entrypoint: The command tuple used to launch training. Algorithms that
+            internally launch torchrun as a subprocess (e.g. SFT, OSFT) use
+            DEFAULT_COMMAND (python). Algorithms that expect to run inside a
+            torchrun process (e.g. LoRA) use TORCH_COMMAND (torchrun).
     """
 
     name: str
     metrics_file_patterns: Iterable[str]
     validate: Callable[[Any], None]
+    entrypoint: tuple[str, ...]
 
     def __post_init__(self):
         """Validate the AlgorithmSpec at creation time.
@@ -119,16 +130,22 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
         name="sft",
         metrics_file_patterns=("training_params_and_metrics_global*.jsonl",),
         validate=_no_op_validate,
+        # SFT internally launches torchrun as a subprocess
+        entrypoint=constants.DEFAULT_COMMAND,
     ),
     "osft": AlgorithmSpec(
         name="osft",
         metrics_file_patterns=("training_metrics_*.jsonl",),
         validate=_no_op_validate,
+        # OSFT internally launches torchrun as a subprocess
+        entrypoint=constants.DEFAULT_COMMAND,
     ),
     "lora_sft": AlgorithmSpec(
         name="lora_sft",
         metrics_file_patterns=(),  # LoRA uses HF Trainer logging, not JSONL metrics files
         validate=_no_op_validate,
+        # LoRA expects to run inside a torchrun process
+        entrypoint=constants.TORCH_COMMAND,
     ),
 }
 
