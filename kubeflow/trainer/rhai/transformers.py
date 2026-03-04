@@ -212,7 +212,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     import signal
     import threading
     import time
-    from typing import Optional
+    from typing import Callable, Optional
 
     import torch
     import torch.distributed as dist
@@ -281,15 +281,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 current_step = self.trainer.state.global_step
                 _log(f"Starting JIT checkpoint at step {current_step}")
 
-                # Get rank for distributed training. Fall back to True for single-process
-                # runs or if accelerate is unavailable.
-                try:
-                    from accelerate import PartialState
-
-                    is_main_process = PartialState().is_main_process
-                except Exception:
-                    # accelerate not installed or PartialState unavailable - assume single process
-                    is_main_process = True
+                # Get global rank 0 for distributed training.
+                # Fall back to True for single-process runs.
+                is_global_rank0 = True
+                if dist.is_available() and dist.is_initialized():
+                    is_global_rank0 = dist.get_rank() == 0
 
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
@@ -297,9 +293,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 )
                 os.makedirs(checkpoint_path, exist_ok=True)
 
-                # Create sentinel file to mark incomplete checkpoint (only rank 0)
+                # Create sentinel file to mark incomplete checkpoint (only global rank 0)
                 sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
-                if is_main_process:
+                if is_global_rank0:
                     try:
                         with open(sentinel_file, "w") as f:
                             f.write(f"Checkpoint started at step {current_step}")
@@ -307,7 +303,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         _log(
                             f"Warning: Failed to write sentinel file: {e}. "
                             "Check local disk space and write permissions in output_dir; "
-                            "this checkpoint may be treated as complete during resume."
+                            "this checkpoint will be treated as complete during resume."
+                            "Please manually verify if the checkpoint is indeed complete"
+                            f"{checkpoint_path}"
                         )
 
                 # Checkpoint using dedicated CUDA stream
@@ -326,8 +324,8 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Fallback if no CUDA stream
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
-                # Remove sentinel on success (only rank 0)
-                if is_main_process and os.path.exists(sentinel_file):
+                # Remove sentinel on success (only global rank 0)
+                if is_global_rank0 and os.path.exists(sentinel_file):
                     try:
                         os.remove(sentinel_file)
                     except Exception as e:
@@ -399,9 +397,24 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Verify storage access by writing/reading test file (if enabled)
                     if checkpoint_config.get("verify_cloud_storage_access", True):
                         test_file = ".kubeflow-access-test"
-                        self.remote_fs.pipe(test_file, b"test")
-                        self.remote_fs.cat(test_file)
-                        self.remote_fs.rm_file(test_file)
+                        last_error = None
+                        for attempt in range(1, 4):  # 3 attempts with backoff
+                            try:
+                                self.remote_fs.pipe(test_file, b"test")
+                                self.remote_fs.cat(test_file)
+                                self.remote_fs.rm_file(test_file)
+                                last_error = None
+                                break  # Success
+                            except Exception as e:
+                                last_error = e
+                                if attempt < 3:
+                                    _log(
+                                        f"Cloud storage access verification failed (attempt {attempt}/3), retrying..."
+                                    )
+                                    time.sleep(1)
+
+                        if last_error:
+                            raise last_error  # Re-raise to outer except
 
                     _log(f"Cloud storage configured: {cloud_remote_storage_uri} ({protocol})")
                 except Exception as e:
@@ -484,6 +497,19 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             return ProgressCallback(operation, total_size)
 
+        def _retry_marker_op(self, op: Callable[[], None]) -> Optional[Exception]:
+            """Retry marker operation with backoff."""
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    op()
+                    return None
+                except Exception as e:
+                    last_error = e
+                    if attempt < 3:
+                        time.sleep(1)
+            return last_error
+
         def _check_upload_error(self) -> None:
             """Raise any background upload error."""
             with self._upload_error_lock:
@@ -542,19 +568,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             staging_path, checkpoint_name, total_size, incomplete_marker_name = task
             incomplete_marker_path = f"{checkpoint_name}/{incomplete_marker_name}"
 
-            # Create .incomplete sentinel so resume can skip in-flight uploads.
-            _log(f"Creating .incomplete marker in S3: {checkpoint_name}")
-            try:
-                self.remote_fs.pipe(
-                    incomplete_marker_path,
-                    f"Upload started for {checkpoint_name}".encode(),
-                )
-            except Exception as e:
-                _log(
-                    f"Warning: Failed to write .incomplete marker for {checkpoint_name}: {e}. "
-                    "Check S3 write/delete permissions; resume safety may be affected."
-                )
-
             # Upload files in parallel
             _log(f"Starting parallel upload to S3: {checkpoint_name}")
 
@@ -569,14 +582,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             _log(f"Upload complete: {checkpoint_name}")
 
-            # Delete .incomplete sentinel for this uploader
-            try:
-                self.remote_fs.rm_file(incomplete_marker_path)
-            except Exception as e:
+            # Delete incomplete sentinel for this uploader
+            remove_error = self._retry_marker_op(
+                lambda: self.remote_fs.rm_file(incomplete_marker_path)
+            )
+            if remove_error:
                 _log(
-                    f"Warning: Failed to remove remote file '{incomplete_marker_path}': {e}. "
-                    "Check S3 delete permissions; stale markers will cause resume to skip "
-                    "this checkpoint."
+                    f"Warning: Failed to remove incomplete marker '{incomplete_marker_path}': "
+                    f"{remove_error}. "
+                    "The checkpoint is complete but cannot be loaded during training resume "
+                    f"because the marker still exists. Manually delete: {incomplete_marker_path}"
                 )
 
             # Delete local staging checkpoint
@@ -797,6 +812,23 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-"
                         f"rank-{args.local_process_index}"
                     )
+                    # Create marker at enqueue time so resume won't treat queued uploads
+                    # as complete if the node specific upload worker hasn't started yet.
+                    marker_path = f"{checkpoint_name}/{marker_name}"
+                    marker_error = self._retry_marker_op(
+                        lambda: self.remote_fs.pipe(
+                            marker_path,
+                            f"Upload queued for {checkpoint_name}".encode(),
+                        )
+                    )
+                    if marker_error:
+                        _log(
+                            f"Warning: Failed to write incomplete marker for {checkpoint_name}: "
+                            f"{marker_error}. "
+                            "Upload will continue, but if it fails, partial uploads cannot be detected during "
+                            "resume. Check S3 write permissions to prevent corrupted checkpoints. "
+                            "Consider deleting the checkpoint file manually."
+                        )
                     task = (
                         staging_checkpoint_path,
                         checkpoint_name,
@@ -882,15 +914,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if not output_dir or not os.path.exists(output_dir):
                 return None
 
-            # Determine if this is rank 0 (main process). Fall back to True for single-process
-            # runs or if accelerate is unavailable.
-            try:
-                from accelerate import PartialState
-
-                is_rank_0 = PartialState().is_main_process
-            except Exception:
-                # accelerate not installed or PartialState unavailable - assume single process
-                is_rank_0 = True
+            # Only global rank-0 deletes incomplete checkpoints
+            is_global_rank_0 = True  # Default for single node process
+            if dist.is_available() and dist.is_initialized():
+                is_global_rank_0 = dist.get_rank() == 0
 
             checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
             checkpoints = []
@@ -903,16 +930,17 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 checkpoint_path = os.path.join(output_dir, name)
                 incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
 
-                # Delete incomplete checkpoints (rank 0 only to avoid race condition)
+                # Delete incomplete checkpoints (global rank 0 only to avoid race condition)
                 if os.path.exists(incomplete_marker):
-                    if is_rank_0:
+                    if is_global_rank_0:
                         try:
-                            print(f"[Kubeflow] Deleting incomplete checkpoint: {checkpoint_path}")
+                            _log(f"Deleting incomplete checkpoint: {checkpoint_path}")
                             shutil.rmtree(checkpoint_path)
                         except Exception as e:
-                            print(
-                                f"[Kubeflow] Warning: Failed to delete checkpoint: {e}. "
-                                "Check permissions and delete manually if needed."
+                            _log(
+                                "Warning: Failed to delete incomplete checkpoint "
+                                f"'{checkpoint_path}': {e}. "
+                                "Manually delete it to free up storage."
                             )
                     continue
 
@@ -921,7 +949,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if checkpoints:
                 checkpoints.sort(reverse=True)
                 latest = checkpoints[0][1]
-                print(f"[Kubeflow] Found latest checkpoint: {latest}")
+                _log(f"Found latest checkpoint: {latest}")
                 return latest
 
             return None
@@ -953,16 +981,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 # Apply output_dir if provided by user
                 if "output_dir" in checkpoint_config:
                     training_args.output_dir = checkpoint_config["output_dir"]
-                    print(
-                        f"[Kubeflow] Applied output_dir: {checkpoint_config['output_dir']}",
-                        flush=True,
+                    _log(
+                        f"Applied output_dir: {checkpoint_config['output_dir']}",
+                        args=training_args,
                     )
 
                 if "save_strategy" in checkpoint_config:
                     training_args.save_strategy = checkpoint_config["save_strategy"]
-                    print(
-                        f"[Kubeflow] Applied save_strategy: {checkpoint_config['save_strategy']}",
-                        flush=True,
+                    _log(
+                        f"Applied save_strategy: {checkpoint_config['save_strategy']}",
+                        args=training_args,
                     )
 
                 if (
@@ -970,17 +998,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     and checkpoint_config["save_steps"] is not None
                 ):
                     training_args.save_steps = checkpoint_config["save_steps"]
-                    print(
-                        f"[Kubeflow] Applied save_steps: {checkpoint_config['save_steps']}",
-                        flush=True,
+                    _log(
+                        f"Applied save_steps: {checkpoint_config['save_steps']}",
+                        args=training_args,
                     )
 
                 if "save_total_limit" in checkpoint_config:
                     training_args.save_total_limit = checkpoint_config["save_total_limit"]
-                    print(
-                        f"[Kubeflow] Applied save_total_limit: "
-                        f"{checkpoint_config['save_total_limit']}",
-                        flush=True,
+                    _log(
+                        f"Applied save_total_limit: {checkpoint_config['save_total_limit']}",
+                        args=training_args,
                     )
 
                 if checkpoint_config.get("cloud_remote_storage_uri") and getattr(
@@ -999,7 +1026,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     callbacks = list(callbacks)
                 if not any(isinstance(cb, JITCheckpointCallback) for cb in callbacks):
                     callbacks.append(_jit_checkpoint_callback)
-                    print("[Kubeflow] Auto-injected JIT checkpoint callback", flush=True)
+                    _log("Auto-injected JIT checkpoint callback", args=training_args)
                 kwargs["callbacks"] = callbacks
 
             # Call original __init__
@@ -1016,10 +1043,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 if dist.is_available() and dist.is_initialized():
                     rank = dist.get_rank()
                     world_size = dist.get_world_size()
-                    print(
-                        f"[Kubeflow] Rank {rank}/{world_size} - "
+                    _log(
+                        f"Rank {rank}/{world_size} - "
                         "Waiting for all ranks before training starts...",
-                        flush=True,
+                        args=training_args,
                     )
                     try:
                         dist.barrier()
@@ -1032,10 +1059,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             "distributed training is properly configured. Retrying the "
                             "training job often resolves transient issues."
                         ) from e
-                    print(
-                        f"[Kubeflow] Rank {rank}/{world_size} - "
-                        "All ranks synchronized, proceeding...",
-                        flush=True,
+                    _log(
+                        f"Rank {rank}/{world_size} - All ranks synchronized, proceeding...",
+                        args=training_args,
                     )
 
                 # Only auto-resume if user didn't explicitly set it
@@ -1043,7 +1069,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     latest_checkpoint = _find_latest_checkpoint(training_args.output_dir)
                     if latest_checkpoint:
                         resume_from_checkpoint = latest_checkpoint
-                        print(f"[Kubeflow] Auto-resuming from: {latest_checkpoint}")
+                        _log(f"Auto-resuming from: {latest_checkpoint}", args=training_args)
                 return _original_train(
                     resume_from_checkpoint=resume_from_checkpoint, **train_kwargs
                 )
@@ -1052,7 +1078,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         # Apply monkey-patch
         _TransformersTrainer.__init__ = _patched_trainer_init
-        print("[Kubeflow] Trainer auto-instrumentation enabled", flush=True)
+        _log("Trainer auto-instrumentation enabled")
 
     enable_jit = checkpoint_config.get("enable_jit", False)
     return (
