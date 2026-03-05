@@ -233,6 +233,23 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log_prefix = f"[Kubeflow-node{node}-rank{rank}]"
         print(f"{_log_prefix} {message}", flush=True)
 
+    def _wait_for_all_ranks(operation: str) -> None:
+        """Barrier across ranks to synchronize distributed training."""
+        if not dist.is_available() or not dist.is_initialized():
+            return
+        try:
+            # Specify device to avoid "guessing device ID" warning
+            if torch.cuda.is_available():
+                dist.barrier(device_ids=[torch.cuda.current_device()])
+            else:
+                dist.barrier()
+        except Exception as e:
+            raise RuntimeError(
+                f"[Kubeflow] Barrier synchronization failed during {operation}: {e}. "
+                "This typically indicates one or more training processes crashed or "
+                "exited early. Check logs to identify which rank failed."
+            ) from e
+
     class CheckpointManager:
         """Manages async just-in-time checkpointing on SIGTERM signal using CUDA streams."""
 
@@ -265,7 +282,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log("SIGTERM received, starting async checkpoint")
             self.checkpoint_requested = True
 
-            # Start checkpoint thread immediately
+            # Barrier before spawning thread to ensure all ranks start checkpointing at same step
+            _wait_for_all_ranks("sigterm_checkpoint_sync")
+
+            # Start checkpoint thread after barrier
             self.checkpoint_thread = threading.Thread(
                 target=self._async_checkpoint, daemon=True, name="KubeflowJITCheckpoint"
             )
@@ -325,7 +345,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Fallback if no CUDA stream
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
-                # Remove sentinel on success (each rank removes its own)
+                # Remove sentinel on success (each rank removes its own independently)
                 if os.path.exists(sentinel_file):
                     try:
                         os.remove(sentinel_file)
@@ -429,26 +449,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         f"This check can be disabled by setting verify_cloud_storage_access=False."
                     ) from e
 
-        def wait_for_all_ranks(self, operation: str) -> None:
-            """Barrier across ranks."""
-            # Avoid barrier in single-process or when torch.distributed is not initialized.
-            if not dist.is_available() or not dist.is_initialized():
-                return
-            try:
-                dist.barrier()
-            except Exception as e:
-                raise RuntimeError(
-                    f"[Kubeflow] Barrier synchronization failed during checkpoint "
-                    f"{operation}: {e}. "
-                    "This typically indicates one or more training processes crashed "
-                    "or exited early. "
-                    "Check your training logs to identify which rank failed, "
-                    "verify all pods are healthy, "
-                    "and ensure distributed training is properly configured. "
-                    "Retrying the training job often resolves transient issues."
-                ) from e
-
-        def calculate_local_dir_size(self, path: str) -> int:
+        def _calculate_local_dir_size(self, path: str) -> int:
             """Calculate total size of local directory."""
             import contextlib
 
