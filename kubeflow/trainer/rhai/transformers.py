@@ -287,9 +287,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             # Start checkpoint thread after barrier
             self.checkpoint_thread = threading.Thread(
-                target=self._async_checkpoint, daemon=True, name="KubeflowJITCheckpoint"
+                target=self._async_checkpoint, daemon=False, name="KubeflowJITCheckpoint"
             )
             self.checkpoint_thread.start()
+
+            # Wait for checkpoint to complete before allowing process to terminate
+            _log("Waiting for checkpoint thread to complete...")
+            self.checkpoint_thread.join()
+            _log("Checkpoint thread completed")
 
         def _async_checkpoint(self):
             """Execute checkpoint asynchronously, waiting if in optimizer step."""
