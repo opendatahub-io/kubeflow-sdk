@@ -256,9 +256,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         def __init__(self, trainer):
             self.trainer = trainer
             self.checkpoint_requested = False
+            self._checkpoint_deferred = False
             self._original_sigterm_handler = None
             self.checkpoint_stream = None
-            self.checkpoint_thread = None
             self._in_optimizer_step = False
 
             # Initialize CUDA stream for async checkpoint operations
@@ -275,29 +275,30 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log("JIT checkpoint signal handler registered for SIGTERM")
 
         def _sigterm_handler(self, signum, frame):
-            """Start async checkpoint on SIGTERM."""
+            """Start checkpoint on SIGTERM.
+
+            If SIGTERM arrives outside an optimizer step, checkpoint is performed
+            directly. If SIGTERM arrives during an optimizer step, checkpoint is
+            deferred to the on_optimizer_step callback to avoid deadlock.
+            """
             if self.checkpoint_requested:
                 return
 
-            _log("SIGTERM received, starting async checkpoint")
+            _log("SIGTERM received, starting JIT checkpoint")
             self.checkpoint_requested = True
 
-            # Barrier before spawning thread to ensure all ranks start checkpointing at same step
-            _wait_for_all_ranks("sigterm_checkpoint_sync")
+            if self._in_optimizer_step:
+                # Unsafe to checkpoint during optimizer step - defer to callback
+                _log("In optimizer step, deferring checkpoint to callback")
+                self._checkpoint_deferred = True
+                return
 
-            # Start checkpoint thread after barrier
-            self.checkpoint_thread = threading.Thread(
-                target=self._async_checkpoint, daemon=False, name="KubeflowJITCheckpoint"
-            )
-            self.checkpoint_thread.start()
+            # Safe to checkpoint directly - blocks main thread
+            self._save_jit_checkpoint()
 
-        def _async_checkpoint(self):
-            """Execute checkpoint asynchronously, waiting if in optimizer step."""
+        def _save_jit_checkpoint(self):
+            """Execute checkpoint, saving model state and training artifacts."""
             try:
-                # Wait if we're currently in optimizer step (unsafe to checkpoint)
-                while self._in_optimizer_step:
-                    time.sleep(0.5)
-
                 current_step = self.trainer.state.global_step
                 _log(f"Starting JIT checkpoint at step {current_step}")
 
@@ -346,6 +347,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 else:
                     # Fallback if no CUDA stream
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
+
+                # Trigger on_save callback to upload checkpoint if cloud storage
+                self.trainer.callback_handler.on_save(
+                    self.trainer.args, self.trainer.state, self.trainer.control
+                )
 
                 # Remove sentinel on success (each rank removes its own independently)
                 if os.path.exists(sentinel_file):
@@ -874,6 +880,12 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 # Mark that optimizer step completed (safe for checkpoint again)
                 self.jit_manager._in_optimizer_step = False
 
+                # If SIGTERM arrived during optimizer step, checkpoint now
+                if self.jit_manager._checkpoint_deferred:
+                    self.jit_manager._checkpoint_deferred = False
+                    self.jit_manager._save_jit_checkpoint()
+                    control.should_training_stop = True
+
         def on_step_end(self, args, state, control, **kwargs):
             if self.jit_manager and self.jit_manager.checkpoint_in_progress():
                 control.should_save = False
@@ -885,22 +897,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 control.should_training_stop = True
 
         def on_train_end(self, args, state, control, **kwargs):
-            """Wait for JIT checkpoint completion and clean up staging directory."""
-            # Wait for JIT checkpoint thread if one is running
-            if self.jit_manager and self.jit_manager.checkpoint_thread:
-                _log("Waiting for JIT checkpoint to complete...", args=args)
-                self.jit_manager.checkpoint_thread.join(timeout=300)
-                if self.jit_manager.checkpoint_thread.is_alive():
-                    _log(
-                        "Warning: Checkpoint did not complete within 300s timeout. "
-                        "Kubernetes will send SIGKILL and checkpoint will be incomplete. "
-                        "Increase 'terminationGracePeriodSeconds' in your TrainJob manifest "
-                        "or check for slow disk/S3 issues.",
-                        args=args,
-                    )
-                else:
-                    _log("JIT checkpoint completed", args=args)
-
+            """Clean up staging directory after training."""
             if not self.remote_fs:
                 return
 
