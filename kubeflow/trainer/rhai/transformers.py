@@ -520,21 +520,21 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
         def start_upload_worker(self) -> None:
             """Start background upload worker."""
-            # Start worker if queue doesn't exist OR if the worker thread is not alive
-            upload_thread = getattr(self, "_upload_thread", None)
-            worker_alive = upload_thread is not None and upload_thread.is_alive()
-            if self.upload_queue is None or not worker_alive:
+            worker_alive = self._upload_thread is not None and self._upload_thread.is_alive()
+            if worker_alive:
+                return
+            if self.upload_queue is None:
                 # Use LIFO to prioritize the latest checkpoint
                 # when resuming after interruptions the latest state is picked.
                 self.upload_queue = LifoQueue()
-                self._shutdown_event = threading.Event()
-                self._upload_thread = threading.Thread(
-                    target=self._upload_worker_loop,
-                    daemon=False,
-                    name="KubeflowCheckpointUploader",
-                )
-                self._upload_thread.start()
-                _log("Background upload worker started")
+            self._shutdown_event = threading.Event()
+            self._upload_thread = threading.Thread(
+                target=self._upload_worker_loop,
+                daemon=False,
+                name="KubeflowCheckpointUploader",
+            )
+            self._upload_thread.start()
+            _log("Background upload worker started")
 
         def _upload_worker_loop(self) -> None:
             """Upload worker loop."""
@@ -904,70 +904,15 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             args=args,
                         )
 
+    # Create callback instance at outer scope so both apply_checkpointing()
+    # and upload_final_model_to_cloud() can reference it via closure.
+    _jit_checkpoint_callback = JITCheckpointCallback(
+        checkpoint_config.get("cloud_remote_storage_uri")
+    )
+
     def apply_checkpointing():
         """Setup monkey patch for Trainer to auto inject JIT checkpoint callback."""
         from transformers import Trainer as _TransformersTrainer
-
-        _jit_checkpoint_callback = JITCheckpointCallback(
-            checkpoint_config.get("cloud_remote_storage_uri")
-        )
-
-        # Monkey-patch save_model() to upload final model to S3 immediately after save
-        if hasattr(_TransformersTrainer, "save_model"):
-            _original_save_model = _TransformersTrainer.save_model
-
-            def _patched_save_model(
-                self,
-                output_dir: str | None = None,
-                _internal_call: bool = False,
-            ):
-                """Save model and upload to S3 if remote storage configured.
-
-                Only uploads when _internal_call=False (user-initiated saves like final model).
-                Periodic checkpoints (_internal_call=True) are already handled by JIT checkpoint infrastructure.
-                """
-                # Call original save_model (handles all distributed training logic)
-                result = _original_save_model(
-                    self,
-                    output_dir=output_dir,
-                    _internal_call=_internal_call,
-                )
-
-                # Upload after save ONLY for user-initiated saves (final model, not periodic checkpoints)
-                if (
-                    not _internal_call
-                    and _jit_checkpoint_callback.remote_fs
-                    and output_dir
-                    and os.path.exists(output_dir)
-                ):
-                    # Barrier to ensure all ranks finished saving
-                    _jit_checkpoint_callback.wait_for_all_ranks("final_save")
-
-                    # Upload from local rank 0 only (works for all strategies - DDP/FSDP/DeepSpeed)
-                    if self.args.local_process_index == 0:
-                        # Determine checkpoint name from output_dir
-                        checkpoint_name = os.path.basename(output_dir)
-
-                        # Queue upload using existing infrastructure
-                        total_size = _jit_checkpoint_callback.calculate_local_dir_size(output_dir)
-                        _jit_checkpoint_callback.start_upload_worker()
-
-                        node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
-                        marker_name = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-rank-{self.args.local_process_index}"
-
-                        task = (output_dir, checkpoint_name, total_size, marker_name)
-                        _jit_checkpoint_callback.upload_queue.put(task)
-                        _log(
-                            f"[Kubeflow] Queued final model for upload: {checkpoint_name}",
-                            args=self.args,
-                        )
-
-                        # Wait for final model upload to complete
-                        _jit_checkpoint_callback.shutdown_upload_worker()
-
-                return result
-
-            _TransformersTrainer.save_model = _patched_save_model
 
         def _find_latest_checkpoint(output_dir):
             """Find the latest checkpoint and deleting incomplete ones."""
@@ -1140,11 +1085,76 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         _TransformersTrainer.__init__ = _patched_trainer_init
         _log("Trainer auto-instrumentation enabled")
 
+    def upload_final_model_to_cloud():
+        """Upload final model artifacts from output_dir to cloud storage."""
+
+        if not checkpoint_config.get("cloud_remote_storage_uri"):
+            return
+
+        # Ensure all ranks finish writing final artifacts before upload starts.
+        _jit_checkpoint_callback.wait_for_all_ranks("final_model_upload")
+
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        if local_rank != 0:
+            return
+
+        output_dir = checkpoint_config.get("output_dir")
+        if not output_dir or not os.path.exists(output_dir):
+            return
+
+        _log("Uploading final model artifacts to S3")
+
+        try:
+            uploaded_count = 0
+            for item in os.listdir(output_dir):
+                if item.startswith("checkpoint-") or item in (
+                    CHECKPOINT_STAGING_DIR,
+                    ".cache",
+                ):
+                    continue
+
+                local_path = os.path.join(output_dir, item)
+                if os.path.isfile(local_path):
+                    size = os.path.getsize(local_path)
+                    _jit_checkpoint_callback.remote_fs.put_file(
+                        local_path,
+                        item,
+                        callback=_jit_checkpoint_callback._cloud_storage_progress_callback(
+                            "Upload", size
+                        ),
+                    )
+                    uploaded_count += 1
+                elif os.path.isdir(local_path):
+                    size = _jit_checkpoint_callback.calculate_local_dir_size(local_path)
+                    _jit_checkpoint_callback.remote_fs.put(
+                        local_path,
+                        item,
+                        recursive=True,
+                        callback=_jit_checkpoint_callback._cloud_storage_progress_callback(
+                            "Upload", size
+                        ),
+                    )
+                    uploaded_count += 1
+
+            if uploaded_count == 0:
+                _log("No final model artifacts to upload")
+                return
+
+            _log("Final model upload complete")
+
+        except Exception as e:
+            _log(
+                f"Warning: Final model upload failed: {e}. "
+                "Training completed successfully but final model artifacts "
+                "may not be fully available in cloud storage."
+            )
+
     enable_jit = checkpoint_config.get("enable_jit", False)
     return (
         CheckpointManager if enable_jit else None,
         JITCheckpointCallback if enable_jit else None,
         apply_checkpointing,
+        upload_final_model_to_cloud,
     )
 
 
@@ -1563,10 +1573,12 @@ def get_trainer_cr_from_transformers_trainer(
         )
         func_code = wrapper_code.replace("{{user_func_import_and_call}}", func_code)
 
-    # Inject checkpoint code if enabled
-    checkpoint_code = _build_checkpoint_code(trainer)
-    if checkpoint_code:
-        func_code = f"{checkpoint_code}\n\n{func_code}"
+    # Inject checkpoint code if enabled (header before user code, footer after)
+    checkpoint_header, checkpoint_footer = _build_checkpoint_code(trainer)
+    if checkpoint_header:
+        func_code = f"{checkpoint_header}\n\n{func_code}"
+    if checkpoint_footer:
+        func_code = f"{func_code}\n\n{checkpoint_footer}"
 
     # Build the command directly with the wrapped function code
     func_file = os.path.basename(inspect.getfile(trainer.func))
@@ -1595,11 +1607,16 @@ def get_trainer_cr_from_transformers_trainer(
     return trainer_crd
 
 
-def _build_checkpoint_code(trainer: TransformersTrainer) -> str:
-    """Generate checkpoint injection code for the trainer."""
+def _build_checkpoint_code(trainer: TransformersTrainer) -> tuple[str, str]:
+    """Generate checkpoint injection code for the trainer.
+
+    Returns:
+        Tuple of (header_code, footer_code). Header runs before user code,
+        footer runs after. Both are empty strings when checkpointing is disabled.
+    """
     # Only inject if JIT or periodic checkpoint is enabled
     if not trainer.enable_jit_checkpoint and not trainer.periodic_checkpoint_config:
-        return ""
+        return "", ""
 
     # Create default periodic config if JIT is enabled but no config provided
     periodic_config = trainer.periodic_checkpoint_config
@@ -1643,8 +1660,13 @@ def get_jit_checkpoint_injection_code(
     enable_jit_checkpoint: bool = False,
     verify_cloud_storage_access: bool = True,
     verify_cloud_storage_ssl: bool = True,
-) -> str:
-    """Generate the complete JIT checkpoint code to inject into training scripts."""
+) -> tuple[str, str]:
+    """Generate the complete JIT checkpoint code to inject into training scripts.
+
+    Returns:
+        Tuple of (header_code, footer_code). Header initializes checkpoint instrumentation
+        and runs before user code. Footer uploads final model artifacts and runs after.
+    """
     from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER, CHECKPOINT_STAGING_DIR
 
     # Build checkpoint config dict
@@ -1684,8 +1706,8 @@ def get_jit_checkpoint_injection_code(
 
     config_dict_str = pprint.pformat(config_dict, indent=4, width=100, sort_dicts=False)
 
-    # Build the wrapper with function call
-    wrapper = f"""# =============================================================================
+    # Build the header (runs before user code)
+    header = f"""# =============================================================================
 # Kubeflow SDK - Checkpoint Instrumentation
 # Generated by kubeflow.trainer.rhai.transformers
 # =============================================================================
@@ -1701,9 +1723,17 @@ CHECKPOINT_STAGING_DIR = {repr(CHECKPOINT_STAGING_DIR)}
 
 # Initialize and apply instrumentation
 checkpoint_config = {config_dict_str}
-_, _, apply_checkpointing = _create_checkpoint_instrumentation(checkpoint_config)
+_, _, apply_checkpointing, upload_final_model_to_cloud = _create_checkpoint_instrumentation(checkpoint_config)
 apply_checkpointing()
 print("[Kubeflow] Checkpoint instrumentation enabled", flush=True)
 """
 
-    return wrapper
+    # Build the footer (runs after user code)
+    footer = """
+# =============================================================================
+# Kubeflow SDK - Post-Training Cleanup
+# =============================================================================
+upload_final_model_to_cloud()
+"""
+
+    return header, footer
