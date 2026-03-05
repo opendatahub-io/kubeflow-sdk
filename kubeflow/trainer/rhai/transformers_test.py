@@ -1985,13 +1985,15 @@ def test_find_latest_checkpoint(test_case, tmp_path):
         checkpoint_path.mkdir()
 
         if checkpoint_config.get("incomplete"):
-            (checkpoint_path / CHECKPOINT_INCOMPLETE_MARKER).write_text("incomplete")
+            # Use per-rank marker format matching production code
+            marker_name = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-0-rank-0"
+            (checkpoint_path / marker_name).write_text("incomplete")
 
     # Also create a file named checkpoint-200 to test directory check
     if "not-a-checkpoint" in test_case.config["checkpoints"]:
         (tmp_path / "checkpoint-200").write_text("file, not dir")
 
-    # Implement the _find_latest_checkpoint logic
+    # Implement the _find_latest_checkpoint logic (matches production code)
     checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
     checkpoints = []
 
@@ -2001,10 +2003,14 @@ def test_find_latest_checkpoint(test_case, tmp_path):
             continue
 
         checkpoint_path = os.path.join(tmp_path, name)
-        incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
+
+        # Check for any incomplete marker files (supports per-rank markers)
+        has_incomplete = any(
+            f.startswith(CHECKPOINT_INCOMPLETE_MARKER) for f in os.listdir(checkpoint_path)
+        )
 
         # Delete incomplete checkpoints
-        if os.path.exists(incomplete_marker):
+        if has_incomplete:
             print(f"[Test] Deleting incomplete checkpoint: {checkpoint_path}")
             shutil.rmtree(checkpoint_path)
             continue
