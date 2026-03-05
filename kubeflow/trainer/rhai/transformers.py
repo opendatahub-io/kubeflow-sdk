@@ -291,19 +291,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             )
             self.checkpoint_thread.start()
 
-            # Wait for checkpoint to complete before allowing process to terminate
-            _log("Waiting for checkpoint thread to complete...")
-            self.checkpoint_thread.join(timeout=300)
-            if self.checkpoint_thread.is_alive():
-                _log(
-                    "Warning: Checkpoint did not complete within 300s timeout. "
-                    "Kubernetes will send SIGKILL and checkpoint will be incomplete. "
-                    "Increase 'terminationGracePeriodSeconds' in your TrainJob manifest "
-                    "or check for slow disk/S3 issues."
-                )
-            else:
-                _log("Checkpoint thread completed")
-
         def _async_checkpoint(self):
             """Execute checkpoint asynchronously, waiting if in optimizer step."""
             try:
@@ -898,7 +885,22 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 control.should_training_stop = True
 
         def on_train_end(self, args, state, control, **kwargs):
-            """Clean up staging directory after training."""
+            """Wait for JIT checkpoint completion and clean up staging directory."""
+            # Wait for JIT checkpoint thread if one is running
+            if self.jit_manager and self.jit_manager.checkpoint_thread:
+                _log("Waiting for JIT checkpoint to complete...", args=args)
+                self.jit_manager.checkpoint_thread.join(timeout=300)
+                if self.jit_manager.checkpoint_thread.is_alive():
+                    _log(
+                        "Warning: Checkpoint did not complete within 300s timeout. "
+                        "Kubernetes will send SIGKILL and checkpoint will be incomplete. "
+                        "Increase 'terminationGracePeriodSeconds' in your TrainJob manifest "
+                        "or check for slow disk/S3 issues.",
+                        args=args,
+                    )
+                else:
+                    _log("JIT checkpoint completed", args=args)
+
             if not self.remote_fs:
                 return
 
