@@ -58,8 +58,8 @@ FORBIDDEN = "forbidden"
 TORCH_RUNTIME = "torch"
 TORCH_TUNE_RUNTIME = "torchtune"
 
-# 2 nodes * 2 nproc
-RUNTIME_DEVICES = "4"
+# Device count = GPU resources per node (1) × num_nodes (2) = 2
+RUNTIME_DEVICES = "2"
 
 FAIL_LOGS = "fail_logs"
 LIST_RUNTIMES = "list_runtimes"
@@ -603,9 +603,7 @@ def create_cluster_training_runtime(
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
             mlPolicy=models.TrainerV1alpha1MLPolicy(
-                torch=models.TrainerV1alpha1TorchMLPolicySource(
-                    numProcPerNode=models.IoK8sApimachineryPkgUtilIntstrIntOrString(2)
-                ),
+                torch=models.TrainerV1alpha1TorchMLPolicySource(),
                 numNodes=2,
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(
@@ -634,9 +632,7 @@ def create_training_runtime(
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
             mlPolicy=models.TrainerV1alpha1MLPolicy(
-                torch=models.TrainerV1alpha1TorchMLPolicySource(
-                    numProcPerNode=models.IoK8sApimachineryPkgUtilIntstrIntOrString(2)
-                ),
+                torch=models.TrainerV1alpha1TorchMLPolicySource(),
                 numNodes=2,
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(

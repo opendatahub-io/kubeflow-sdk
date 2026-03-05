@@ -119,12 +119,8 @@ def get_runtime_trainer(
     if devices := get_container_devices(trainer_container.resources):
         trainer.device, trainer.device_count = devices
 
-    # Torch and MPI plugins override accelerator count.
-    if ml_policy.torch and ml_policy.torch.num_proc_per_node:
-        num_proc = ml_policy.torch.num_proc_per_node.actual_instance
-        if isinstance(num_proc, int):
-            trainer.device_count = str(num_proc)
-    elif ml_policy.mpi and ml_policy.mpi.num_proc_per_node:
+    # MPI plugin overrides accelerator count.
+    if ml_policy.mpi and ml_policy.mpi.num_proc_per_node:
         trainer.device_count = str(ml_policy.mpi.num_proc_per_node)
 
     # Multiply accelerator_count by the number of nodes.
