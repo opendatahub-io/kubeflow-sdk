@@ -296,8 +296,10 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             self.checkpoint_thread.join(timeout=300)
             if self.checkpoint_thread.is_alive():
                 _log(
-                    "Warning: Checkpoint thread still running after 5 mins timeout. "
-                    "Process will terminate, checkpoint may be incomplete."
+                    "Warning: Checkpoint did not complete within 300s timeout. "
+                    "Kubernetes will send SIGKILL and checkpoint will be incomplete. "
+                    "Increase 'terminationGracePeriodSeconds' in your TrainJob manifest "
+                    "or check for slow disk/S3 issues."
                 )
             else:
                 _log("Checkpoint thread completed")
