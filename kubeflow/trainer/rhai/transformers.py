@@ -293,8 +293,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             # Wait for checkpoint to complete before allowing process to terminate
             _log("Waiting for checkpoint thread to complete...")
-            self.checkpoint_thread.join()
-            _log("Checkpoint thread completed")
+            self.checkpoint_thread.join(timeout=300)
+            if self.checkpoint_thread.is_alive():
+                _log(
+                    "Warning: Checkpoint thread still running after 5 mins timeout. "
+                    "Process will terminate, checkpoint may be incomplete."
+                )
+            else:
+                _log("Checkpoint thread completed")
 
         def _async_checkpoint(self):
             """Execute checkpoint asynchronously, waiting if in optimizer step."""
@@ -324,7 +330,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 sentinel_file = os.path.join(checkpoint_path, sentinel_name)
                 try:
                     with open(sentinel_file, "w") as f:
-                        f.write(f"Checkpoint started at step {current_step}")
+                        f.write(
+                            f"Checkpoint started at step {current_step} in node {node} rank {local_rank}"
+                        )
                 except Exception as e:
                     _log(
                         f"Warning: Failed to write sentinel file: {e}. "
@@ -361,7 +369,9 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             f"to be skipped. Remove it manually from: {sentinel_file}"
                         )
 
-                _log(f"JIT checkpoint completed at step {current_step}")
+                _log(
+                    f"JIT checkpoint completed at step {current_step} in node {node} rank {local_rank}"
+                )
 
             except Exception as e:
                 _log(
