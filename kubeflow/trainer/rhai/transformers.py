@@ -210,6 +210,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     import re
     import shutil
     import signal
+    import sys
     import threading
     import time
     from typing import Callable, Optional
@@ -348,12 +349,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Fallback if no CUDA stream
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
-                # Trigger on_save callback to upload checkpoint if cloud storage
-                self.trainer.callback_handler.on_save(
-                    self.trainer.args, self.trainer.state, self.trainer.control
-                )
-
-                # Remove sentinel on success (each rank removes its own independently)
                 if os.path.exists(sentinel_file):
                     try:
                         os.remove(sentinel_file)
@@ -363,6 +358,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             "Check permissions; a stale marker may cause this checkpoint "
                             f"to be skipped. Remove it manually from: {sentinel_file}"
                         )
+
+                # Trigger on_save callback to upload checkpoint if cloud storage
+                self.trainer.callback_handler.on_save(
+                    self.trainer.args, self.trainer.state, self.trainer.control
+                )
 
                 _log(
                     f"JIT checkpoint completed at step {current_step} in node {node} rank {local_rank}"
@@ -894,8 +894,19 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 control.should_training_stop = True
 
         def on_train_end(self, args, state, control, **kwargs):
-            """Clean up staging directory after training."""
+            """Clean up S3 staging directory and wait for pending uploads.
+
+            If JIT checkpoint was taken, exits via sys.exit(0) to prevent
+            redundant user code from running during graceful shutdown.
+            """
             if not self.remote_fs:
+                if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                    _log(
+                        "JIT checkpoint complete. Exiting to avoid redundant "
+                        "operations during graceful shutdown.",
+                        args=args,
+                    )
+                    sys.exit(0)
                 return
 
             is_local_rank_0 = args.local_process_index == 0
@@ -918,6 +929,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             "Staging data will be cleaned up when the pod terminates.",
                             args=args,
                         )
+
+            # After JIT checkpoint + S3 upload + cleanup, exit the process to prevent
+            # user code (e.g. trainer.save_model()) from running during shutdown.
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                _log(
+                    "JIT checkpoint and upload complete. Exiting to avoid redundant "
+                    "operations during graceful shutdown.",
+                    args=args,
+                )
+                sys.exit(0)
 
     def apply_checkpointing():
         """Setup monkey patch for Trainer to auto inject JIT checkpoint callback."""
@@ -947,10 +968,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
                 checkpoint_path = os.path.join(output_dir, name)
 
-                # Check for any incomplete marker files (supports per-rank markers)
-                has_incomplete = any(
-                    f.startswith(CHECKPOINT_INCOMPLETE_MARKER) for f in os.listdir(checkpoint_path)
-                )
+                try:
+                    has_incomplete = any(
+                        f.startswith(CHECKPOINT_INCOMPLETE_MARKER)
+                        for f in os.listdir(checkpoint_path)
+                    )
+                except (FileNotFoundError, OSError):
+                    _log(f"Skipping checkpoint {name} directory was removed by another rank")
+                    continue
 
                 # Delete incomplete checkpoints (global rank 0 only to avoid race condition)
                 if has_incomplete:
