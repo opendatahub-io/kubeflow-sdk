@@ -37,7 +37,6 @@ jobs:
             scripts
             test
             trainer
-            spark
           requireScope: false
           ignoreLabels: |
             do-not-merge/work-in-progress
