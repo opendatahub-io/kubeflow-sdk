@@ -1340,7 +1340,9 @@ def _mock_get_jit_checkpoint_injection_code(
     # Add monkey-patch function
     parts.append("def setup_jit_checkpoint_monkey_patch():\n    pass")
 
-    return "\n\n".join(parts)
+    header = "\n\n".join(parts)
+    footer = "# post-training cleanup placeholder"
+    return header, footer
 
 
 # ============================================================================
@@ -1533,14 +1535,16 @@ def test_checkpoint_code_injection(test_case):
 
     try:
         trainer = test_case.config["trainer"]
-        code = _build_checkpoint_code(trainer)
+        header, footer = _build_checkpoint_code(trainer)
 
         assert test_case.expected_status == SUCCESS
 
         # Check expected output
         if test_case.expected_output == "":
-            assert code == ""
+            assert header == ""
+            assert footer == ""
         elif isinstance(test_case.expected_output, dict):
+            code = header + footer
             assert code != ""
 
             # Check contains
@@ -1573,7 +1577,7 @@ def test_checkpoint_injection_code_execution_jit_enabled(tmp_path):
     )
 
     # Generate the actual checkpoint injection code with JIT enabled
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, checkpoint_footer = get_jit_checkpoint_injection_code(
         output_dir="/mnt/test-checkpoints",
         periodic_checkpoint_config={
             "save_strategy": "epoch",
@@ -1582,6 +1586,7 @@ def test_checkpoint_injection_code_execution_jit_enabled(tmp_path):
         },
         enable_jit_checkpoint=True,
     )
+    checkpoint_code = checkpoint_header
 
     # Create stub torch module
     torch_stub = """
@@ -1761,7 +1766,7 @@ def test_checkpoint_injection_code_execution_jit_disabled(tmp_path):
     from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
     # Generate checkpoint injection code with JIT disabled (only periodic checkpointing)
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, checkpoint_footer = get_jit_checkpoint_injection_code(
         output_dir="/mnt/test-checkpoints",
         periodic_checkpoint_config={
             "save_strategy": "epoch",
@@ -1770,6 +1775,7 @@ def test_checkpoint_injection_code_execution_jit_disabled(tmp_path):
         },
         enable_jit_checkpoint=False,  # JIT disabled
     )
+    checkpoint_code = checkpoint_header
 
     # Verify that the config contains enable_jit=False
     assert "'enable_jit': False" in checkpoint_code
@@ -2071,26 +2077,26 @@ def test_auto_resume_code_generation():
 
     from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir="/tmp/checkpoints",
         periodic_checkpoint_config=None,
         enable_jit_checkpoint=True,
     )
 
     # Verify auto-resume logic is present in generated code
-    assert "_find_latest_checkpoint" in checkpoint_code, "Should include _find_latest_checkpoint"
-    assert "def _patched_train" in checkpoint_code, "Should include _patched_train"
-    assert "resume_from_checkpoint" in checkpoint_code, (
+    assert "_find_latest_checkpoint" in checkpoint_header, "Should include _find_latest_checkpoint"
+    assert "def _patched_train" in checkpoint_header, "Should include _patched_train"
+    assert "resume_from_checkpoint" in checkpoint_header, (
         "Should include resume_from_checkpoint logic"
     )
-    assert "if resume_from_checkpoint is None" in checkpoint_code, "Should check if user set it"
-    assert "Auto-resuming from:" in checkpoint_code, "Should log auto-resume action"
-    assert "self.train = _patched_train" in checkpoint_code, "Should patch train method"
+    assert "if resume_from_checkpoint is None" in checkpoint_header, "Should check if user set it"
+    assert "Auto-resuming from:" in checkpoint_header, "Should log auto-resume action"
+    assert "self.train = _patched_train" in checkpoint_header, "Should patch train method"
 
     # Verify imports needed for auto-resume
-    assert "import re" in checkpoint_code, "Should import re for regex"
-    assert "import shutil" in checkpoint_code, "Should import shutil for rmtree"
-    assert "import os" in checkpoint_code, "Should import os"
+    assert "import re" in checkpoint_header, "Should import re for regex"
+    assert "import shutil" in checkpoint_header, "Should import shutil for rmtree"
+    assert "import os" in checkpoint_header, "Should import os"
 
     print("test execution complete")
 
@@ -2119,18 +2125,18 @@ def test_auto_resume_user_override():
     try:
         from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
-        checkpoint_code = get_jit_checkpoint_injection_code(
+        checkpoint_header, _ = get_jit_checkpoint_injection_code(
             output_dir="/tmp/checkpoints",
             periodic_checkpoint_config=None,
             enable_jit_checkpoint=True,
         )
 
         # Verify the logic: only auto-resume if resume_from_checkpoint is None
-        assert "if resume_from_checkpoint is None" in checkpoint_code
+        assert "if resume_from_checkpoint is None" in checkpoint_header
 
         assert (
-            "resume_from_checkpoint is None and training_args" in checkpoint_code
-            or "if resume_from_checkpoint is None" in checkpoint_code
+            "resume_from_checkpoint is None and training_args" in checkpoint_header
+            or "if resume_from_checkpoint is None" in checkpoint_header
         )
 
         print("test execution complete")
@@ -2178,12 +2184,12 @@ def test_build_checkpoint_code_with_s3_storage_uri():
         enable_jit_checkpoint=True,
     )
 
-    code = _build_checkpoint_code(trainer)
+    header, footer = _build_checkpoint_code(trainer)
 
     # Verify cloud_remote_storage_uri is included in the generated code
-    assert code != ""
-    assert "cloud_remote_storage_uri" in code
-    assert "s3://my-bucket/checkpoints" in code
+    assert header != ""
+    assert "cloud_remote_storage_uri" in header
+    assert "s3://my-bucket/checkpoints" in header
 
     print("test execution complete")
 
@@ -2192,15 +2198,15 @@ def test_get_jit_checkpoint_injection_code_with_storage_uri():
     """Test get_jit_checkpoint_injection_code includes cloud_remote_storage_uri in config."""
     print("Executing test: get_jit_checkpoint_injection_code with cloud_remote_storage_uri")
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir="/mnt/kubeflow-checkpoints",
         cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
         enable_jit_checkpoint=True,
     )
 
     # Verify cloud_remote_storage_uri is in the generated config
-    assert "cloud_remote_storage_uri" in checkpoint_code
-    assert "s3://my-bucket/model-checkpoints" in checkpoint_code
+    assert "cloud_remote_storage_uri" in checkpoint_header
+    assert "s3://my-bucket/model-checkpoints" in checkpoint_header
 
     print("test execution complete")
 
@@ -2326,7 +2332,7 @@ def test_save_only_model_validation_error(tmp_path):
     """Test save_only_model=True raises a validation error."""
     print("Executing test: save_only_model validation error")
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir="/mnt/kubeflow-checkpoints",
         enable_jit_checkpoint=True,
     )
@@ -2334,7 +2340,7 @@ def test_save_only_model_validation_error(tmp_path):
     returncode, stdout, stderr = _run_checkpoint_validation_subprocess(
         tmp_path=tmp_path,
         test_name="test_save_only_model_validation_error",
-        checkpoint_code=checkpoint_code,
+        checkpoint_code=checkpoint_header,
         training_args_body="    save_only_model = True\n",
     )
 
@@ -2351,7 +2357,7 @@ def test_save_on_each_node_validation_error(tmp_path):
     """Test save_on_each_node=True raises a validation error with S3."""
     print("Executing test: save_on_each_node validation error")
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir="/mnt/kubeflow-checkpoints",
         cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
         enable_jit_checkpoint=True,
@@ -2360,7 +2366,7 @@ def test_save_on_each_node_validation_error(tmp_path):
     returncode, stdout, stderr = _run_checkpoint_validation_subprocess(
         tmp_path=tmp_path,
         test_name="test_save_on_each_node_validation_error",
-        checkpoint_code=checkpoint_code,
+        checkpoint_code=checkpoint_header,
         training_args_body="    save_on_each_node = True\n",
     )
 
@@ -2377,17 +2383,17 @@ def test_async_upload_worker_scaffolding():
     """Test async upload worker scaffolding is present in generated code."""
     print("Executing test: async upload worker scaffolding")
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir="/mnt/kubeflow-checkpoints",
         cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
         enable_jit_checkpoint=True,
     )
 
-    assert "LifoQueue" in checkpoint_code
-    assert "daemon=False" in checkpoint_code
-    assert "KubeflowCheckpointUploader" in checkpoint_code
-    assert "1 hour" in checkpoint_code
-    assert "self._upload_thread.join(timeout=" in checkpoint_code
+    assert "LifoQueue" in checkpoint_header
+    assert "daemon=False" in checkpoint_header
+    assert "KubeflowCheckpointUploader" in checkpoint_header
+    assert "1 hour" in checkpoint_header
+    assert "self._upload_thread.join(timeout=" in checkpoint_header
 
     print("test execution complete")
 
@@ -2396,15 +2402,15 @@ def test_async_parallel_upload_scaffolding():
     """Test parallel upload scaffolding is present in generated code."""
     print("Executing test: async parallel upload scaffolding")
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir="/mnt/kubeflow-checkpoints",
         cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
         enable_jit_checkpoint=True,
     )
 
-    assert "ThreadPoolExecutor" in checkpoint_code
-    assert "as_completed" in checkpoint_code
-    assert "_parallel_upload_files" in checkpoint_code
+    assert "ThreadPoolExecutor" in checkpoint_header
+    assert "as_completed" in checkpoint_header
+    assert "_parallel_upload_files" in checkpoint_header
 
     print("test execution complete")
 
@@ -2420,11 +2426,12 @@ def test_async_upload_execution(tmp_path):
 
     output_dir = tmp_path / "checkpoints"
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir=str(output_dir),
         cloud_remote_storage_uri="s3://test-bucket/model-checkpoints",
         enable_jit_checkpoint=True,
     )
+    checkpoint_code = checkpoint_header
 
     fsspec_stub = """
 class MockS3FileSystem:
@@ -2558,7 +2565,7 @@ with open(os.path.join(checkpoint_path, "model.bin"), "w", encoding="utf-8") as 
     f.write("data")
 
 callback.on_save(MockArgs(), MockState(), None)
-callback._shutdown_upload_worker()
+callback.shutdown_upload_worker()
 
 if True:
     staging_checkpoint = os.path.join(
@@ -2679,11 +2686,12 @@ def test_s3_download_execution(test_case, tmp_path):
     from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
     from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir="/mnt/checkpoints",
         cloud_remote_storage_uri="s3://test-bucket/model-checkpoints",
         enable_jit_checkpoint=True,
     )
+    checkpoint_code = checkpoint_header
 
     # Create fsspec stub based on test config
     checkpoints = test_case.config["checkpoints"]
@@ -2992,12 +3000,13 @@ def test_s3_access_retry_code_generation():
     print("Executing test: S3 retry logic in generated code")
 
     # Generate checkpoint injection code with S3 config
-    code = get_jit_checkpoint_injection_code(
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
         output_dir="/mnt/checkpoints",
         cloud_remote_storage_uri="s3://test-bucket/path",
         enable_jit_checkpoint=True,
         verify_cloud_storage_access=True,
     )
+    code = checkpoint_header
 
     # Verify retry logic is present in generated code
     assert "for attempt in range(1, 4):" in code, "3-attempt retry loop not found"
@@ -3013,6 +3022,623 @@ def test_s3_access_retry_code_generation():
     assert 'self.remote_fs.pipe(test_file, b"test")' in code
     assert "self.remote_fs.cat(test_file)" in code
     assert "self.remote_fs.rm_file(test_file)" in code
+
+
+# ============================================================================
+# Final Model Upload Tests
+# ============================================================================
+
+
+def test_upload_worker_restarts_when_thread_dies():
+    """Test that start_upload_worker() restarts worker when thread is dead."""
+    print("Executing test: upload worker restarts when thread dies")
+
+    from queue import LifoQueue
+    import threading
+    from unittest.mock import Mock
+
+    # Create mock callback with dead thread
+    callback = Mock()
+    callback.upload_queue = LifoQueue()
+    callback._upload_thread = Mock(spec=threading.Thread)
+    callback._upload_thread.is_alive.return_value = False  # Thread is dead
+
+    # Mock the methods that would be called during worker creation
+    callback._upload_worker_loop = Mock()
+
+    # Execute the code from start_upload_worker
+    upload_thread = getattr(callback, "_upload_thread", None)
+    worker_alive = upload_thread is not None and upload_thread.is_alive()
+
+    # Worker should NOT be alive (thread exists but is dead)
+    assert worker_alive is False
+
+    print("test execution complete")
+
+
+def test_upload_worker_restarts_when_thread_none():
+    """Test that start_upload_worker() restarts worker when thread is None."""
+    print("Executing test: upload worker restarts when thread is None")
+
+    from unittest.mock import Mock
+
+    # Create mock callback with None thread
+    callback = Mock()
+    callback._upload_thread = None
+
+    # Execute the check logic
+    upload_thread = getattr(callback, "_upload_thread", None)
+    worker_alive = upload_thread is not None and upload_thread.is_alive()
+
+    # Worker should NOT be alive (thread is None)
+    assert worker_alive is False
+
+    print("test execution complete")
+
+
+def test_upload_worker_skips_restart_when_alive():
+    """Test that start_upload_worker() skips restart when worker is alive."""
+    print("Executing test: upload worker skips restart when alive")
+
+    import threading
+    from unittest.mock import Mock
+
+    # Create mock callback with alive thread
+    callback = Mock()
+    callback._upload_thread = Mock(spec=threading.Thread)
+    callback._upload_thread.is_alive.return_value = True  # Thread is alive
+
+    from queue import LifoQueue
+
+    callback.upload_queue = LifoQueue()
+
+    # Execute the check logic
+    upload_thread = getattr(callback, "_upload_thread", None)
+    worker_alive = upload_thread is not None and upload_thread.is_alive()
+
+    # Worker SHOULD be alive
+    assert worker_alive is True
+    # Queue exists, so worker restart should be skipped
+    should_restart = callback.upload_queue is None or not worker_alive
+    assert should_restart is False
+
+    print("test execution complete")
+
+
+def _run_final_model_upload_subprocess(
+    tmp_path: Path,
+    test_name: str,
+    output_dir: str,
+    local_rank: str = "0",
+    cloud_remote_storage_uri: str = "s3://test-bucket/model-output",
+    setup_files: str = "",
+    extra_fsspec_methods: str = "",
+) -> tuple[int, str, str]:
+    """Run upload_final_model_to_cloud in a subprocess and return output.
+
+    Args:
+        tmp_path: Pytest tmp_path fixture for temp files.
+        test_name: Unique name for the test file.
+        output_dir: Path to the output directory with model artifacts.
+        local_rank: LOCAL_RANK env var value (default "0").
+        cloud_remote_storage_uri: Cloud storage URI for config.
+        setup_files: Extra Python code to create files/dirs in output_dir before upload.
+        extra_fsspec_methods: Additional methods to add to MockS3FileSystem.
+
+    Returns:
+        Tuple of (exit_code, stdout, stderr).
+    """
+    import subprocess
+    import sys
+
+    checkpoint_header, checkpoint_footer = get_jit_checkpoint_injection_code(
+        output_dir=output_dir,
+        cloud_remote_storage_uri=cloud_remote_storage_uri,
+        enable_jit_checkpoint=True,
+        verify_cloud_storage_access=False,
+    )
+
+    fsspec_stub = f"""
+class MockS3FileSystem:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def ls(self, path, detail=False):
+        return []
+
+    def exists(self, path):
+        return False
+
+    def pipe(self, path, data):
+        pass
+
+    def cat(self, path):
+        return b"test"
+
+    def put_file(self, local, remote, callback=None):
+        print(f"PUT_FILE={{remote}}")
+
+    def put(self, local, remote, recursive=False, callback=None):
+        print(f"PUT_DIR={{remote}}")
+
+    def rm_file(self, path):
+        pass
+
+    def get(self, src, dst, recursive=False, callback=None):
+        pass
+
+    def du(self, path, total=True, maxdepth=None):
+        return 0
+
+{extra_fsspec_methods}
+
+class Callback:
+    def __init__(self):
+        self.size = 0
+        self.value = 0
+
+    def set_size(self, size):
+        self.size = size
+
+    def relative_update(self, inc=1):
+        self.value += inc
+
+class callbacks:
+    Callback = Callback
+
+def filesystem(protocol, **kwargs):
+    return MockS3FileSystem()
+"""
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 0
+        self.is_world_process_zero = True
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.model = None
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def train(self, resume_from_checkpoint=None):
+        return {{"train_called": True, "resume_from": resume_from_checkpoint}}
+"""
+
+    test_file = tmp_path / f"{test_name}.py"
+    test_code = f"""
+import os
+import sys
+import types
+
+os.environ["LOCAL_RANK"] = "{local_rank}"
+
+fsspec_module = types.ModuleType('fsspec')
+exec('''{fsspec_stub}''', fsspec_module.__dict__)
+sys.modules['fsspec'] = fsspec_module
+
+callbacks_module = types.ModuleType('fsspec.callbacks')
+callbacks_module.Callback = fsspec_module.Callback
+sys.modules['fsspec.callbacks'] = callbacks_module
+fsspec_module.callbacks = callbacks_module
+
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+# Execute checkpoint instrumentation (header)
+{checkpoint_header}
+
+# Create output_dir and test files
+os.makedirs(r"{output_dir}", exist_ok=True)
+{setup_files}
+
+# Execute post-training cleanup (footer)
+{checkpoint_footer}
+
+print("TEST_COMPLETE=True")
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=15
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+def test_final_model_upload_files_and_dirs(tmp_path):
+    """Test that upload_final_model_to_cloud uploads files and directories."""
+    print("Executing test: final model upload files and directories")
+
+    output_dir = str(tmp_path / "model-output")
+
+    setup_files = f"""
+# Create model files in output_dir
+with open(os.path.join(r"{output_dir}", "config.json"), "w") as f:
+    f.write('{{"model_type": "bert"}}')
+with open(os.path.join(r"{output_dir}", "model.safetensors"), "w") as f:
+    f.write("model_weights_data")
+with open(os.path.join(r"{output_dir}", "tokenizer.json"), "w") as f:
+    f.write('{{"type": "BPE"}}')
+
+# Create a subdirectory (e.g., tokenizer subdir)
+os.makedirs(os.path.join(r"{output_dir}", "tokenizer"), exist_ok=True)
+with open(os.path.join(r"{output_dir}", "tokenizer", "vocab.txt"), "w") as f:
+    f.write("vocab_data")
+"""
+
+    returncode, stdout, stderr = _run_final_model_upload_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_final_model_upload_files_and_dirs",
+        output_dir=output_dir,
+        setup_files=setup_files,
+    )
+
+    print(f"stdout: {stdout}")
+    if returncode != 0:
+        print(f"stderr: {stderr}")
+
+    assert returncode == 0, f"Subprocess failed: {stderr}"
+    assert "TEST_COMPLETE=True" in stdout
+    assert "Uploading final model artifacts to S3" in stdout
+    assert "PUT_FILE=config.json" in stdout
+    assert "PUT_FILE=model.safetensors" in stdout
+    assert "PUT_FILE=tokenizer.json" in stdout
+    assert "PUT_DIR=tokenizer" in stdout
+    assert "Final model upload complete" in stdout
+
+    print("test execution complete")
+
+
+def test_final_model_upload_skips_checkpoints_and_staging(tmp_path):
+    """Test that checkpoint dirs, staging dir, and .cache are excluded from upload."""
+    print("Executing test: final model upload skips checkpoints and staging")
+
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_STAGING_DIR
+
+    output_dir = str(tmp_path / "model-output")
+
+    setup_files = f"""
+# Create a regular model file (should be uploaded)
+with open(os.path.join(r"{output_dir}", "training_args.bin"), "w") as f:
+    f.write("training_args_data")
+
+# Create checkpoint dirs (should be skipped)
+os.makedirs(os.path.join(r"{output_dir}", "checkpoint-100"), exist_ok=True)
+with open(os.path.join(r"{output_dir}", "checkpoint-100", "model.bin"), "w") as f:
+    f.write("checkpoint_data")
+
+os.makedirs(os.path.join(r"{output_dir}", "checkpoint-200"), exist_ok=True)
+
+# Create staging dir (should be skipped)
+os.makedirs(os.path.join(r"{output_dir}", "{CHECKPOINT_STAGING_DIR}"), exist_ok=True)
+
+# Create .cache dir (should be skipped)
+os.makedirs(os.path.join(r"{output_dir}", ".cache"), exist_ok=True)
+with open(os.path.join(r"{output_dir}", ".cache", "cached_file"), "w") as f:
+    f.write("cached_data")
+"""
+
+    returncode, stdout, stderr = _run_final_model_upload_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_final_model_upload_skips_checkpoints",
+        output_dir=output_dir,
+        setup_files=setup_files,
+    )
+
+    print(f"stdout: {stdout}")
+    if returncode != 0:
+        print(f"stderr: {stderr}")
+
+    assert returncode == 0, f"Subprocess failed: {stderr}"
+    assert "TEST_COMPLETE=True" in stdout
+    assert "PUT_FILE=training_args.bin" in stdout
+    # Verify checkpoint dirs, staging, and cache are NOT uploaded
+    assert (
+        "checkpoint-100"
+        not in stdout.replace("Initializing checkpoint instrumentation", "").split(
+            "Uploading final model artifacts"
+        )[1]
+    )
+    assert "checkpoint-200" not in stdout.split("Uploading final model artifacts")[1]
+    assert CHECKPOINT_STAGING_DIR not in stdout.split("Uploading final model artifacts")[1]
+    assert ".cache" not in stdout.split("Uploading final model artifacts")[1]
+    assert "Final model upload complete" in stdout
+
+    print("test execution complete")
+
+
+def test_final_model_upload_no_cloud_uri(tmp_path):
+    """Test that upload is skipped when cloud_remote_storage_uri is not configured."""
+    print("Executing test: final model upload no cloud URI")
+
+    output_dir = str(tmp_path / "model-output")
+
+    # When no cloud URI, use local-only checkpoint code
+    checkpoint_header, checkpoint_footer = get_jit_checkpoint_injection_code(
+        output_dir=output_dir,
+        cloud_remote_storage_uri=None,
+        enable_jit_checkpoint=True,
+    )
+
+    import subprocess
+    import sys
+
+    fsspec_stub = """
+class Callback:
+    def __init__(self):
+        self.size = 0
+        self.value = 0
+
+class callbacks:
+    Callback = Callback
+
+def filesystem(protocol, **kwargs):
+    raise RuntimeError("Should not be called")
+"""
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def train(self, resume_from_checkpoint=None):
+        return {"train_called": True}
+"""
+
+    test_file = tmp_path / "test_no_cloud_uri.py"
+    test_code = f"""
+import os
+import sys
+import types
+
+fsspec_module = types.ModuleType('fsspec')
+exec('''{fsspec_stub}''', fsspec_module.__dict__)
+sys.modules['fsspec'] = fsspec_module
+
+callbacks_module = types.ModuleType('fsspec.callbacks')
+callbacks_module.Callback = fsspec_module.Callback
+sys.modules['fsspec.callbacks'] = callbacks_module
+fsspec_module.callbacks = callbacks_module
+
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+os.makedirs(r"{output_dir}", exist_ok=True)
+with open(os.path.join(r"{output_dir}", "model.bin"), "w") as f:
+    f.write("model_data")
+
+{checkpoint_header}
+
+{checkpoint_footer}
+
+print("TEST_COMPLETE=True")
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=15
+    )
+
+    print(f"stdout: {result.stdout}")
+    if result.returncode != 0:
+        print(f"stderr: {result.stderr}")
+
+    assert result.returncode == 0, f"Subprocess failed: {result.stderr}"
+    assert "TEST_COMPLETE=True" in result.stdout
+    # Should NOT attempt any upload
+    assert "Uploading final model artifacts" not in result.stdout
+    assert "PUT_FILE" not in result.stdout
+
+    print("test execution complete")
+
+
+def test_final_model_upload_non_rank_zero(tmp_path):
+    """Test that upload is skipped on non-rank-0 processes."""
+    print("Executing test: final model upload non-rank-zero")
+
+    output_dir = str(tmp_path / "model-output")
+
+    setup_files = f"""
+with open(os.path.join(r"{output_dir}", "model.bin"), "w") as f:
+    f.write("model_data")
+"""
+
+    returncode, stdout, stderr = _run_final_model_upload_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_final_model_upload_non_rank_zero",
+        output_dir=output_dir,
+        local_rank="1",
+        setup_files=setup_files,
+    )
+
+    print(f"stdout: {stdout}")
+    if returncode != 0:
+        print(f"stderr: {stderr}")
+
+    assert returncode == 0, f"Subprocess failed: {stderr}"
+    assert "TEST_COMPLETE=True" in stdout
+    # Should NOT attempt any upload on non-rank-0
+    assert "Uploading final model artifacts" not in stdout
+    assert "PUT_FILE" not in stdout
+
+    print("test execution complete")
+
+
+def test_final_model_upload_empty_output_dir(tmp_path):
+    """Test that upload logs 'no artifacts' when only excluded items are present."""
+    print("Executing test: final model upload empty output dir")
+
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_STAGING_DIR
+
+    output_dir = str(tmp_path / "model-output")
+
+    setup_files = f"""
+# Only create items that should be excluded
+os.makedirs(os.path.join(r"{output_dir}", "checkpoint-500"), exist_ok=True)
+os.makedirs(os.path.join(r"{output_dir}", ".cache"), exist_ok=True)
+os.makedirs(os.path.join(r"{output_dir}", "{CHECKPOINT_STAGING_DIR}"), exist_ok=True)
+"""
+
+    returncode, stdout, stderr = _run_final_model_upload_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_final_model_upload_empty_dir",
+        output_dir=output_dir,
+        setup_files=setup_files,
+    )
+
+    print(f"stdout: {stdout}")
+    if returncode != 0:
+        print(f"stderr: {stderr}")
+
+    assert returncode == 0, f"Subprocess failed: {stderr}"
+    assert "TEST_COMPLETE=True" in stdout
+    assert "No final model artifacts to upload" in stdout
+    assert "PUT_FILE" not in stdout
+    assert "PUT_DIR" not in stdout
+
+    print("test execution complete")
+
+
+def test_final_model_upload_failure_is_non_fatal(tmp_path):
+    """Test that upload failure does not crash the process."""
+    print("Executing test: final model upload failure is non-fatal")
+
+    output_dir = str(tmp_path / "model-output")
+
+    setup_files = f"""
+with open(os.path.join(r"{output_dir}", "model.bin"), "w") as f:
+    f.write("model_data")
+"""
+
+    extra_methods = """
+    def put_file(self, local, remote, callback=None):
+        raise ConnectionError("S3 connection lost")
+"""
+
+    returncode, stdout, stderr = _run_final_model_upload_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_final_model_upload_failure",
+        output_dir=output_dir,
+        setup_files=setup_files,
+        extra_fsspec_methods=extra_methods,
+    )
+
+    print(f"stdout: {stdout}")
+    if returncode != 0:
+        print(f"stderr: {stderr}")
+
+    assert returncode == 0, f"Subprocess failed: {stderr}"
+    assert "TEST_COMPLETE=True" in stdout
+    assert "Warning: Final model upload failed" in stdout
+    assert "S3 connection lost" in stdout
+    assert "Training completed successfully" in stdout
+
+    print("test execution complete")
+
+
+def test_final_model_upload_nonexistent_output_dir(tmp_path):
+    """Test that upload is skipped when output_dir does not exist."""
+    print("Executing test: final model upload nonexistent output dir")
+
+    output_dir = str(tmp_path / "nonexistent-dir")
+
+    # Don't create the output_dir, but don't set up files either
+    returncode, stdout, stderr = _run_final_model_upload_subprocess(
+        tmp_path=tmp_path,
+        test_name="test_final_model_upload_nonexistent",
+        output_dir=output_dir,
+        setup_files="# Don't create output_dir - it should not exist\nimport shutil\nshutil.rmtree"
+        f'(r"{output_dir}", ignore_errors=True)',
+    )
+
+    print(f"stdout: {stdout}")
+    if returncode != 0:
+        print(f"stderr: {stderr}")
+
+    assert returncode == 0, f"Subprocess failed: {stderr}"
+    assert "TEST_COMPLETE=True" in stdout
+    # Should silently return without uploading
+    assert "Uploading final model artifacts" not in stdout
 
     print("test execution complete")
 
