@@ -16,6 +16,7 @@ import abc
 from collections.abc import Callable, Iterator
 
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai import RHAITrainer
 from kubeflow.trainer.types import types
 
 
@@ -45,6 +46,7 @@ class RuntimeBackend(abc.ABC):
         trainer: types.CustomTrainer
         | types.CustomTrainerContainer
         | types.BuiltinTrainer
+        | RHAITrainer
         | None = None,
         options: list | None = None,
     ) -> str:

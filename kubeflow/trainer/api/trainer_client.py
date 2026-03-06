@@ -24,6 +24,7 @@ from kubeflow.trainer.backends.localprocess.backend import (
     LocalProcessBackendConfig,
 )
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai import RHAITrainer
 from kubeflow.trainer.types import types
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ class TrainerClient:
         trainer: types.CustomTrainer
         | types.CustomTrainerContainer
         | types.BuiltinTrainer
+        | RHAITrainer
         | None = None,
         options: list | None = None,
     ) -> str:
