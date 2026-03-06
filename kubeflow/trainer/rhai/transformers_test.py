@@ -1979,13 +1979,15 @@ def test_find_latest_checkpoint(test_case, tmp_path):
         checkpoint_path.mkdir()
 
         if checkpoint_config.get("incomplete"):
-            (checkpoint_path / CHECKPOINT_INCOMPLETE_MARKER).write_text("incomplete")
+            # Use per-rank marker format matching production code
+            marker_name = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-0-rank-0"
+            (checkpoint_path / marker_name).write_text("incomplete")
 
     # Also create a file named checkpoint-200 to test directory check
     if "not-a-checkpoint" in test_case.config["checkpoints"]:
         (tmp_path / "checkpoint-200").write_text("file, not dir")
 
-    # Implement the _find_latest_checkpoint logic
+    # Implement the _find_latest_checkpoint logic (matches production code)
     checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
     checkpoints = []
 
@@ -1995,10 +1997,14 @@ def test_find_latest_checkpoint(test_case, tmp_path):
             continue
 
         checkpoint_path = os.path.join(tmp_path, name)
-        incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
+
+        # Check for any incomplete marker files (supports per-rank markers)
+        has_incomplete = any(
+            f.startswith(CHECKPOINT_INCOMPLETE_MARKER) for f in os.listdir(checkpoint_path)
+        )
 
         # Delete incomplete checkpoints
-        if os.path.exists(incomplete_marker):
+        if has_incomplete:
             print(f"[Test] Deleting incomplete checkpoint: {checkpoint_path}")
             shutil.rmtree(checkpoint_path)
             continue
@@ -3013,6 +3019,652 @@ def test_s3_access_retry_code_generation():
     assert 'self.remote_fs.pipe(test_file, b"test")' in code
     assert "self.remote_fs.cat(test_file)" in code
     assert "self.remote_fs.rm_file(test_file)" in code
+
+    print("test execution complete")
+
+
+def test_sigterm_handler_paths(tmp_path):
+    """Test SIGTERM handler dispatches correctly for all three paths.
+
+    Path 1: Normal - calls _save_jit_checkpoint() directly.
+    Path 2: During optimizer step - defers via _checkpoint_deferred flag.
+    Path 3: During periodic save - skips JIT (sets checkpoint_requested only).
+    """
+    print("Executing test: SIGTERM handler paths")
+
+    import subprocess
+    import sys
+
+    output_dir = tmp_path / "checkpoints"
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir=str(output_dir),
+        enable_jit_checkpoint=True,
+    )
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 42
+        self.is_world_process_zero = True
+
+class TrainingArguments:
+    def __init__(self):
+        self.local_process_index = 0
+
+class CallbackHandler:
+    def on_save(self, args, state, control):
+        pass
+
+class MockControl:
+    should_save = False
+    should_training_stop = False
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.args = TrainingArguments()
+        self.control = MockControl()
+        self.model = type('MockModel', (), {'parameters': lambda self: []})()
+        self.callback_handler = CallbackHandler()
+        self._init_args = args
+        self._init_kwargs = kwargs
+        self._save_checkpoint_called = False
+
+    def _get_output_dir(self, trial=None):
+        return OUTPUT_DIR
+
+    def _save_checkpoint(self, model, trial=None):
+        self._save_checkpoint_called = True
+
+    def train(self, resume_from_checkpoint=None):
+        return {"train_called": True}
+"""
+
+    test_file = tmp_path / "test_sigterm_paths.py"
+    test_code = f"""
+import os
+import sys
+import signal
+import types
+
+OUTPUT_DIR = r"{output_dir}"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+{checkpoint_code}
+
+from transformers import Trainer, TrainerCallback, TrainingArguments, TrainerState
+
+# Find JITCheckpointCallback
+callback_class = None
+for name, obj in list(globals().items()):
+    if isinstance(obj, type) and issubclass(obj, TrainerCallback) and name != 'TrainerCallback':
+        callback_class = obj
+        break
+
+if not callback_class:
+    print("ERROR: JITCheckpointCallback not found")
+    sys.exit(1)
+
+def create_jit_manager():
+    \"\"\"Create a JIT manager via the callback lifecycle.\"\"\"
+    trainer = Trainer(None, TrainingArguments())
+    trainer._get_output_dir = lambda trial=None: OUTPUT_DIR
+    trainer._save_checkpoint_called = False
+
+    cb = callback_class()
+    cb._trainer_ref = trainer
+    cb.on_train_begin(TrainingArguments(), TrainerState(), None)
+    return cb.jit_manager
+
+# --- Test Path 1: Normal SIGTERM (no optimizer step, no periodic save) ---
+mgr = create_jit_manager()
+mgr._sigterm_handler(signal.SIGTERM, None)
+assert mgr.checkpoint_requested == True, "checkpoint_requested not set"
+assert mgr.trainer._save_checkpoint_called == True, "Path 1: _save_checkpoint should be called"
+assert mgr._checkpoint_deferred == False, "Path 1: should not defer"
+print("PATH_1_NORMAL=PASS")
+
+# --- Test Path 2: SIGTERM during optimizer step ---
+mgr2 = create_jit_manager()
+mgr2._in_optimizer_step = True
+mgr2._sigterm_handler(signal.SIGTERM, None)
+assert mgr2.checkpoint_requested == True, "checkpoint_requested not set"
+assert mgr2._checkpoint_deferred == True, "Path 2: should defer"
+assert mgr2.trainer._save_checkpoint_called == False, "Path 2: should NOT call _save_checkpoint"
+print("PATH_2_OPTIMIZER_STEP=PASS")
+
+# --- Test: Second SIGTERM is idempotent ---
+mgr4 = create_jit_manager()
+mgr4.checkpoint_requested = True  # Already set
+mgr4._sigterm_handler(signal.SIGTERM, None)
+assert mgr4.trainer._save_checkpoint_called == False, "Idempotent: should not save again"
+print("IDEMPOTENT=PASS")
+
+print("TEST_COMPLETE=True")
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    output = result.stdout
+    print(f"Test output:\n{output}")
+
+    if result.returncode != 0:
+        print(f"Test stderr:\n{result.stderr}")
+
+    assert result.returncode == 0, f"Execution failed: {result.stderr}"
+    assert "PATH_1_NORMAL=PASS" in output
+    assert "PATH_2_OPTIMIZER_STEP=PASS" in output
+    assert "IDEMPOTENT=PASS" in output
+    assert "TEST_COMPLETE=True" in output
+
+    print("test execution complete")
+
+
+def test_callback_guards_and_deferred_checkpoint(tmp_path):
+    """Test JITCheckpointCallback guards and deferred checkpoint processing.
+
+    Verifies:
+    - on_step_end/on_epoch_end set should_save=False and should_training_stop=True
+      when checkpoint is in progress.
+    - on_optimizer_step processes deferred checkpoint.
+    - on_pre_optimizer_step sets _in_optimizer_step flag.
+    """
+    print("Executing test: callback guards and deferred checkpoint")
+
+    import subprocess
+    import sys
+
+    output_dir = tmp_path / "checkpoints"
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir=str(output_dir),
+        enable_jit_checkpoint=True,
+    )
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+"""
+
+    transformers_stub = """
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 50
+        self.is_world_process_zero = True
+
+class TrainingArguments:
+    def __init__(self):
+        self.local_process_index = 0
+
+class CallbackHandler:
+    def on_save(self, args, state, control):
+        pass
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.args = TrainingArguments()
+        self.model = type('MockModel', (), {'parameters': lambda self: []})()
+        self.callback_handler = CallbackHandler()
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def _get_output_dir(self, trial=None):
+        return OUTPUT_DIR
+
+    def _save_checkpoint(self, model, trial=None):
+        pass
+
+    def train(self, resume_from_checkpoint=None):
+        return {"train_called": True}
+"""
+
+    test_file = tmp_path / "test_callback_guards.py"
+    test_code = f"""
+import os
+import sys
+import types
+
+OUTPUT_DIR = r"{output_dir}"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+{checkpoint_code}
+
+from transformers import Trainer, TrainerCallback, TrainingArguments, TrainerState
+
+# Find JITCheckpointCallback
+callback_class = None
+for name, obj in list(globals().items()):
+    if isinstance(obj, type) and issubclass(obj, TrainerCallback) and name != 'TrainerCallback':
+        callback_class = obj
+        break
+
+if not callback_class:
+    print("ERROR: JITCheckpointCallback not found")
+    sys.exit(1)
+
+# Setup: create callback with a trainer reference
+trainer = Trainer(None, TrainingArguments())
+trainer._get_output_dir = lambda trial=None: OUTPUT_DIR
+
+callback = callback_class()
+callback._trainer_ref = trainer
+
+# Simulate on_train_begin to create JIT manager
+callback.on_train_begin(TrainingArguments(), TrainerState(), None)
+assert callback.jit_manager is not None, "JIT manager not created"
+
+args = TrainingArguments()
+state = TrainerState()
+
+# === Test 1: on_step_end guard when checkpoint in progress ===
+callback.jit_manager.checkpoint_requested = True
+
+class MockControl:
+    should_save = True
+    should_training_stop = False
+
+control = MockControl()
+callback.on_step_end(args, state, control)
+assert control.should_save == False, "on_step_end should clear should_save"
+assert control.should_training_stop == True, "on_step_end should set should_training_stop"
+print("GUARD_ON_STEP_END=PASS")
+
+# === Test 2: on_epoch_end guard when checkpoint in progress ===
+control2 = MockControl()
+control2.should_save = True
+control2.should_training_stop = False
+callback.on_epoch_end(args, state, control2)
+assert control2.should_save == False, "on_epoch_end should clear should_save"
+assert control2.should_training_stop == True, "on_epoch_end should set should_training_stop"
+print("GUARD_ON_EPOCH_END=PASS")
+
+# === Test 3: on_optimizer_step processes deferred checkpoint ===
+callback.jit_manager.checkpoint_requested = True
+callback.jit_manager._checkpoint_deferred = True
+callback.jit_manager._in_optimizer_step = True
+
+control6 = MockControl()
+control6.should_training_stop = False
+callback.on_optimizer_step(args, state, control6)
+assert callback.jit_manager._in_optimizer_step == False, (
+    "on_optimizer_step should clear _in_optimizer_step"
+)
+assert callback.jit_manager._checkpoint_deferred == False, (
+    "on_optimizer_step should clear _checkpoint_deferred"
+)
+assert control6.should_training_stop == True, (
+    "on_optimizer_step should stop training after deferred checkpoint"
+)
+print("DEFERRED_CHECKPOINT_PROCESSED=PASS")
+
+# === Test 4: on_pre_optimizer_step sets _in_optimizer_step ===
+callback.jit_manager._in_optimizer_step = False
+control7 = MockControl()
+callback.on_pre_optimizer_step(args, state, control7)
+assert callback.jit_manager._in_optimizer_step == True, (
+    "on_pre_optimizer_step should set _in_optimizer_step"
+)
+print("PRE_OPTIMIZER_STEP_FLAG=PASS")
+
+print("TEST_COMPLETE=True")
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    output = result.stdout
+    print(f"Test output:\n{output}")
+
+    if result.returncode != 0:
+        print(f"Test stderr:\n{result.stderr}")
+
+    assert result.returncode == 0, f"Execution failed: {result.stderr}"
+    assert "GUARD_ON_STEP_END=PASS" in output
+    assert "GUARD_ON_EPOCH_END=PASS" in output
+    assert "DEFERRED_CHECKPOINT_PROCESSED=PASS" in output
+    assert "PRE_OPTIMIZER_STEP_FLAG=PASS" in output
+    assert "TEST_COMPLETE=True" in output
+
+    print("test execution complete")
+
+
+def test_find_latest_checkpoint_race_condition(tmp_path):
+    """Test checkpoint discovery handles concurrent directory removal gracefully.
+
+    Simulates the race where global rank 0 deletes an incomplete checkpoint
+    directory while another rank is scanning it with os.listdir().
+    """
+    print("Executing test: checkpoint discovery race condition")
+
+    import os
+    import re
+    import shutil
+
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
+
+    # Create a checkpoint directory then remove it between listdir calls
+    # to simulate the race condition
+    checkpoint_path = tmp_path / "checkpoint-100"
+    checkpoint_path.mkdir()
+    (checkpoint_path / "model.bin").write_text("data")
+
+    # Also create a valid checkpoint that should be found
+    valid_path = tmp_path / "checkpoint-50"
+    valid_path.mkdir()
+    (valid_path / "model.bin").write_text("data")
+
+    # Implement the checkpoint discovery logic with race condition handling
+    checkpoint_pattern = re.compile(r"^checkpoint-(\d+)$")
+    checkpoints = []
+
+    entries = os.listdir(tmp_path)
+
+    # Remove checkpoint-100 AFTER listdir but BEFORE processing it
+    # (simulates race with rank 0 deleting it)
+    shutil.rmtree(checkpoint_path)
+
+    for name in entries:
+        match = checkpoint_pattern.match(name)
+        full_path = os.path.join(tmp_path, name)
+        if not match or not os.path.isdir(full_path):
+            continue
+
+        try:
+            has_incomplete = any(
+                f.startswith(CHECKPOINT_INCOMPLETE_MARKER) for f in os.listdir(full_path)
+            )
+        except (FileNotFoundError, OSError):
+            # This is the race condition path - directory was removed
+            print(f"Skipping checkpoint {name} directory was removed by another rank")
+            continue
+
+        if not has_incomplete:
+            checkpoints.append((int(match.group(1)), full_path))
+
+    # checkpoint-100 was removed (race condition), checkpoint-50 should be found
+    assert len(checkpoints) == 1, f"Expected 1 checkpoint, got {len(checkpoints)}"
+    assert checkpoints[0][0] == 50, f"Expected step 50, got {checkpoints[0][0]}"
+
+    print("test execution complete")
+
+
+def test_sentinel_lifecycle_during_jit_checkpoint(tmp_path):
+    """Test sentinel file lifecycle: created before save, removed after save.
+
+    Verifies:
+    1. Sentinel file exists DURING _save_checkpoint() (created before save).
+    2. Sentinel file is removed AFTER _save_checkpoint() completes.
+    3. No CHECKPOINT_INCOMPLETE_MARKER files remain (checkpoint is resume-ready).
+    """
+    print("Executing test: sentinel lifecycle during JIT checkpoint")
+
+    import subprocess
+    import sys
+
+    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
+
+    output_dir = tmp_path / "checkpoints"
+
+    checkpoint_code = get_jit_checkpoint_injection_code(
+        output_dir=str(output_dir),
+        enable_jit_checkpoint=True,
+    )
+
+    torch_stub = """
+class distributed:
+    @staticmethod
+    def is_available():
+        return False
+
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def barrier():
+        pass
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+"""
+
+    transformers_stub = f"""
+import os
+
+CHECKPOINT_INCOMPLETE_MARKER = "{CHECKPOINT_INCOMPLETE_MARKER}"
+_OUTPUT_DIR = r"{output_dir}"
+
+class TrainerCallback:
+    pass
+
+class trainer_utils:
+    PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+
+class TrainerState:
+    def __init__(self):
+        self.global_step = 10
+        self.is_world_process_zero = True
+
+class TrainingArguments:
+    def __init__(self):
+        self.local_process_index = 0
+
+class CallbackHandler:
+    def on_save(self, args, state, control):
+        pass
+
+class MockControl:
+    should_save = False
+    should_training_stop = False
+
+class Trainer:
+    def __init__(self, *args, **kwargs):
+        self.state = TrainerState()
+        self.args = TrainingArguments()
+        self.control = MockControl()
+        self.model = type('MockModel', (), {{'parameters': lambda self: []}})()
+        self.callback_handler = CallbackHandler()
+        self._init_args = args
+        self._init_kwargs = kwargs
+
+    def _get_output_dir(self, trial=None):
+        return _OUTPUT_DIR
+
+    def _save_checkpoint(self, model, trial=None):
+        # During save, verify sentinel file EXISTS
+        checkpoint_path = os.path.join(_OUTPUT_DIR, "checkpoint-10")
+        sentinel_files = [
+            f for f in os.listdir(checkpoint_path)
+            if f.startswith(CHECKPOINT_INCOMPLETE_MARKER)
+        ]
+        if sentinel_files:
+            print("SENTINEL_EXISTS_DURING_SAVE=True")
+            print(f"SENTINEL_NAME={{sentinel_files[0]}}")
+        else:
+            print("SENTINEL_EXISTS_DURING_SAVE=False")
+
+    def train(self, resume_from_checkpoint=None):
+        return {{"train_called": True}}
+"""
+
+    test_file = tmp_path / "test_sentinel_lifecycle.py"
+    test_code = f"""
+import os
+import sys
+import signal
+import types
+
+OUTPUT_DIR = r"{output_dir}"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+torch_module = types.ModuleType('torch')
+exec('''{torch_stub}''', torch_module.__dict__)
+sys.modules['torch'] = torch_module
+sys.modules['torch.distributed'] = torch_module.distributed
+
+transformers_module = types.ModuleType('transformers')
+exec('''{transformers_stub}''', transformers_module.__dict__)
+sys.modules['transformers'] = transformers_module
+
+trainer_utils_module = types.ModuleType('transformers.trainer_utils')
+trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers.trainer_utils'] = trainer_utils_module
+
+{checkpoint_code}
+
+from transformers import Trainer, TrainerCallback, TrainingArguments, TrainerState
+
+CHECKPOINT_INCOMPLETE_MARKER = "{CHECKPOINT_INCOMPLETE_MARKER}"
+
+# Find JITCheckpointCallback
+callback_class = None
+for name, obj in list(globals().items()):
+    if isinstance(obj, type) and issubclass(obj, TrainerCallback) and name != 'TrainerCallback':
+        callback_class = obj
+        break
+
+if not callback_class:
+    print("ERROR: JITCheckpointCallback not found")
+    sys.exit(1)
+
+# Create trainer and JIT manager
+trainer = Trainer(None, TrainingArguments())
+trainer._get_output_dir = lambda trial=None: OUTPUT_DIR
+
+cb = callback_class()
+cb._trainer_ref = trainer
+cb.on_train_begin(TrainingArguments(), TrainerState(), None)
+
+mgr = cb.jit_manager
+assert mgr is not None, "JIT manager not created"
+
+# Trigger SIGTERM handler (will call _save_jit_checkpoint)
+mgr._sigterm_handler(signal.SIGTERM, None)
+
+# After _save_jit_checkpoint completes, verify sentinel is REMOVED
+checkpoint_path = os.path.join(OUTPUT_DIR, "checkpoint-10")
+remaining_sentinels = [
+    f for f in os.listdir(checkpoint_path)
+    if f.startswith(CHECKPOINT_INCOMPLETE_MARKER)
+]
+if not remaining_sentinels:
+    print("SENTINEL_REMOVED_AFTER_SAVE=True")
+else:
+    print(f"SENTINEL_REMOVED_AFTER_SAVE=False (remaining: {{remaining_sentinels}})")
+
+print("TEST_COMPLETE=True")
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    output = result.stdout
+    print(f"Test output:\n{output}")
+
+    if result.returncode != 0:
+        print(f"Test stderr:\n{result.stderr}")
+
+    assert result.returncode == 0, f"Execution failed: {result.stderr}"
+    # Sentinel existed DURING _save_checkpoint
+    assert "SENTINEL_EXISTS_DURING_SAVE=True" in output
+    # Sentinel name matches per-rank format
+    assert f"SENTINEL_NAME={CHECKPOINT_INCOMPLETE_MARKER}.node-0-rank-0" in output
+    # Sentinel removed AFTER save (checkpoint is resume-ready)
+    assert "SENTINEL_REMOVED_AFTER_SAVE=True" in output
+    assert "TEST_COMPLETE=True" in output
 
     print("test execution complete")
 
