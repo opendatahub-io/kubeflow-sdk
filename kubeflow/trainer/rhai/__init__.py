@@ -19,8 +19,6 @@ This module provides RHAI trainer types and utilities:
 - TrainingHubTrainer: RHAI Training Hub integration
 """
 
-from typing import Union
-
 from kubeflow.trainer.rhai.traininghub import TrainingHubAlgorithms, TrainingHubTrainer
 from kubeflow.trainer.rhai.transformers import TransformersTrainer
 
@@ -31,4 +29,4 @@ __all__ = (
     "TransformersTrainer",
 )
 
-RHAITrainer = Union[TransformersTrainer, TrainingHubTrainer]
+RHAITrainer = TransformersTrainer | TrainingHubTrainer

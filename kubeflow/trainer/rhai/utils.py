@@ -1,7 +1,6 @@
 import logging
 import os
 import re
-from typing import Optional
 from urllib.parse import urlparse
 
 from kubeflow_trainer_api import models
@@ -70,7 +69,7 @@ def is_primary_pod() -> bool:
 def get_trainer_cr_from_rhai_trainer(
     runtime: types.Runtime,
     trainer: RHAITrainer,
-    initializer: Optional[types.Initializer] = None,
+    initializer: types.Initializer | None = None,
 ) -> models.TrainerV1alpha1Trainer:
     if isinstance(trainer, traininghub.TrainingHubTrainer):
         return traininghub.get_trainer_cr_from_training_hub_trainer(
@@ -92,8 +91,8 @@ def get_trainer_cr_from_rhai_trainer(
 
 def merge_progression_annotations(
     trainer: RHAITrainer,
-    metadata_annotations: Optional[dict[str, str]] = None,
-) -> Optional[dict[str, str]]:
+    metadata_annotations: dict[str, str] | None = None,
+) -> dict[str, str] | None:
     """Merge progression tracking annotations for RHAI trainers with existing metadata annotations.
 
     Args:
@@ -130,7 +129,7 @@ def merge_progression_annotations(
     return {**progression_annotations, **metadata_annotations}
 
 
-def normalize_and_validate_output_dir(output_dir: Optional[str]) -> Optional[str]:
+def normalize_and_validate_output_dir(output_dir: str | None) -> str | None:
     """Normalize and validate storage URI for output_dir.
 
     Supports:
@@ -197,7 +196,7 @@ def normalize_and_validate_output_dir(output_dir: Optional[str]) -> Optional[str
     return normalized
 
 
-def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
+def parse_output_dir_uri(output_dir: str | None) -> tuple[str | None, dict | None]:
     """
     Parse output_dir URI and return resolved path and volume mount specs.
 
@@ -265,7 +264,7 @@ def parse_output_dir_uri(output_dir: Optional[str]) -> tuple[Optional[str], Opti
 
 def apply_output_dir_uri_to_pod_overrides(
     output_dir: str,
-    pod_template_overrides: Optional[list],
+    pod_template_overrides: list | None,
 ) -> tuple[str, list]:
     """
     Process output_dir URI and apply volume mounting to pod template overrides.
@@ -468,10 +467,10 @@ def inject_cloud_storage_credentials(
 def setup_rhai_trainer_storage(
     trainer: RHAITrainer,
     trainer_cr: "models.TrainerV1alpha1Trainer",
-    pod_template_overrides: Optional[list],
+    pod_template_overrides: list | None,
     core_api: "client.CoreV1Api",
     namespace: str,
-) -> tuple[Optional[str], "models.TrainerV1alpha1Trainer", list]:
+) -> tuple[str | None, "models.TrainerV1alpha1Trainer", list]:
     """Setup RHAI trainer storage: volume mounts and S3 credentials.
 
     This is a consolidated helper that:
