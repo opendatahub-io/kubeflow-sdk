@@ -14,7 +14,6 @@
 
 from collections.abc import Callable, Iterator
 import logging
-from typing import Optional, Union
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.trainer.backends.container.backend import ContainerBackend
@@ -25,7 +24,6 @@ from kubeflow.trainer.backends.localprocess.backend import (
     LocalProcessBackendConfig,
 )
 from kubeflow.trainer.constants import constants
-from kubeflow.trainer.rhai import RHAITrainer
 from kubeflow.trainer.types import types
 
 logger = logging.getLogger(__name__)
@@ -34,13 +32,10 @@ logger = logging.getLogger(__name__)
 class TrainerClient:
     def __init__(
         self,
-        backend_config: Optional[
-            Union[
-                KubernetesBackendConfig,
-                LocalProcessBackendConfig,
-                ContainerBackendConfig,
-            ]
-        ] = None,
+        backend_config: KubernetesBackendConfig
+        | LocalProcessBackendConfig
+        | ContainerBackendConfig
+        | None = None,
     ):
         """Initialize a Kubeflow Trainer client.
 
@@ -81,11 +76,16 @@ class TrainerClient:
 
     def get_runtime(self, name: str) -> types.Runtime:
         """Get the runtime object
+
         Args:
             name: Name of the runtime.
 
         Returns:
             A runtime object.
+
+        Raises:
+            TimeoutError: Timeout to get a runtime.
+            RuntimeError: Failed to get a runtime.
         """
         return self.backend.get_runtime(name=name)
 
@@ -105,17 +105,13 @@ class TrainerClient:
 
     def train(
         self,
-        runtime: Optional[Union[str, types.Runtime]] = None,
-        initializer: Optional[types.Initializer] = None,
-        trainer: Optional[
-            Union[
-                types.CustomTrainer,
-                types.CustomTrainerContainer,
-                types.BuiltinTrainer,
-                RHAITrainer,
-            ]
-        ] = None,
-        options: Optional[list] = None,
+        runtime: str | types.Runtime | None = None,
+        initializer: types.Initializer | None = None,
+        trainer: types.CustomTrainer
+        | types.CustomTrainerContainer
+        | types.BuiltinTrainer
+        | None = None,
+        options: list | None = None,
     ) -> str:
         """Create a TrainJob. You can configure the TrainJob using one of these trainers:
 
@@ -154,7 +150,7 @@ class TrainerClient:
             options=options,
         )
 
-    def list_jobs(self, runtime: Optional[types.Runtime] = None) -> list[types.TrainJob]:
+    def list_jobs(self, runtime: types.Runtime | None = None) -> list[types.TrainJob]:
         """List of the created TrainJobs. If a runtime is specified, only TrainJobs associated with
         that runtime are returned.
 
@@ -190,7 +186,7 @@ class TrainerClient:
         self,
         name: str,
         step: str = constants.NODE + "-0",
-        follow: Optional[bool] = False,
+        follow: bool | None = False,
     ) -> Iterator[str]:
         """Get logs from a specific step of a TrainJob.
 
@@ -242,7 +238,7 @@ class TrainerClient:
         status: set[str] = {constants.TRAINJOB_COMPLETE},
         timeout: int = 600,
         polling_interval: int = 2,
-        callbacks: Optional[list[Callable[[types.TrainJob], None]]] = None,
+        callbacks: list[Callable[[types.TrainJob], None]] | None = None,
     ) -> types.TrainJob:
         """Wait for a TrainJob to reach a desired status.
 

@@ -4,7 +4,6 @@ from enum import Enum
 import inspect
 import os
 import textwrap
-from typing import Optional, Union
 
 from kubeflow_trainer_api import models
 
@@ -41,15 +40,15 @@ class TrainingHubTrainer:
         metrics_poll_interval_seconds: How often controller polls metrics endpoint.
     """
 
-    func: Optional[Callable] = None
-    func_args: Optional[dict] = None
-    packages_to_install: Optional[list[str]] = None
+    func: Callable | None = None
+    func_args: dict | None = None
+    packages_to_install: list[str] | None = None
     pip_index_urls: list[str] = field(
         default_factory=lambda: list(constants.DEFAULT_PIP_INDEX_URLS)
     )
-    env: Optional[dict[str, str]] = None
-    algorithm: Optional[TrainingHubAlgorithms] = None
-    resources_per_node: Optional[dict] = None
+    env: dict[str, str] | None = None
+    algorithm: TrainingHubAlgorithms | None = None
+    resources_per_node: dict | None = None
 
     # Progress tracking parameters
     enable_progression_tracking: bool = True  # Enabled by default
@@ -82,15 +81,15 @@ class TrainingHubTrainer:
 
 
 def _derive_topology_from_func_args(
-    func_args: Optional[dict],
-) -> tuple[Optional[int], Optional[Union[int, str]]]:
+    func_args: dict | None,
+) -> tuple[int | None, int | str | None]:
     """Return (nnodes, nproc_per_node) based on provided func_args.
 
     If values are not provided in func_args, they are left as None so that the
     TrainingRuntime ML policy can supply appropriate defaults instead of the SDK.
     """
-    nnodes: Optional[int] = None
-    nproc_per_node: Optional[Union[int, str]] = None
+    nnodes: int | None = None
+    nproc_per_node: int | str | None = None
     if isinstance(func_args, dict):
         nnodes_value = func_args.get("nnodes")
         if isinstance(nnodes_value, int):
@@ -102,7 +101,7 @@ def _derive_topology_from_func_args(
 
 
 def _build_install_snippet(
-    packages_to_install: Optional[list[str]],
+    packages_to_install: list[str] | None,
     pip_index_urls: list[str],
 ) -> str:
     """Build the shell snippet to install Python packages if requested."""
@@ -589,7 +588,7 @@ def _create_training_hub_progression_instrumentation(
     return (apply_progression_tracking, TrainingHubMetricsHandler)
 
 
-def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: Optional[dict]) -> str:
+def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) -> str:
     """Render a small Python script that calls training_hub.<algorithm>(**func_args).
 
     Includes termination message writing after training completes (on_train_end equivalent)
@@ -741,7 +740,7 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: Optional[dict
     return base_script + call_line
 
 
-def _render_user_func_code(func: Callable, func_args: Optional[dict]) -> tuple[str, str]:
+def _render_user_func_code(func: Callable, func_args: dict | None) -> tuple[str, str]:
     """Return (func_code, func_file_basename) embedding the user function and call."""
     if not callable(func):
         raise ValueError(f"Training function must be callable, got function type: {type(func)}")
@@ -868,7 +867,7 @@ print("[Kubeflow] Training Hub progression tracking enabled", flush=True)
 def get_trainer_cr_from_training_hub_trainer(
     runtime: types.Runtime,
     trainer: TrainingHubTrainer,
-    initializer: Optional[types.Initializer] = None,
+    initializer: types.Initializer | None = None,
 ) -> models.TrainerV1alpha1Trainer:
     """Build Trainer CRD for TrainingHub trainer.
 

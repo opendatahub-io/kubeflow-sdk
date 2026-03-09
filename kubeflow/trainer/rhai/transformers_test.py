@@ -344,7 +344,7 @@ def test_func_callable_validation(test_case):
             expected_status="success",
             config={"port": 28080},
             expected_output=[
-                ("progressPercentage: Optional[int] = None", True),
+                ("progressPercentage: int | None = None", True),
                 ("currentStep: int = 0", True),
                 ("currentEpoch: float = 0.0", True),
                 ("trainMetrics: dict[str, Any] = field(default_factory=dict)", True),
