@@ -252,15 +252,14 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             ) from e
 
     class CheckpointManager:
-        """Manages async just-in-time checkpointing on SIGTERM signal using CUDA streams."""
+        """Manages just-in-time checkpointing on SIGTERM signal using CUDA streams."""
 
         def __init__(self, trainer):
             self.trainer = trainer
             self.checkpoint_requested = False
-            self._checkpoint_deferred = False
+            self._should_exit = False
             self._original_sigterm_handler = None
             self.checkpoint_stream = None
-            self._in_optimizer_step = False
 
             # Initialize CUDA stream for async checkpoint operations
             try:
@@ -276,29 +275,21 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log("JIT checkpoint signal handler registered for SIGTERM")
 
         def _sigterm_handler(self, signum, frame):
-            """Start checkpoint on SIGTERM.
+            """Mark checkpoint requested on SIGTERM.
 
-            If SIGTERM arrives outside an optimizer step, checkpoint is performed
-            directly. If SIGTERM arrives during an optimizer step, checkpoint is
-            deferred to the on_optimizer_step callback to avoid deadlock.
+            Checkpoint is deferred to the next training callback (on_step_end /
+            on_epoch_end) to avoid reentrancy deadlocks when SIGTERM arrives
+            during an in-progress periodic checkpoint.
             """
             if self.checkpoint_requested:
                 return
 
-            _log("SIGTERM received, starting JIT checkpoint")
+            _log("SIGTERM received, checkpoint will be saved at next safe point")
             self.checkpoint_requested = True
-
-            if self._in_optimizer_step:
-                # Unsafe to checkpoint during optimizer step - defer to callback
-                _log("In optimizer step, deferring checkpoint to callback")
-                self._checkpoint_deferred = True
-                return
-
-            # Safe to checkpoint directly - blocks main thread
-            self._save_jit_checkpoint()
 
         def _save_jit_checkpoint(self):
             """Execute checkpoint, saving model state and training artifacts."""
+            self.checkpoint_requested = False
             try:
                 current_step = self.trainer.state.global_step
                 _log(f"Starting JIT checkpoint at step {current_step}")
@@ -367,6 +358,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 _log(
                     f"JIT checkpoint completed at step {current_step} in node {node} rank {local_rank}"
                 )
+                self._should_exit = True
 
             except Exception as e:
                 _log(
@@ -867,32 +859,27 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     args=args,
                 )
 
-        def on_pre_optimizer_step(self, args, state, control, **kwargs):
-            if self.jit_manager:
-                # Mark that we're entering optimizer step (unsafe for checkpoint)
-                self.jit_manager._in_optimizer_step = True
+        def on_step_begin(self, args, state, control, **kwargs):
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_training_stop = True
 
-                if self.jit_manager.checkpoint_in_progress():
-                    control.should_training_stop = True
+        def on_pre_optimizer_step(self, args, state, control, **kwargs):
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_training_stop = True
 
         def on_optimizer_step(self, args, state, control, **kwargs):
-            if self.jit_manager:
-                # Mark that optimizer step completed (safe for checkpoint again)
-                self.jit_manager._in_optimizer_step = False
-
-                # If SIGTERM arrived during optimizer step, checkpoint now
-                if self.jit_manager._checkpoint_deferred:
-                    self.jit_manager._checkpoint_deferred = False
-                    self.jit_manager._save_jit_checkpoint()
-                    control.should_training_stop = True
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_training_stop = True
 
         def on_step_end(self, args, state, control, **kwargs):
             if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                self.jit_manager._save_jit_checkpoint()
                 control.should_save = False
                 control.should_training_stop = True
 
         def on_epoch_end(self, args, state, control, **kwargs):
             if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                self.jit_manager._save_jit_checkpoint()
                 control.should_save = False
                 control.should_training_stop = True
 
@@ -903,7 +890,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             redundant user code from running during graceful shutdown.
             """
             if not self.remote_fs:
-                if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                if self.jit_manager and self.jit_manager._should_exit:
                     _log(
                         "JIT checkpoint complete. Exiting to avoid redundant "
                         "operations during graceful shutdown.",
@@ -935,7 +922,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             # After JIT checkpoint + S3 upload + cleanup, exit the process to prevent
             # user code (e.g. trainer.save_model()) from running during shutdown.
-            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+            if self.jit_manager and self.jit_manager._should_exit:
                 _log(
                     "JIT checkpoint and upload complete. Exiting to avoid redundant "
                     "operations during graceful shutdown.",

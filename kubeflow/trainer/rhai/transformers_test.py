@@ -3784,22 +3784,12 @@ def create_jit_manager():
     cb.on_train_begin(TrainingArguments(), TrainerState(), None)
     return cb.jit_manager
 
-# --- Test Path 1: Normal SIGTERM (no optimizer step, no periodic save) ---
+# --- Test Path 1: SIGTERM only sets flag (checkpoint deferred to callback) ---
 mgr = create_jit_manager()
 mgr._sigterm_handler(signal.SIGTERM, None)
 assert mgr.checkpoint_requested == True, "checkpoint_requested not set"
-assert mgr.trainer._save_checkpoint_called == True, "Path 1: _save_checkpoint should be called"
-assert mgr._checkpoint_deferred == False, "Path 1: should not defer"
-print("PATH_1_NORMAL=PASS")
-
-# --- Test Path 2: SIGTERM during optimizer step ---
-mgr2 = create_jit_manager()
-mgr2._in_optimizer_step = True
-mgr2._sigterm_handler(signal.SIGTERM, None)
-assert mgr2.checkpoint_requested == True, "checkpoint_requested not set"
-assert mgr2._checkpoint_deferred == True, "Path 2: should defer"
-assert mgr2.trainer._save_checkpoint_called == False, "Path 2: should NOT call _save_checkpoint"
-print("PATH_2_OPTIMIZER_STEP=PASS")
+assert mgr.trainer._save_checkpoint_called == False, "Path 1: signal handler should NOT call _save_checkpoint"
+print("PATH_1_FLAG_ONLY=PASS")
 
 # --- Test: Second SIGTERM is idempotent ---
 mgr4 = create_jit_manager()
@@ -3824,8 +3814,7 @@ print("TEST_COMPLETE=True")
         print(f"Test stderr:\n{result.stderr}")
 
     assert result.returncode == 0, f"Execution failed: {result.stderr}"
-    assert "PATH_1_NORMAL=PASS" in output
-    assert "PATH_2_OPTIMIZER_STEP=PASS" in output
+    assert "PATH_1_FLAG_ONLY=PASS" in output
     assert "IDEMPOTENT=PASS" in output
     assert "TEST_COMPLETE=True" in output
 
@@ -3833,13 +3822,12 @@ print("TEST_COMPLETE=True")
 
 
 def test_callback_guards_and_deferred_checkpoint(tmp_path):
-    """Test JITCheckpointCallback guards and deferred checkpoint processing.
+    """Test JITCheckpointCallback guards and checkpoint behavior.
 
     Verifies:
-    - on_step_end/on_epoch_end set should_save=False and should_training_stop=True
-      when checkpoint is in progress.
-    - on_optimizer_step processes deferred checkpoint.
-    - on_pre_optimizer_step sets _in_optimizer_step flag.
+    - on_step_end/on_epoch_end call _save_jit_checkpoint and set
+      should_save=False, should_training_stop=True when checkpoint in progress.
+    - on_optimizer_step only sets should_training_stop=True (no checkpoint).
     """
     print("Executing test: callback guards and deferred checkpoint")
 
@@ -3903,12 +3891,13 @@ class Trainer:
         self.callback_handler = CallbackHandler()
         self._init_args = args
         self._init_kwargs = kwargs
+        self._save_checkpoint_called = False
 
     def _get_output_dir(self, trial=None):
         return OUTPUT_DIR
 
     def _save_checkpoint(self, model, trial=None):
-        pass
+        self._save_checkpoint_called = True
 
     def train(self, resume_from_checkpoint=None):
         return {"train_called": True}
@@ -3965,7 +3954,7 @@ assert callback.jit_manager is not None, "JIT manager not created"
 args = TrainingArguments()
 state = TrainerState()
 
-# === Test 1: on_step_end guard when checkpoint in progress ===
+# === Test 1: on_step_end saves checkpoint and prevents redundant save ===
 callback.jit_manager.checkpoint_requested = True
 
 class MockControl:
@@ -3974,46 +3963,48 @@ class MockControl:
 
 control = MockControl()
 callback.on_step_end(args, state, control)
-assert control.should_save == False, "on_step_end should clear should_save"
 assert control.should_training_stop == True, "on_step_end should set should_training_stop"
+assert control.should_save == False, "on_step_end should set should_save=False to prevent redundant save"
+assert trainer._save_checkpoint_called == True, "on_step_end should call _save_jit_checkpoint"
 print("GUARD_ON_STEP_END=PASS")
 
-# === Test 2: on_epoch_end guard when checkpoint in progress ===
+# === Test 2: on_epoch_end saves checkpoint and prevents redundant save ===
+trainer2 = Trainer(None, TrainingArguments())
+trainer2._get_output_dir = lambda trial=None: OUTPUT_DIR
+trainer2._save_checkpoint_called = False
+callback2 = callback_class()
+callback2._trainer_ref = trainer2
+callback2.on_train_begin(TrainingArguments(), TrainerState(), None)
+callback2.jit_manager.checkpoint_requested = True
+
 control2 = MockControl()
 control2.should_save = True
 control2.should_training_stop = False
-callback.on_epoch_end(args, state, control2)
-assert control2.should_save == False, "on_epoch_end should clear should_save"
+callback2.on_epoch_end(args, state, control2)
 assert control2.should_training_stop == True, "on_epoch_end should set should_training_stop"
+assert control2.should_save == False, "on_epoch_end should set should_save=False to prevent redundant save"
+assert trainer2._save_checkpoint_called == True, "on_epoch_end should call _save_jit_checkpoint"
 print("GUARD_ON_EPOCH_END=PASS")
 
-# === Test 3: on_optimizer_step processes deferred checkpoint ===
-callback.jit_manager.checkpoint_requested = True
-callback.jit_manager._checkpoint_deferred = True
-callback.jit_manager._in_optimizer_step = True
+# === Test 3: on_optimizer_step only stops training (no checkpoint) ===
+trainer3 = Trainer(None, TrainingArguments())
+trainer3._get_output_dir = lambda trial=None: OUTPUT_DIR
+trainer3._save_checkpoint_called = False
+callback3 = callback_class()
+callback3._trainer_ref = trainer3
+callback3.on_train_begin(TrainingArguments(), TrainerState(), None)
+callback3.jit_manager.checkpoint_requested = True
 
 control6 = MockControl()
 control6.should_training_stop = False
-callback.on_optimizer_step(args, state, control6)
-assert callback.jit_manager._in_optimizer_step == False, (
-    "on_optimizer_step should clear _in_optimizer_step"
-)
-assert callback.jit_manager._checkpoint_deferred == False, (
-    "on_optimizer_step should clear _checkpoint_deferred"
-)
+callback3.on_optimizer_step(args, state, control6)
 assert control6.should_training_stop == True, (
-    "on_optimizer_step should stop training after deferred checkpoint"
+    "on_optimizer_step should stop training"
 )
-print("DEFERRED_CHECKPOINT_PROCESSED=PASS")
-
-# === Test 4: on_pre_optimizer_step sets _in_optimizer_step ===
-callback.jit_manager._in_optimizer_step = False
-control7 = MockControl()
-callback.on_pre_optimizer_step(args, state, control7)
-assert callback.jit_manager._in_optimizer_step == True, (
-    "on_pre_optimizer_step should set _in_optimizer_step"
+assert trainer3._save_checkpoint_called == False, (
+    "on_optimizer_step should NOT call _save_jit_checkpoint"
 )
-print("PRE_OPTIMIZER_STEP_FLAG=PASS")
+print("OPTIMIZER_STEP_GUARD=PASS")
 
 print("TEST_COMPLETE=True")
 """
@@ -4033,8 +4024,7 @@ print("TEST_COMPLETE=True")
     assert result.returncode == 0, f"Execution failed: {result.stderr}"
     assert "GUARD_ON_STEP_END=PASS" in output
     assert "GUARD_ON_EPOCH_END=PASS" in output
-    assert "DEFERRED_CHECKPOINT_PROCESSED=PASS" in output
-    assert "PRE_OPTIMIZER_STEP_FLAG=PASS" in output
+    assert "OPTIMIZER_STEP_GUARD=PASS" in output
     assert "TEST_COMPLETE=True" in output
 
     print("test execution complete")
@@ -4254,8 +4244,16 @@ cb.on_train_begin(TrainingArguments(), TrainerState(), None)
 mgr = cb.jit_manager
 assert mgr is not None, "JIT manager not created"
 
-# Trigger SIGTERM handler (will call _save_jit_checkpoint)
+# Trigger SIGTERM handler (sets checkpoint_requested flag)
 mgr._sigterm_handler(signal.SIGTERM, None)
+assert mgr.checkpoint_requested == True, "checkpoint_requested not set"
+
+# Simulate on_step_end which calls _save_jit_checkpoint
+from transformers import MockControl
+control = MockControl()
+cb.on_step_end(TrainingArguments(), TrainerState(), control)
+assert control.should_training_stop == True, "should_training_stop not set"
+assert control.should_save == False, "should_save should be False to prevent redundant save"
 
 # After _save_jit_checkpoint completes, verify sentinel is REMOVED
 checkpoint_path = os.path.join(OUTPUT_DIR, "checkpoint-10")
