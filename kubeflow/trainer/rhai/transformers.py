@@ -234,7 +234,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log_prefix = f"[Kubeflow-node{node}-rank{rank}]"
         print(f"{_log_prefix} {message}", flush=True)
 
-    def _wait_for_all_ranks(operation: str) -> None:
+    def wait_for_all_ranks(operation: str) -> None:
         """Barrier across ranks to synchronize distributed training."""
         if not dist.is_available() or not dist.is_initialized():
             return
@@ -776,7 +776,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     )
 
             # Barrier to wait for local rank 0 checkpoint download to complete
-            self.wait_for_all_ranks("download")
+            wait_for_all_ranks("download")
 
         def on_save(self, args, state, control, **kwargs):
             """Stage checkpoint and queue async upload."""
@@ -785,7 +785,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 return
 
             # Barrier before staging checkpoint to ensure all ranks finished saving their files
-            self.wait_for_all_ranks("save")
+            wait_for_all_ranks("save")
 
             # Check for background upload errors and propagate to main thread
             self._check_upload_error()
@@ -817,7 +817,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     shutil.move(checkpoint_path, staging_checkpoint_path)
 
                     # Calculate directory size for progress tracking
-                    total_size = self.calculate_local_dir_size(staging_checkpoint_path)
+                    total_size = self._calculate_local_dir_size(staging_checkpoint_path)
 
                     # Start upload worker if not yet running
                     self.start_upload_worker()
@@ -1143,7 +1143,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             return
 
         # Ensure all ranks finish writing final artifacts before upload starts.
-        _jit_checkpoint_callback.wait_for_all_ranks("final_model_upload")
+        wait_for_all_ranks("final_model_upload")
 
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         if local_rank != 0:
@@ -1176,7 +1176,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     )
                     uploaded_count += 1
                 elif os.path.isdir(local_path):
-                    size = _jit_checkpoint_callback.calculate_local_dir_size(local_path)
+                    size = _jit_checkpoint_callback._calculate_local_dir_size(local_path)
                     _jit_checkpoint_callback.remote_fs.put(
                         local_path,
                         item,

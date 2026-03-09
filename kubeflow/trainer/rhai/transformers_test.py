@@ -3663,7 +3663,7 @@ def test_sigterm_handler_paths(tmp_path):
 
     output_dir = tmp_path / "checkpoints"
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_code, _ = get_jit_checkpoint_injection_code(
         output_dir=str(output_dir),
         enable_jit_checkpoint=True,
     )
@@ -3848,7 +3848,7 @@ def test_callback_guards_and_deferred_checkpoint(tmp_path):
 
     output_dir = tmp_path / "checkpoints"
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_code, _ = get_jit_checkpoint_injection_code(
         output_dir=str(output_dir),
         enable_jit_checkpoint=True,
     )
@@ -4117,7 +4117,7 @@ def test_sentinel_lifecycle_during_jit_checkpoint(tmp_path):
 
     output_dir = tmp_path / "checkpoints"
 
-    checkpoint_code = get_jit_checkpoint_injection_code(
+    checkpoint_code, _ = get_jit_checkpoint_injection_code(
         output_dir=str(output_dir),
         enable_jit_checkpoint=True,
     )
