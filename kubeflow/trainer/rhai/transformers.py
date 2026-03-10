@@ -210,6 +210,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     import re
     import shutil
     import signal
+    import sys
     import threading
     import time
     from typing import Callable, Optional
@@ -233,16 +234,32 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log_prefix = f"[Kubeflow-node{node}-rank{rank}]"
         print(f"{_log_prefix} {message}", flush=True)
 
+    def wait_for_all_ranks(operation: str) -> None:
+        """Barrier across ranks to synchronize distributed training."""
+        if not dist.is_available() or not dist.is_initialized():
+            return
+        try:
+            # Specify device to avoid "guessing device ID" warning
+            if torch.cuda.is_available():
+                dist.barrier(device_ids=[torch.cuda.current_device()])
+            else:
+                dist.barrier()
+        except Exception as e:
+            raise RuntimeError(
+                f"[Kubeflow] Barrier synchronization failed during {operation}: {e}. "
+                "This typically indicates one or more training processes crashed or "
+                "exited early. Check logs to identify which rank failed."
+            ) from e
+
     class CheckpointManager:
-        """Manages async just-in-time checkpointing on SIGTERM signal using CUDA streams."""
+        """Manages just-in-time checkpointing on SIGTERM signal using CUDA streams."""
 
         def __init__(self, trainer):
             self.trainer = trainer
             self.checkpoint_requested = False
+            self._should_exit = False
             self._original_sigterm_handler = None
             self.checkpoint_stream = None
-            self.checkpoint_thread = None
-            self._in_optimizer_step = False
 
             # Initialize CUDA stream for async checkpoint operations
             try:
@@ -258,34 +275,31 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log("JIT checkpoint signal handler registered for SIGTERM")
 
         def _sigterm_handler(self, signum, frame):
-            """Start async checkpoint on SIGTERM."""
+            """Mark checkpoint requested on SIGTERM.
+
+            Checkpoint is deferred to the next training callback (on_step_end /
+            on_epoch_end) to avoid reentrancy deadlocks when SIGTERM arrives
+            during an in-progress periodic checkpoint.
+            """
             if self.checkpoint_requested:
                 return
 
-            _log("SIGTERM received, starting async checkpoint")
+            _log("SIGTERM received, checkpoint will be saved at next safe point")
             self.checkpoint_requested = True
 
-            # Start checkpoint thread immediately
-            self.checkpoint_thread = threading.Thread(
-                target=self._async_checkpoint, daemon=True, name="KubeflowJITCheckpoint"
-            )
-            self.checkpoint_thread.start()
-
-        def _async_checkpoint(self):
-            """Execute checkpoint asynchronously, waiting if in optimizer step."""
+        def _save_jit_checkpoint(self):
+            """Execute checkpoint, saving model state and training artifacts."""
+            self.checkpoint_requested = False
             try:
-                # Wait if we're currently in optimizer step (unsafe to checkpoint)
-                while self._in_optimizer_step:
-                    time.sleep(0.5)
-
                 current_step = self.trainer.state.global_step
                 _log(f"Starting JIT checkpoint at step {current_step}")
 
-                # Get global rank 0 for distributed training.
-                # Fall back to True for single-process runs.
-                is_global_rank0 = True
-                if dist.is_available() and dist.is_initialized():
-                    is_global_rank0 = dist.get_rank() == 0
+                # Build per-rank marker filename
+                node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
+                try:
+                    local_rank = self.trainer.args.local_process_index
+                except Exception:
+                    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
@@ -293,20 +307,22 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 )
                 os.makedirs(checkpoint_path, exist_ok=True)
 
-                # Create sentinel file to mark incomplete checkpoint (only global rank 0)
-                sentinel_file = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
-                if is_global_rank0:
-                    try:
-                        with open(sentinel_file, "w") as f:
-                            f.write(f"Checkpoint started at step {current_step}")
-                    except Exception as e:
-                        _log(
-                            f"Warning: Failed to write sentinel file: {e}. "
-                            "Check local disk space and write permissions in output_dir; "
-                            "this checkpoint will be treated as complete during resume."
-                            "Please manually verify if the checkpoint is indeed complete"
-                            f"{checkpoint_path}"
+                # Each rank creates its own sentinel to track per-rank completion
+                sentinel_name = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-{node}-rank-{local_rank}"
+                sentinel_file = os.path.join(checkpoint_path, sentinel_name)
+                try:
+                    with open(sentinel_file, "w") as f:
+                        f.write(
+                            f"Checkpoint started at step {current_step} in node {node} rank {local_rank}"
                         )
+                except Exception as e:
+                    _log(
+                        f"Warning: Failed to write sentinel file: {e}. "
+                        "Check local disk space and write permissions in output_dir; "
+                        "this checkpoint will be treated as complete during resume. "
+                        "Please manually verify if the checkpoint is indeed complete: "
+                        f"{checkpoint_path}"
+                    )
 
                 # Checkpoint using dedicated CUDA stream
                 if self.checkpoint_stream is not None:
@@ -324,8 +340,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     # Fallback if no CUDA stream
                     self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
-                # Remove sentinel on success (only global rank 0)
-                if is_global_rank0 and os.path.exists(sentinel_file):
+                if os.path.exists(sentinel_file):
                     try:
                         os.remove(sentinel_file)
                     except Exception as e:
@@ -335,7 +350,15 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             f"to be skipped. Remove it manually from: {sentinel_file}"
                         )
 
-                _log(f"JIT checkpoint completed at step {current_step}")
+                # Trigger on_save callback to upload checkpoint if cloud storage
+                self.trainer.callback_handler.on_save(
+                    self.trainer.args, self.trainer.state, self.trainer.control
+                )
+
+                _log(
+                    f"JIT checkpoint completed at step {current_step} in node {node} rank {local_rank}"
+                )
+                self._should_exit = True
 
             except Exception as e:
                 _log(
@@ -428,26 +451,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         f"This check can be disabled by setting verify_cloud_storage_access=False."
                     ) from e
 
-        def wait_for_all_ranks(self, operation: str) -> None:
-            """Barrier across ranks."""
-            # Avoid barrier in single-process or when torch.distributed is not initialized.
-            if not dist.is_available() or not dist.is_initialized():
-                return
-            try:
-                dist.barrier()
-            except Exception as e:
-                raise RuntimeError(
-                    f"[Kubeflow] Barrier synchronization failed during checkpoint "
-                    f"{operation}: {e}. "
-                    "This typically indicates one or more training processes crashed "
-                    "or exited early. "
-                    "Check your training logs to identify which rank failed, "
-                    "verify all pods are healthy, "
-                    "and ensure distributed training is properly configured. "
-                    "Retrying the training job often resolves transient issues."
-                ) from e
-
-        def calculate_local_dir_size(self, path: str) -> int:
+        def _calculate_local_dir_size(self, path: str) -> int:
             """Calculate total size of local directory."""
             import contextlib
 
@@ -764,7 +768,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     )
 
             # Barrier to wait for local rank 0 checkpoint download to complete
-            self.wait_for_all_ranks("download")
+            wait_for_all_ranks("download")
 
         def on_save(self, args, state, control, **kwargs):
             """Stage checkpoint and queue async upload."""
@@ -773,7 +777,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 return
 
             # Barrier before staging checkpoint to ensure all ranks finished saving their files
-            self.wait_for_all_ranks("save")
+            wait_for_all_ranks("save")
 
             # Check for background upload errors and propagate to main thread
             self._check_upload_error()
@@ -805,7 +809,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     shutil.move(checkpoint_path, staging_checkpoint_path)
 
                     # Calculate directory size for progress tracking
-                    total_size = self.calculate_local_dir_size(staging_checkpoint_path)
+                    total_size = self._calculate_local_dir_size(staging_checkpoint_path)
 
                     # Start upload worker if not yet running
                     self.start_upload_worker()
@@ -855,32 +859,44 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     args=args,
                 )
 
-        def on_pre_optimizer_step(self, args, state, control, **kwargs):
-            if self.jit_manager:
-                # Mark that we're entering optimizer step (unsafe for checkpoint)
-                self.jit_manager._in_optimizer_step = True
+        def on_step_begin(self, args, state, control, **kwargs):
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_training_stop = True
 
-                if self.jit_manager.checkpoint_in_progress():
-                    control.should_training_stop = True
+        def on_pre_optimizer_step(self, args, state, control, **kwargs):
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_training_stop = True
 
         def on_optimizer_step(self, args, state, control, **kwargs):
-            if self.jit_manager:
-                # Mark that optimizer step completed (safe for checkpoint again)
-                self.jit_manager._in_optimizer_step = False
+            if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                control.should_training_stop = True
 
         def on_step_end(self, args, state, control, **kwargs):
             if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                self.jit_manager._save_jit_checkpoint()
                 control.should_save = False
                 control.should_training_stop = True
 
         def on_epoch_end(self, args, state, control, **kwargs):
             if self.jit_manager and self.jit_manager.checkpoint_in_progress():
+                self.jit_manager._save_jit_checkpoint()
                 control.should_save = False
                 control.should_training_stop = True
 
         def on_train_end(self, args, state, control, **kwargs):
-            """Clean up staging directory after training."""
+            """Clean up S3 staging directory and wait for pending uploads.
+
+            If JIT checkpoint was taken, exits via sys.exit(0) to prevent
+            redundant user code from running during graceful shutdown.
+            """
             if not self.remote_fs:
+                if self.jit_manager and self.jit_manager._should_exit:
+                    _log(
+                        "JIT checkpoint complete. Exiting to avoid redundant "
+                        "operations during graceful shutdown.",
+                        args=args,
+                    )
+                    sys.exit(0)
                 return
 
             is_local_rank_0 = args.local_process_index == 0
@@ -903,6 +919,16 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                             "Staging data will be cleaned up when the pod terminates.",
                             args=args,
                         )
+
+            # After JIT checkpoint + S3 upload + cleanup, exit the process to prevent
+            # user code (e.g. trainer.save_model()) from running during shutdown.
+            if self.jit_manager and self.jit_manager._should_exit:
+                _log(
+                    "JIT checkpoint and upload complete. Exiting to avoid redundant "
+                    "operations during graceful shutdown.",
+                    args=args,
+                )
+                sys.exit(0)
 
     # Create callback instance at outer scope so both apply_checkpointing()
     # and upload_final_model_to_cloud() can reference it via closure.
@@ -933,10 +959,18 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     continue
 
                 checkpoint_path = os.path.join(output_dir, name)
-                incomplete_marker = os.path.join(checkpoint_path, CHECKPOINT_INCOMPLETE_MARKER)
+
+                try:
+                    has_incomplete = any(
+                        f.startswith(CHECKPOINT_INCOMPLETE_MARKER)
+                        for f in os.listdir(checkpoint_path)
+                    )
+                except (FileNotFoundError, OSError):
+                    _log(f"Skipping checkpoint {name} directory was removed by another rank")
+                    continue
 
                 # Delete incomplete checkpoints (global rank 0 only to avoid race condition)
-                if os.path.exists(incomplete_marker):
+                if has_incomplete:
                     if is_global_rank_0:
                         try:
                             _log(f"Deleting incomplete checkpoint: {checkpoint_path}")
@@ -1054,7 +1088,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         args=training_args,
                     )
                     try:
-                        dist.barrier()
+                        # Specify device to avoid "guessing device ID" warning
+                        if torch.cuda.is_available():
+                            dist.barrier(device_ids=[torch.cuda.current_device()])
+                        else:
+                            dist.barrier()
                     except Exception as e:
                         raise RuntimeError(
                             "[Kubeflow] Barrier synchronization failed during train-start: "
@@ -1092,7 +1130,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             return
 
         # Ensure all ranks finish writing final artifacts before upload starts.
-        _jit_checkpoint_callback.wait_for_all_ranks("final_model_upload")
+        wait_for_all_ranks("final_model_upload")
 
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         if local_rank != 0:
@@ -1125,7 +1163,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     )
                     uploaded_count += 1
                 elif os.path.isdir(local_path):
-                    size = _jit_checkpoint_callback.calculate_local_dir_size(local_path)
+                    size = _jit_checkpoint_callback._calculate_local_dir_size(local_path)
                     _jit_checkpoint_callback.remote_fs.put(
                         local_path,
                         item,
