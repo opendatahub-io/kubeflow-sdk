@@ -16,21 +16,21 @@ __version__ = "0.2.0"  # Matches upstream
 ```
 
 ### Release Branches (RHAI Versioning)
-Release branches use the RHAI version format: `vX.Y.Z+rhaiN` where:
+Release branches use the RHAI version format: `vX.Y.Z+rhaiv.N` where:
 - `X.Y.Z` is the upstream base version
-- `+rhai` suffix indicates an RHAI midstream release
-- `N` is an incrementing number starting at 0 for each upstream version
+- `+rhaiv.` suffix indicates an RHAI midstream release
+- `N` is an incrementing number starting at 1 for each upstream version
 
 **Examples:**
-- First release based on upstream 0.2.0: `v0.2.0+rhai0`
-- Second release (with patches) on same base: `v0.2.0+rhai1`
-- First release based on upstream 0.3.0: `v0.3.0+rhai0`
+- First release based on upstream 0.2.0: `v0.2.0+rhaiv.1`
+- Second release (with patches) on same base: `v0.2.0+rhaiv.2`
+- First release based on upstream 0.3.0: `v0.3.0+rhaiv.1`
 
 ## Release Branches
 
 Releases are cut from minor version branches:
-- `release-0.2` for all `v0.2.x+rhaiN` releases
-- `release-0.3` for all `v0.3.x+rhaiN` releases
+- `release-0.2` for all `v0.2.x+rhaiv.N` releases
+- `release-0.3` for all `v0.3.x+rhaiv.N` releases
 
 The workflow automatically:
 1. Creates these branches if they don't exist
@@ -43,7 +43,7 @@ The workflow automatically:
 1. Go to [GitHub Actions](https://github.com/opendatahub-io/kubeflow-sdk/actions)
 2. Select the **ODH Release** workflow
 3. Click **Run workflow**
-4. Enter the release version (e.g., `v0.2.0+rhai0`)
+4. Enter the release version (e.g., `v0.2.0+rhaiv.1`)
 5. Click **Run workflow**
 
 ### 2. Workflow Steps
@@ -51,7 +51,7 @@ The workflow automatically:
 The automated workflow will:
 
 1. **Validate & Prepare**:
-   - Validate version format matches `vX.Y.Z+rhaiN`
+   - Validate version format matches `vX.Y.Z+rhaiv.N`
    - Create release branch from main if it doesn't exist (e.g., `release-0.2`)
    - Or use existing release branch as-is
    - Update `__init__.py` on release branch with rhai version
@@ -63,7 +63,7 @@ The automated workflow will:
    - Build package with `uv build`
 
 3. **Create Tag**:
-   - Create git tag with the version (e.g., `v0.2.0+rhai0`)
+   - Create git tag with the version (e.g., `v0.2.0+rhaiv.1`)
    - Push tag to repository
 
 4. **GitHub Release**:
@@ -77,7 +77,7 @@ After the workflow completes:
 1. Verify the tag was created:
    ```bash
    git fetch --tags
-   git tag -l "v*+rhai*"
+   git tag -l "v*+rhaiv.*"
    ```
 
 2. Check the [GitHub Releases page](https://github.com/opendatahub-io/kubeflow-sdk/releases)
