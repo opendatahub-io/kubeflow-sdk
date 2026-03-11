@@ -497,3 +497,65 @@ def test_name_option_sets_job_name(local_backend, mock_train_environment):
     )
 
     assert job_name == custom_name
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="all steps complete returns TRAINJOB_COMPLETE",
+            expected_status=SUCCESS,
+            config={
+                "step_statuses": [constants.TRAINJOB_COMPLETE, constants.TRAINJOB_COMPLETE],
+            },
+            expected_output=constants.TRAINJOB_COMPLETE,
+        ),
+        TestCase(
+            name="any step running returns TRAINJOB_RUNNING",
+            expected_status=SUCCESS,
+            config={
+                "step_statuses": [constants.TRAINJOB_COMPLETE, constants.TRAINJOB_RUNNING],
+            },
+            expected_output=constants.TRAINJOB_RUNNING,
+        ),
+        TestCase(
+            name="any step failed returns TRAINJOB_FAILED",
+            expected_status=SUCCESS,
+            config={
+                "step_statuses": [constants.TRAINJOB_FAILED, constants.TRAINJOB_RUNNING],
+            },
+            expected_output=constants.TRAINJOB_FAILED,
+        ),
+        TestCase(
+            name="any step created returns TRAINJOB_CREATED",
+            expected_status=SUCCESS,
+            config={
+                "step_statuses": [constants.TRAINJOB_CREATED, constants.TRAINJOB_COMPLETE],
+            },
+            expected_output=constants.TRAINJOB_CREATED,
+        ),
+        TestCase(
+            name="no steps registered returns TRAINJOB_CREATED",
+            expected_status=SUCCESS,
+            config={
+                "step_statuses": [],
+            },
+            expected_output=constants.TRAINJOB_CREATED,
+        ),
+    ],
+)
+def test_get_job_status(local_backend, test_case):
+    """Test LocalProcessBackend.__get_job_status() across all status scenarios."""
+    step_statuses = test_case.config["step_statuses"]
+
+    steps = []
+    for s in step_statuses:
+        step = Mock()
+        step.job.status = s
+        steps.append(step)
+
+    job = Mock()
+    job.steps = steps
+
+    status = local_backend._LocalProcessBackend__get_job_status(job)
+    assert status == test_case.expected_output

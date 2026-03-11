@@ -172,6 +172,7 @@ jobs:
       # Keep requirements.txt in sync after the upstream merge.
       # Committed here so the change is included in the sync PR.
       - name: Update requirements.txt
+        if: steps.merge_step.outputs.has_conflict != 'true'
         run: |
           uv export --format requirements-txt > requirements.txt
           if ! git diff --quiet requirements.txt; then

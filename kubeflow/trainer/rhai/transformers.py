@@ -14,11 +14,11 @@
 
 """TransformersTrainer for HuggingFace Transformers and TRL with auto-instrumentation."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import inspect
 import os
 import textwrap
-from typing import Callable, Optional
 
 from kubeflow_trainer_api import models
 
@@ -38,8 +38,8 @@ class PeriodicCheckpointConfig:
     """
 
     save_strategy: str = "epoch"
-    save_steps: Optional[int] = None
-    save_total_limit: Optional[int] = 3
+    save_steps: int | None = None
+    save_total_limit: int | None = 3
 
     def __post_init__(self):
         """Validate configuration."""
@@ -114,14 +114,14 @@ class TransformersTrainer:
 
     # Core training function (same as CustomTrainer)
     func: Callable
-    func_args: Optional[dict] = None
-    packages_to_install: Optional[list[str]] = None
+    func_args: dict | None = None
+    packages_to_install: list[str] | None = None
     pip_index_urls: list[str] = field(
         default_factory=lambda: list(constants.DEFAULT_PIP_INDEX_URLS)
     )
-    num_nodes: Optional[int] = None
-    resources_per_node: Optional[dict] = None
-    env: Optional[dict[str, str]] = None
+    num_nodes: int | None = None
+    resources_per_node: dict | None = None
+    env: dict[str, str] | None = None
 
     # Instrumentation features
     enable_progression_tracking: bool = True
@@ -130,9 +130,9 @@ class TransformersTrainer:
 
     # Checkpoint configuration
     enable_jit_checkpoint: bool = False
-    output_dir: Optional[str] = None
-    periodic_checkpoint_config: Optional[PeriodicCheckpointConfig] = None
-    data_connection_name: Optional[str] = None
+    output_dir: str | None = None
+    periodic_checkpoint_config: PeriodicCheckpointConfig | None = None
+    data_connection_name: str | None = None
     verify_cloud_storage_access: bool = True
     verify_cloud_storage_ssl: bool = True
 
@@ -203,6 +203,7 @@ class TransformersTrainer:
 
 def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     """Checkpoint instrumentation injected into training pods."""
+    from collections.abc import Callable
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import os
     from pathlib import PurePosixPath
@@ -213,7 +214,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     import sys
     import threading
     import time
-    from typing import Callable, Optional
 
     import torch
     import torch.distributed as dist
@@ -224,7 +224,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
     _log_prefix = None
 
-    def _log(message: str, args: Optional[object] = None) -> None:
+    def _log(message: str, args: object | None = None) -> None:
         nonlocal _log_prefix
         if _log_prefix is None:
             node = os.environ.get("NODE_RANK") or os.environ.get("GROUP_RANK") or "0"
@@ -377,7 +377,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     class JITCheckpointCallback(TrainerCallback):
         """Transformers callback that integrates JIT checkpointing with trainer lifecycle."""
 
-        def __init__(self, cloud_remote_storage_uri: Optional[str] = None) -> None:
+        def __init__(self, cloud_remote_storage_uri: str | None = None) -> None:
             self.jit_manager = None
             self._trainer_ref = None
             self.cloud_remote_storage_uri = cloud_remote_storage_uri
@@ -501,7 +501,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
             return ProgressCallback(operation, total_size)
 
-        def _retry_marker_op(self, op: Callable[[], None]) -> Optional[Exception]:
+        def _retry_marker_op(self, op: Callable[[], None]) -> Exception | None:
             """Retry marker operation with backoff."""
             last_error = None
             for attempt in range(1, 4):
@@ -1215,7 +1215,7 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
     import json
     import threading
     import time
-    from typing import Any, Optional
+    from typing import Any
 
     from transformers import TrainerCallback, trainer as trainer_module
 
@@ -1223,12 +1223,12 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
     class ProgressionMetricsState:
         """Progression metrics state (camelCase for Kubernetes API compatibility)."""
 
-        progressPercentage: Optional[int] = None  # noqa: N815
-        estimatedRemainingSeconds: Optional[int] = None  # noqa: N815
+        progressPercentage: int | None = None  # noqa: N815
+        estimatedRemainingSeconds: int | None = None  # noqa: N815
         currentStep: int = 0  # noqa: N815
-        totalSteps: Optional[int] = None  # noqa: N815
+        totalSteps: int | None = None  # noqa: N815
         currentEpoch: float = 0.0  # noqa: N815  # Changed to float for precision (1.98 not 1)
-        totalEpochs: Optional[int] = None  # noqa: N815
+        totalEpochs: int | None = None  # noqa: N815
         trainMetrics: dict[str, Any] = field(default_factory=dict)  # noqa: N815
         evalMetrics: dict[str, Any] = field(default_factory=dict)  # noqa: N815
 
@@ -1275,9 +1275,9 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
         """Tracks training progress and updates metrics server."""
 
         def __init__(self, metrics_port: int = 28080):
-            self.start_time: Optional[float] = None
+            self.start_time: float | None = None
             self.metrics_port = metrics_port
-            self.server: Optional[http.server.HTTPServer] = None
+            self.server: http.server.HTTPServer | None = None
             self.training_finished: bool = False
 
         def _update_progress_state(self, args, state) -> None:
@@ -1549,7 +1549,7 @@ print("[Kubeflow] Progression tracking enabled", flush=True)
 def get_trainer_cr_from_transformers_trainer(
     runtime: types.Runtime,
     trainer: TransformersTrainer,
-    initializer: Optional[types.Initializer] = None,
+    initializer: types.Initializer | None = None,
 ) -> models.TrainerV1alpha1Trainer:
     """Build Trainer CRD for TransformersTrainer with optional progression tracking.
 
@@ -1692,9 +1692,9 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> tuple[str, str]:
 
 
 def get_jit_checkpoint_injection_code(
-    output_dir: Optional[str] = None,
-    cloud_remote_storage_uri: Optional[str] = None,
-    periodic_checkpoint_config: Optional[dict] = None,
+    output_dir: str | None = None,
+    cloud_remote_storage_uri: str | None = None,
+    periodic_checkpoint_config: dict | None = None,
     enable_jit_checkpoint: bool = False,
     verify_cloud_storage_access: bool = True,
     verify_cloud_storage_ssl: bool = True,
