@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., v0.2.0+rhai0)'
+        description: 'Release version (e.g., v0.3.0+rhaiv.1)'
         required: true
         type: string
       branch:
@@ -63,9 +63,9 @@ jobs:
           VERSION="${{ github.event.inputs.version }}"
           BRANCH="${{ github.event.inputs.branch }}"
 
-          # Validate version format: vX.Y.Z+rhaiN
-          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+rhai[0-9]+$ ]]; then
-            echo "ERROR: Invalid version format. Expected: vX.Y.Z+rhaiN (e.g., v0.2.0+rhai0)"
+          # Validate version format: vX.Y.Z+rhaiv.N
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+rhaiv\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid version format. Expected: vX.Y.Z+rhaiv.N (e.g., v0.3.0+rhaiv.1)"
             exit 1
           fi
 
@@ -74,7 +74,7 @@ jobs:
             exit 1
           fi
 
-          # Extract upstream version (e.g., v0.2.0+rhai0 -> 0.2.0)
+          # Extract upstream version (e.g., v0.3.0+rhaiv.1 -> 0.3.0)
           UPSTREAM_VERSION=$(echo "$VERSION" | sed 's/^v//' | cut -d'+' -f1)
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
