@@ -142,7 +142,7 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
     ),
     "lora_sft": AlgorithmSpec(
         name="lora_sft",
-        metrics_file_patterns=(),  # LoRA uses HF Trainer logging, not JSONL metrics files
+        metrics_file_patterns=("training_metrics.jsonl",),
         validate=_no_op_validate,
         # LoRA expects to run inside a torchrun process
         entrypoint=constants.TORCH_COMMAND,
@@ -220,9 +220,9 @@ def get_algorithm_pod_metadata(name: str) -> dict:
         >>> metadata["metrics_file_rank0"]
         'training_params_and_metrics_global0.jsonl'
 
-        >>> metadata = get_algorithm_pod_metadata("lora_sft")  # No metrics
+        >>> metadata = get_algorithm_pod_metadata("lora_sft")
         >>> metadata["metrics_file_pattern"]
-        None
+        'training_metrics.jsonl'
     """
     # get_algorithm_spec() validates the name parameter
     spec = get_algorithm_spec(name)

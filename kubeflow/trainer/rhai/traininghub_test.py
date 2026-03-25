@@ -250,9 +250,11 @@ def test_metrics_port_validation(test_case):
                 ("def _read_latest_metrics", True),
                 ("def _read_osft_metrics", True),
                 ("def _read_sft_metrics", True),
+                ("def _read_lora_sft_metrics", True),
                 ("def _transform_schema", True),
                 ("def _transform_osft", True),
                 ("def _transform_sft", True),
+                ("def _transform_lora_sft", True),
                 ("def do_GET", True),
             ],
         ),
@@ -978,6 +980,151 @@ def test_render_user_func_code(test_case):
             assert substring not in code, (
                 f"Did not expect '{substring}' in generated code, got:\n{code}"
             )
+def test_instrumentation_cleans_lora_metrics_on_startup(tmp_path):
+    """Test that LoRA metrics files are cleaned before training starts."""
+    print("Executing test: LoRA metrics cleanup on startup")
+
+    # Create stale metrics file (LoRA uses a single file, no per-rank wildcard)
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir()
+
+    stale_metrics_file = ckpt_dir / "training_metrics.jsonl"
+    stale_metrics_file.write_text('{"step": 50, "loss": 1.2}\n')
+
+    # Call instrumentation directly (no exec) with port 0 for random available port
+    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
+    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+
+    algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
+    apply_fn, _handler = _create_training_hub_progression_instrumentation(
+        algorithm_metadata=algorithm_metadata,
+        ckpt_output_dir=str(ckpt_dir),
+        metrics_port=0,  # Use port 0 for random available port
+    )
+
+    # Set JOB_COMPLETION_INDEX=0 to simulate primary pod (required for cleanup)
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0"}):
+        # Call the function to trigger cleanup and start server
+        server = apply_fn()
+
+        try:
+            # Verify stale metrics file was removed
+            assert not stale_metrics_file.exists(), "Stale LoRA metrics file should be removed"
+        finally:
+            # Always shut down server to avoid port conflicts
+            if server:
+                server.shutdown()
+
+    print("test execution complete")
+
+
+def test_lora_metrics_reader(tmp_path):
+    """Test that LoRA metrics reader correctly reads training_metrics.jsonl."""
+    print("Executing test: LoRA metrics reader")
+
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir()
+
+    # Write metrics file with multiple lines (reader should return last line)
+    metrics_file = ckpt_dir / "training_metrics.jsonl"
+    metrics_file.write_text(
+        '{"step": 1, "epoch": 0.01, "loss": 4.27, "learning_rate": 2e-6}\n'
+        '{"step": 2, "epoch": 0.02, "loss": 3.85, "learning_rate": 2e-6}\n'
+    )
+
+    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
+    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+
+    algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
+    _apply_fn, handler_class = _create_training_hub_progression_instrumentation(
+        algorithm_metadata=algorithm_metadata,
+        ckpt_output_dir=str(ckpt_dir),
+        metrics_port=0,
+    )
+
+    # Create handler instance to test reader method
+    # handler_class is the TrainingHubMetricsHandler class
+    # We can call _read_latest_metrics and _transform_schema as unbound-style
+    # by creating a minimal instance
+    handler = handler_class.__new__(handler_class)
+    metrics = handler._read_latest_metrics()
+
+    assert metrics["step"] == 2
+    assert metrics["epoch"] == 0.02
+    assert metrics["loss"] == 3.85
+
+    print("test execution complete")
+
+
+def test_lora_metrics_transformer(tmp_path):
+    """Test that LoRA metrics transformer produces correct controller format."""
+    print("Executing test: LoRA metrics transformer")
+
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir()
+
+    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
+    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+
+    algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
+    _apply_fn, handler_class = _create_training_hub_progression_instrumentation(
+        algorithm_metadata=algorithm_metadata,
+        ckpt_output_dir=str(ckpt_dir),
+        metrics_port=0,
+    )
+
+    handler = handler_class.__new__(handler_class)
+
+    # Test with typical LoRA metrics
+    metrics = {
+        "step": 50,
+        "epoch": 0.5,
+        "loss": 2.1234,
+        "learning_rate": 0.000002,
+        "grad_norm": 1.5678,
+        "max_steps": 100,
+    }
+
+    result = handler._transform_schema(metrics)
+
+    assert result["progressPercentage"] == 50
+    assert result["currentStep"] == 50
+    assert result["totalSteps"] == 100
+    assert result["currentEpoch"] == 1
+    assert result["totalEpochs"] is None
+    assert result["trainMetrics"]["loss"] == "2.1234"
+    assert result["trainMetrics"]["learning_rate"] == "0.000002"
+    assert result["trainMetrics"]["grad_norm"] == "1.5678"
+    assert result["evalMetrics"] == {}
+
+    print("test execution complete")
+
+
+def test_lora_metrics_transformer_empty_metrics(tmp_path):
+    """Test that LoRA metrics transformer handles empty metrics correctly."""
+    print("Executing test: LoRA metrics transformer with empty metrics")
+
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir()
+
+    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
+    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+
+    algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
+    _apply_fn, handler_class = _create_training_hub_progression_instrumentation(
+        algorithm_metadata=algorithm_metadata,
+        ckpt_output_dir=str(ckpt_dir),
+        metrics_port=0,
+    )
+
+    handler = handler_class.__new__(handler_class)
+
+    # Empty metrics should return null progress
+    result = handler._transform_schema({})
+
+    assert result["progressPercentage"] is None
+    assert result["currentStep"] is None
+    assert result["trainMetrics"] is None
 
     print("test execution complete")
 

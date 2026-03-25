@@ -219,6 +219,8 @@ def _create_training_hub_progression_instrumentation(
                 return self._read_sft_metrics()
             elif algorithm == "osft":
                 return self._read_osft_metrics()
+            elif algorithm == "lora_sft":
+                return self._read_lora_sft_metrics()
             else:
                 # Algorithm not yet supported for metrics reading
                 return {}
@@ -332,6 +334,44 @@ def _create_training_hub_progression_instrumentation(
 
             return {}
 
+        def _read_lora_sft_metrics(self):
+            """Read LoRA SFT metrics from training_metrics.jsonl.
+
+            LoRA writes a single metrics file (no per-rank wildcard).
+            Each line is a JSON object with step, epoch, loss, learning_rate.
+            """
+            metrics_file = f"{ckpt_output_dir}/{metrics_file_rank0}"
+
+            try:
+                if not os.path.exists(metrics_file):
+                    return {}
+
+                # Read last line of metrics using tail
+                try:
+                    result = subprocess.run(
+                        ["tail", "-n", "1", metrics_file],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    last_line = result.stdout.strip()
+                except subprocess.CalledProcessError:
+                    return {}
+
+                if last_line:
+                    return json.loads(last_line)
+
+            except FileNotFoundError:
+                return {}
+            except json.JSONDecodeError:
+                print("[Kubeflow] Warning: Failed to parse LoRA metrics JSON", flush=True)
+                return {}
+            except Exception:
+                print("[Kubeflow] Error reading LoRA metrics", flush=True)
+                return {}
+
+            return {}
+
         def _transform_schema(self, metrics):
             """Transform backend schema to controller-compatible progress format."""
             if not metrics:
@@ -351,8 +391,9 @@ def _create_training_hub_progression_instrumentation(
                 return self._transform_sft(metrics)
             elif algorithm == "osft":
                 return self._transform_osft(metrics)
+            elif algorithm == "lora_sft":
+                return self._transform_lora_sft(metrics)
             else:
-                # Algorithms without metrics files (e.g., lora_sft) return empty dict
                 return {}
 
         def _transform_osft(self, metrics):
@@ -477,6 +518,39 @@ def _create_training_hub_progression_instrumentation(
                     "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
                     "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
                     "throughput": f"{throughput_val:.2f}" if throughput_val is not None else None,
+                },
+                "evalMetrics": {},
+            }
+
+        def _transform_lora_sft(self, metrics):
+            """Transform LoRA SFT schema to controller-compatible format.
+
+            LoRA metrics format (from training_metrics.jsonl):
+                {"step": 1, "epoch": 0.015625, "loss": 4.2727, "learning_rate": 2e-6,
+                 "max_steps": 100}
+            """
+            step = metrics.get("step", 0)
+            epoch = metrics.get("epoch", 0)
+            max_steps = metrics.get("max_steps", 0)
+
+            # Calculate progress based on steps
+            percent = min(100, step / max_steps * 100) if max_steps > 0 else 0
+
+            loss_val = metrics.get("loss")
+            lr_val = metrics.get("learning_rate")
+            grad_norm_val = metrics.get("grad_norm")
+
+            return {
+                "progressPercentage": int(round(percent)),
+                "estimatedRemainingSeconds": None,
+                "currentStep": step,
+                "totalSteps": max_steps if max_steps > 0 else None,
+                "currentEpoch": int(epoch) + 1,
+                "totalEpochs": None,
+                "trainMetrics": {
+                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
+                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
                 },
                 "evalMetrics": {},
             }
@@ -616,7 +690,7 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) 
         import json
         import os
 
-        # Skip termination message for algorithms without metrics files (e.g., LoRA)
+        # Skip termination message for algorithms without metrics files
         if metrics_file_rank0 is None:
             print(
                 "[Kubeflow] Algorithm produces no metrics files - skipping termination message",
