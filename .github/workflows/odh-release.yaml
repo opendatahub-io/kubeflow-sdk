@@ -117,8 +117,20 @@ jobs:
           # silent re-resolution during a release.
           uv export --locked --format requirements-txt > requirements.txt
 
-          git add kubeflow/__init__.py requirements.txt
-          git commit -m "chore: Set version to $VERSION for release" || echo "No changes to commit"
+          # Pin dependency versions from lock file for reproducible release.
+          python .github/scripts/pin_dependencies.py
+
+          # Regenerate lock file so its recorded constraints match the
+          # pinned pyproject.toml. Without this, `uv lock --check` in the
+          # build job would fail because pyproject.toml now says ==X.Y.Z
+          # but the lock file still records >=X.Y.Z as the input constraint.
+          uv lock
+
+          # Verify pinned dependencies install correctly.
+          uv sync --frozen
+
+          git add kubeflow/__init__.py requirements.txt pyproject.toml uv.lock
+          git commit -m "chore: Set version to $VERSION and pin dependencies for release" || echo "No changes to commit"
           git push origin "$BRANCH"
 
   build:
