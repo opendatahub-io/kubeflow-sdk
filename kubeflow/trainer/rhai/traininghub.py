@@ -751,7 +751,7 @@ def _render_user_func_code(func: Callable, func_args: dict | None) -> tuple[str,
     if func_args is None:
         call_block = f"{func.__name__}()"
     elif isinstance(func_args, dict):
-        params_lines: list[str] = [f"{func.__name__}({{"]
+        params_lines: list[str] = [f"{func.__name__}(**{{"]
         for key, value in func_args.items():
             params_lines.append(f"    {repr(key)}: {repr(value)},")
         params_lines.append("})")

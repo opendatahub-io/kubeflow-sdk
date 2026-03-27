@@ -23,6 +23,7 @@ from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai.traininghub import (
     TrainingHubAlgorithms,
     TrainingHubTrainer,
+    _render_user_func_code,
     get_training_hub_instrumentation_wrapper,
 )
 from kubeflow.trainer.test.common import SUCCESS, TestCase
@@ -935,6 +936,48 @@ def test_osft_algorithm_uses_python_entrypoint():
 
     assert "python" in command_str, f"OSFT should use python: {command_str}"
     assert "torchrun" not in command_str, f"OSFT should NOT use torchrun: {command_str}"
+
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="dict func_args generates kwargs unpacking",
+            expected_status=SUCCESS,
+            config={"func_args": {"lr": 0.001, "batch_size": 32}},
+            expected_output=[
+                ("**{", True),
+                ("sample_func({", False),
+            ],
+        ),
+        TestCase(
+            name="None func_args generates no-arg call",
+            expected_status=SUCCESS,
+            config={"func_args": None},
+            expected_output=[
+                ("sample_func()", True),
+            ],
+        ),
+    ],
+)
+def test_render_user_func_code(test_case):
+    """Test _render_user_func_code generates correct function calls."""
+    print(f"Executing test: {test_case.name}")
+
+    def sample_func(lr, batch_size):
+        pass
+
+    code, func_file = _render_user_func_code(sample_func, test_case.config["func_args"])
+
+    for substring, should_contain in test_case.expected_output:
+        if should_contain:
+            assert substring in code, f"Expected '{substring}' in generated code, got:\n{code}"
+        else:
+            assert substring not in code, (
+                f"Did not expect '{substring}' in generated code, got:\n{code}"
+            )
 
     print("test execution complete")
 
