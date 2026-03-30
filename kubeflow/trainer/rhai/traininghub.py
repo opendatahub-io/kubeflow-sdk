@@ -143,6 +143,7 @@ def _create_training_hub_progression_instrumentation(
     import glob
     import http.server
     import json
+    import math
     import os
     import subprocess
     import threading
@@ -554,7 +555,7 @@ def _create_training_hub_progression_instrumentation(
                 "estimatedRemainingSeconds": None,
                 "currentStep": step,
                 "totalSteps": max_steps if max_steps > 0 else None,
-                "currentEpoch": int(epoch) + 1,
+                "currentEpoch": max(1, math.ceil(epoch)),
                 "totalEpochs": None,
                 "trainMetrics": {
                     "loss": f"{loss_val:.4f}" if loss_val is not None else None,
