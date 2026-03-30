@@ -410,12 +410,15 @@ def _create_training_hub_progression_instrumentation(
             step_total = steps_per_epoch * total_epochs if steps_per_epoch > 0 else 0
 
             current_step_absolute = step
-            percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
+            progress = (current_step_absolute / step_total * 100) if step_total > 0 else 0
+            percent_int = int(round(progress))
+            if current_step_absolute < step_total:
+                percent_int = min(99, percent_int)
 
             time_per_batch = metrics.get("time_per_batch", 0)
             remaining_steps = step_total - current_step_absolute
 
-            if percent >= 100 or remaining_steps <= 0:
+            if percent_int >= 100 or remaining_steps <= 0:
                 estimated_remaining_sec = 0
             else:
                 estimated_remaining_sec = (
@@ -429,7 +432,7 @@ def _create_training_hub_progression_instrumentation(
             val_loss_val = metrics.get("val_loss")
 
             return {
-                "progressPercentage": int(round(percent)),
+                "progressPercentage": percent_int,
                 "estimatedRemainingSeconds": estimated_remaining_sec,
                 "currentStep": current_step_absolute,
                 "totalSteps": step_total,
@@ -487,12 +490,15 @@ def _create_training_hub_progression_instrumentation(
             else:
                 step_total = max(step, step + 10)
 
-            percent = min(100, (current_step_absolute / step_total * 100)) if step_total > 0 else 0
+            progress = (current_step_absolute / step_total * 100) if step_total > 0 else 0
+            percent_int = int(round(progress))
+            if current_step_absolute < step_total:
+                percent_int = min(99, percent_int)
 
             throughput = metrics.get("overall_throughput", 0)
             remaining_steps = step_total - current_step_absolute
 
-            if percent >= 100 or remaining_steps <= 0:
+            if percent_int >= 100 or remaining_steps <= 0:
                 estimated_remaining_sec = 0
             else:
                 estimated_remaining_sec = (
@@ -507,7 +513,7 @@ def _create_training_hub_progression_instrumentation(
             throughput_val = metrics.get("overall_throughput")
 
             return {
-                "progressPercentage": int(round(percent)),
+                "progressPercentage": percent_int,
                 "estimatedRemainingSeconds": estimated_remaining_sec,
                 "currentStep": current_step_absolute,
                 "totalSteps": step_total,
@@ -533,15 +539,18 @@ def _create_training_hub_progression_instrumentation(
             epoch = metrics.get("epoch", 0)
             max_steps = metrics.get("max_steps", 0)
 
-            # Calculate progress based on steps
-            percent = min(100, step / max_steps * 100) if max_steps > 0 else 0
+            # Calculate progress based on steps, clamping to 99 until final step
+            progress = (step / max_steps * 100) if max_steps > 0 else 0
+            percent_int = int(round(progress))
+            if step < max_steps:
+                percent_int = min(99, percent_int)
 
             loss_val = metrics.get("loss")
             lr_val = metrics.get("learning_rate")
             grad_norm_val = metrics.get("grad_norm")
 
             return {
-                "progressPercentage": int(round(percent)),
+                "progressPercentage": percent_int,
                 "estimatedRemainingSeconds": None,
                 "currentStep": step,
                 "totalSteps": max_steps if max_steps > 0 else None,

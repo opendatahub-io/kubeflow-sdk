@@ -980,6 +980,8 @@ def test_render_user_func_code(test_case):
             assert substring not in code, (
                 f"Did not expect '{substring}' in generated code, got:\n{code}"
             )
+
+
 def test_instrumentation_cleans_lora_metrics_on_startup(tmp_path):
     """Test that LoRA metrics files are cleaned before training starts."""
     print("Executing test: LoRA metrics cleanup on startup")
@@ -1096,6 +1098,78 @@ def test_lora_metrics_transformer(tmp_path):
     assert result["trainMetrics"]["learning_rate"] == "0.000002"
     assert result["trainMetrics"]["grad_norm"] == "1.5678"
     assert result["evalMetrics"] == {}
+
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="step == max_steps - 1 must not reach 100%",
+            expected_status=SUCCESS,
+            config={
+                "step": 99,
+                "epoch": 0.99,
+                "loss": 1.0,
+                "learning_rate": 1e-6,
+                "grad_norm": 0.5,
+                "max_steps": 100,
+            },
+            expected_output=99,
+        ),
+        TestCase(
+            name="step == max_steps reports exactly 100%",
+            expected_status=SUCCESS,
+            config={
+                "step": 100,
+                "epoch": 1.0,
+                "loss": 0.5,
+                "learning_rate": 1e-6,
+                "grad_norm": 0.3,
+                "max_steps": 100,
+            },
+            expected_output=100,
+        ),
+        TestCase(
+            name="step 1 of 1 reports 100%",
+            expected_status=SUCCESS,
+            config={
+                "step": 1,
+                "epoch": 1.0,
+                "loss": 0.5,
+                "learning_rate": 1e-6,
+                "grad_norm": 0.3,
+                "max_steps": 1,
+            },
+            expected_output=100,
+        ),
+    ],
+)
+def test_lora_progress_clamped_below_100_until_final_step(test_case, tmp_path):
+    """Regression: progressPercentage must not reach 100 before the final step."""
+    print(f"Executing test: {test_case.name}")
+
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir()
+
+    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
+    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+
+    algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
+    _apply_fn, handler_class = _create_training_hub_progression_instrumentation(
+        algorithm_metadata=algorithm_metadata,
+        ckpt_output_dir=str(ckpt_dir),
+        metrics_port=0,
+    )
+
+    handler = handler_class.__new__(handler_class)
+    result = handler._transform_schema(test_case.config)
+
+    assert test_case.expected_status == SUCCESS
+    assert result["progressPercentage"] == test_case.expected_output, (
+        f"Expected {test_case.expected_output}%, got {result['progressPercentage']}%"
+    )
 
     print("test execution complete")
 
