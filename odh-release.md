@@ -55,6 +55,8 @@ The automated workflow will:
    - Create release branch from main if it doesn't exist (e.g., `release-0.2`)
    - Or use existing release branch as-is
    - Update `__init__.py` on release branch with rhai version
+   - Pin all `[project.dependencies]` and `[project.optional-dependencies]` to exact (`==`) versions resolved from `uv.lock`
+   - Regenerate `uv.lock` and `requirements.txt` to reflect the pinned versions
 
 2. **Build**:
    - Set up Python environment
@@ -69,6 +71,36 @@ The automated workflow will:
 4. **GitHub Release**:
    - Create GitHub release with auto-generated release notes
    - Attach build artifacts to release
+
+## Dependency Pinning
+
+During the prepare step, the workflow runs `.github/scripts/pin_dependencies.py` to replace
+version specifiers (`>=`, `<=`, `>`, `<`, `!=`, `~=`) in `pyproject.toml` with exact `==`
+pins derived from `uv.lock`. This ensures reproducible builds — the release ships with the
+exact dependency versions that were tested.
+
+**What gets pinned:**
+- `[project.dependencies]`
+- `[project.optional-dependencies]`
+
+**What stays unpinned:**
+- `[dependency-groups]` (dev dependencies)
+
+### Known Limitations
+
+**Transitive dependencies are not pinned.** Only direct dependencies listed in `pyproject.toml`
+are pinned. Transitive dependencies are constrained by `uv.lock` (committed to the release
+branch), but not by `pyproject.toml` itself. If a user installs with `pip` instead of `uv`,
+transitive dependency versions may differ from what was tested.
+
+**Pinning is a one-way transformation on the release branch.** Once pinned and committed, there
+is no automated mechanism to "un-pin" for a subsequent patch release. This is fine for the
+expected workflow: create a new release branch from `main` for each minor release and
+cherry-pick fixes. However, if multiple releases are cut from the same branch (e.g.,
+`v0.3.0+rhaiv.1` then `v0.3.0+rhaiv.2` from `release-0.3`), the second release starts from
+already-pinned deps. The script handles this as a no-op (already-pinned versions are left
+unchanged), meaning patches are locked to the exact versions from the first release unless
+someone manually updates them on the release branch.
 
 ### 3. Verification
 

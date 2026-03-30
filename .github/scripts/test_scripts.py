@@ -8,6 +8,7 @@ Run with: uv run pytest .github/scripts/test_scripts.py -v
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 from tempfile import NamedTemporaryFile
 
 import pytest
@@ -304,6 +305,283 @@ override-dependencies = ["pkg1==1.0.0", "pkg2==2.0.0"]
         assert "override-dependencies = [\n" in updated
         # Should not have duplicate override-dependencies
         assert updated.count("override-dependencies") == 1
+
+
+class TestPinDependencies:
+    """Tests for pin_dependencies.py"""
+
+    # Minimal uv.lock content for testing.
+    LOCK_TEMPLATE = """\
+version = 1
+revision = 2
+requires-python = ">=3.10"
+
+[[package]]
+name = "kubernetes"
+version = "35.0.0"
+source = {{ registry = "https://pypi.org/simple" }}
+
+[[package]]
+name = "pydantic"
+version = "2.12.5"
+source = {{ registry = "https://pypi.org/simple" }}
+
+[[package]]
+name = "kubeflow-trainer-api"
+version = "2.1.0"
+source = {{ registry = "https://pypi.org/simple" }}
+
+[[package]]
+name = "kubeflow-katib-api"
+version = "0.19.0"
+source = {{ registry = "https://pypi.org/simple" }}
+
+[[package]]
+name = "docker"
+version = "7.1.0"
+source = {{ registry = "https://pypi.org/simple" }}
+
+[[package]]
+name = "model-registry"
+version = "0.3.6"
+source = {{ registry = "https://pypi.org/simple" }}
+
+{extra_packages}
+"""
+
+    PYPROJECT_BASIC = """\
+[project]
+name = "testpkg"
+dependencies = [
+  "kubernetes>=27.2.0",
+  "pydantic>=2.10.0",
+  "kubeflow-trainer-api>=2.0.0",
+  "kubeflow-katib-api>=0.19.0",
+]
+
+[project.optional-dependencies]
+docker = [
+  "docker>=6.1.3",
+]
+hub = [
+  "model-registry>=0.3.6",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=7.0",
+  "ruff>=0.12.2",
+]
+"""
+
+    def _run_pin(self, pyproject_content: str, lock_content: str) -> tuple[int, str, str, str]:
+        """Helper to run pin_dependencies.py with temp files.
+
+        Returns:
+            Tuple of (exit_code, updated_pyproject, stdout, stderr).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pyproject_path = Path(tmpdir) / "pyproject.toml"
+            lock_path = Path(tmpdir) / "uv.lock"
+            pyproject_path.write_text(pyproject_content)
+            lock_path.write_text(lock_content)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    SCRIPTS_DIR / "pin_dependencies.py",
+                    "--pyproject",
+                    str(pyproject_path),
+                    "--lockfile",
+                    str(lock_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            updated = pyproject_path.read_text()
+            return result.returncode, updated, result.stdout, result.stderr
+
+    def test_core_dependencies_pinned(self):
+        """Core dependencies get == pinned from lock file."""
+        lock = self.LOCK_TEMPLATE.format(extra_packages="")
+        exit_code, updated, stdout, _ = self._run_pin(self.PYPROJECT_BASIC, lock)
+
+        assert exit_code == 0
+        assert '"kubernetes==35.0.0"' in updated
+        assert '"pydantic==2.12.5"' in updated
+        assert '"kubeflow-trainer-api==2.1.0"' in updated
+        assert '"kubeflow-katib-api==0.19.0"' in updated
+        assert "Pinned" in stdout
+
+    def test_optional_dependencies_pinned(self):
+        """Optional dependencies get == pinned."""
+        lock = self.LOCK_TEMPLATE.format(extra_packages="")
+        exit_code, updated, _, _ = self._run_pin(self.PYPROJECT_BASIC, lock)
+
+        assert exit_code == 0
+        assert '"docker==7.1.0"' in updated
+        # model-registry was already at 0.3.6 with >=, should pin to ==
+        assert '"model-registry==0.3.6"' in updated
+
+    def test_already_pinned_unchanged(self):
+        """Dependencies already using == are left unchanged."""
+        pyproject = """\
+[project]
+name = "testpkg"
+dependencies = [
+  "kubernetes==35.0.0",
+]
+"""
+        lock = self.LOCK_TEMPLATE.format(extra_packages="")
+        exit_code, updated, stdout, _ = self._run_pin(pyproject, lock)
+
+        assert exit_code == 0
+        assert '"kubernetes==35.0.0"' in updated
+        assert "already pinned" in stdout.lower()
+
+    def test_multi_version_resolution(self):
+        """Multi-version packages resolve to the >=3.10 version."""
+        extra = """\
+[[package]]
+name = "fsspec"
+version = "2025.10.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.10'",
+]
+
+[[package]]
+name = "fsspec"
+version = "2026.2.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.12' and python_full_version < '3.14'",
+    "python_full_version >= '3.10' and python_full_version < '3.12'",
+]
+"""
+        pyproject = """\
+[project]
+name = "testpkg"
+dependencies = [
+  "fsspec>=2025.3.0",
+]
+"""
+        lock = self.LOCK_TEMPLATE.format(extra_packages=extra)
+        exit_code, updated, _, _ = self._run_pin(pyproject, lock)
+
+        assert exit_code == 0
+        assert '"fsspec==2026.2.0"' in updated
+
+    def test_multi_version_no_compatible_version_fails(self):
+        """Multi-version package with no >=3.10 version fails with warning."""
+        extra = """\
+[[package]]
+name = "oldpkg"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.10'",
+]
+
+[[package]]
+name = "oldpkg"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.10'",
+]
+"""
+        pyproject = """\
+[project]
+name = "testpkg"
+dependencies = [
+  "oldpkg>=1.0.0",
+]
+"""
+        lock = self.LOCK_TEMPLATE.format(extra_packages=extra)
+        exit_code, _, _, stderr = self._run_pin(pyproject, lock)
+
+        assert exit_code == 1
+        assert "WARNING" in stderr
+        assert "not found" in stderr.lower()
+
+    def test_environment_markers_preserved(self):
+        """Environment markers after ; are preserved."""
+        pyproject = """\
+[project]
+name = "testpkg"
+dependencies = [
+  "kubernetes>=27.2.0; python_version >= '3.11'",
+]
+"""
+        lock = self.LOCK_TEMPLATE.format(extra_packages="")
+        exit_code, updated, _, _ = self._run_pin(pyproject, lock)
+
+        assert exit_code == 0
+        assert "\"kubernetes==35.0.0; python_version >= '3.11'\"" in updated
+
+    def test_missing_dependency_fails(self):
+        """Missing dependency in lock file causes exit code 1."""
+        pyproject = """\
+[project]
+name = "testpkg"
+dependencies = [
+  "nonexistent-pkg>=1.0.0",
+]
+"""
+        lock = self.LOCK_TEMPLATE.format(extra_packages="")
+        exit_code, _, _, stderr = self._run_pin(pyproject, lock)
+
+        assert exit_code == 1
+        assert "not found" in stderr.lower()
+
+    def test_dependency_groups_untouched(self):
+        """[dependency-groups] section is not modified."""
+        lock = self.LOCK_TEMPLATE.format(extra_packages="")
+        exit_code, updated, _, _ = self._run_pin(self.PYPROJECT_BASIC, lock)
+
+        assert exit_code == 0
+        # Dev deps should keep their original >= specifiers.
+        assert '"pytest>=7.0"' in updated
+        assert '"ruff>=0.12.2"' in updated
+
+    def test_comments_preserved(self):
+        """Comments in pyproject.toml are preserved."""
+        pyproject = """\
+[project]
+name = "testpkg"
+dependencies = [
+  # Core Kubernetes client
+  "kubernetes>=27.2.0",
+]
+"""
+        lock = self.LOCK_TEMPLATE.format(extra_packages="")
+        exit_code, updated, _, _ = self._run_pin(pyproject, lock)
+
+        assert exit_code == 0
+        assert "# Core Kubernetes client" in updated
+        assert '"kubernetes==35.0.0"' in updated
+
+    def test_extras_preserved(self):
+        """Package extras like [security] are preserved."""
+        extra = """\
+[[package]]
+name = "requests"
+version = "2.31.0"
+source = { registry = "https://pypi.org/simple" }
+"""
+        pyproject = """\
+[project]
+name = "testpkg"
+dependencies = [
+  "requests[security]>=2.28.0",
+]
+"""
+        lock = self.LOCK_TEMPLATE.format(extra_packages=extra)
+        exit_code, updated, _, _ = self._run_pin(pyproject, lock)
+
+        assert exit_code == 0
+        assert '"requests[security]==2.31.0"' in updated
 
 
 if __name__ == "__main__":
