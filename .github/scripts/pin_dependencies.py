@@ -11,6 +11,13 @@ The [dependency-groups] section is not modified (dev deps stay unpinned).
 Requires Python >= 3.11 (for tomllib). This script is only invoked in CI
 where Python 3.11+ is guaranteed by the workflow's setup-python step.
 
+Limitation: This script uses line-based regex parsing for pyproject.toml because
+Python's stdlib tomllib is read-only (no write support). This assumes one
+dependency per line and may break on valid TOML constructs like multi-line
+dependency strings, inline tables, or single-line arrays (e.g.,
+dependencies = ["kubernetes>=1.0"]). This is acceptable for a CI-only script
+operating on a controlled pyproject.toml.
+
 Usage:
     python pin_dependencies.py [--pyproject pyproject.toml] [--lockfile uv.lock]
 """

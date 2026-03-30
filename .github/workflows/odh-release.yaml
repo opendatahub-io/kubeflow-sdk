@@ -112,11 +112,6 @@ jobs:
           echo "Updated kubeflow/__init__.py:"
           cat kubeflow/__init__.py
 
-          # Regenerate requirements.txt from current lock file.
-          # --locked fails if uv.lock is stale vs pyproject.toml, preventing
-          # silent re-resolution during a release.
-          uv export --locked --format requirements-txt > requirements.txt
-
           # Pin dependency versions from lock file for reproducible release.
           python .github/scripts/pin_dependencies.py
 
@@ -125,6 +120,11 @@ jobs:
           # build job would fail because pyproject.toml now says ==X.Y.Z
           # but the lock file still records >=X.Y.Z as the input constraint.
           uv lock
+
+          # Regenerate requirements.txt from the pinned lock file.
+          # --locked fails if uv.lock is stale vs pyproject.toml, preventing
+          # silent re-resolution during a release.
+          uv export --locked --format requirements-txt > requirements.txt
 
           # Verify pinned dependencies install correctly.
           uv sync --frozen
