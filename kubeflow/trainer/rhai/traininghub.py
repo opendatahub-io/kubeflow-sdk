@@ -415,6 +415,8 @@ def _create_training_hub_progression_instrumentation(
             percent_int = int(round(progress))
             if current_step_absolute < step_total:
                 percent_int = min(99, percent_int)
+            else:
+                percent_int = min(100, percent_int)
 
             time_per_batch = metrics.get("time_per_batch", 0)
             remaining_steps = step_total - current_step_absolute
@@ -495,6 +497,8 @@ def _create_training_hub_progression_instrumentation(
             percent_int = int(round(progress))
             if current_step_absolute < step_total:
                 percent_int = min(99, percent_int)
+            else:
+                percent_int = min(100, percent_int)
 
             throughput = metrics.get("overall_throughput", 0)
             remaining_steps = step_total - current_step_absolute
@@ -533,18 +537,24 @@ def _create_training_hub_progression_instrumentation(
             """Transform LoRA SFT schema to controller-compatible format.
 
             LoRA metrics format (from training_metrics.jsonl):
-                {"step": 1, "epoch": 0.015625, "loss": 4.2727, "learning_rate": 2e-6,
-                 "max_steps": 100}
+                {"step": 1, "epoch": 0.015625, "loss": 4.2727, "learning_rate": 2e-6}
+
+            max_steps is optionally present when the training_hub callback
+            includes it (via state.max_steps). When absent, progressPercentage
+            is reported as None (unknown) rather than 0.
             """
             step = metrics.get("step", 0)
             epoch = metrics.get("epoch", 0)
-            max_steps = metrics.get("max_steps", 0)
+            max_steps = metrics.get("max_steps")
 
-            # Calculate progress based on steps, clamping to 99 until final step
-            progress = (step / max_steps * 100) if max_steps > 0 else 0
-            percent_int = int(round(progress))
-            if step < max_steps:
-                percent_int = min(99, percent_int)
+            # Calculate progress based on steps, clamping to 99 until final step.
+            # When max_steps is unavailable, report None (unknown) instead of 0.
+            if max_steps and max_steps > 0:
+                progress = step / max_steps * 100
+                percent_int = int(round(progress))
+                percent_int = min(99, percent_int) if step < max_steps else min(100, percent_int)
+            else:
+                percent_int = None
 
             loss_val = metrics.get("loss")
             lr_val = metrics.get("learning_rate")
@@ -554,7 +564,7 @@ def _create_training_hub_progression_instrumentation(
                 "progressPercentage": percent_int,
                 "estimatedRemainingSeconds": None,
                 "currentStep": step,
-                "totalSteps": max_steps if max_steps > 0 else None,
+                "totalSteps": max_steps if max_steps else None,
                 "currentEpoch": max(1, math.ceil(epoch)),
                 "totalEpochs": None,
                 "trainMetrics": {

@@ -1144,6 +1144,17 @@ def test_lora_metrics_transformer(tmp_path):
             },
             expected_output=100,
         ),
+        TestCase(
+            name="missing max_steps reports None (unknown progress)",
+            expected_status=SUCCESS,
+            config={
+                "step": 50,
+                "epoch": 0.5,
+                "loss": 2.0,
+                "learning_rate": 1e-6,
+            },
+            expected_output=None,
+        ),
     ],
 )
 def test_lora_progress_clamped_below_100_until_final_step(test_case, tmp_path):
