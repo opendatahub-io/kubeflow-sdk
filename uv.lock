@@ -1107,17 +1107,17 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "docker", marker = "extra == 'docker'", specifier = ">=6.1.3" },
-    { name = "fsspec", marker = "extra == 'rhai'", specifier = ">=2025.3.0" },
-    { name = "kubeflow-katib-api", specifier = ">=0.19.0" },
-    { name = "kubeflow-spark-api", marker = "extra == 'spark'", specifier = ">=2.4.0" },
-    { name = "kubeflow-trainer-api", specifier = ">=2.0.0" },
-    { name = "kubernetes", specifier = ">=27.2.0" },
-    { name = "model-registry", marker = "extra == 'hub'", specifier = ">=0.3.6" },
-    { name = "podman", marker = "extra == 'podman'", specifier = ">=5.6.0" },
-    { name = "pydantic", specifier = ">=2.10.0" },
+    { name = "docker", marker = "extra == 'docker'", specifier = "==7.1.0" },
+    { name = "fsspec", marker = "extra == 'rhai'", specifier = "==2026.2.0" },
+    { name = "kubeflow-katib-api", specifier = "==0.19.0" },
+    { name = "kubeflow-spark-api", marker = "extra == 'spark'", specifier = "==2.4.0" },
+    { name = "kubeflow-trainer-api", specifier = "==2.1.0" },
+    { name = "kubernetes", specifier = "==35.0.0" },
+    { name = "model-registry", marker = "extra == 'hub'", specifier = "==0.3.6" },
+    { name = "podman", marker = "extra == 'podman'", specifier = "==5.7.0" },
+    { name = "pydantic", specifier = "==2.12.5" },
     { name = "pyspark-connect", marker = "extra == 'spark'", specifier = "==4.0.1" },
-    { name = "s3fs", marker = "extra == 'rhai'", specifier = ">=2025.3.0" },
+    { name = "s3fs", marker = "extra == 'rhai'", specifier = "==2026.2.0" },
 ]
 provides-extras = ["docker", "hub", "podman", "rhai", "spark"]
 
