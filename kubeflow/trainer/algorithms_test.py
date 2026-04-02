@@ -220,6 +220,12 @@ def test_all_algorithms_have_callable_validate():
             config={"algorithm": "osft"},
             expected_output="osft",
         ),
+        TestCase(
+            name="valid lora_sft algorithm returns spec",
+            expected_status=SUCCESS,
+            config={"algorithm": "lora_sft"},
+            expected_output="lora_sft",
+        ),
     ],
 )
 def test_get_algorithm_spec(test_case):
@@ -360,6 +366,33 @@ def test_get_algorithm_pod_metadata_osft():
     assert metadata["name"] == "osft"
     assert metadata["metrics_file_pattern"] == "training_metrics_*.jsonl"
     assert metadata["metrics_file_rank0"] == "training_metrics_0.jsonl"
+
+    print("test execution complete")
+
+
+def test_get_algorithm_pod_metadata_lora():
+    """Test get_algorithm_pod_metadata returns correct metadata for LoRA."""
+    print("Executing test: get_algorithm_pod_metadata_lora")
+
+    metadata = get_algorithm_pod_metadata("lora_sft")
+
+    assert metadata["name"] == "lora_sft"
+    assert metadata["metrics_file_pattern"] == "training_metrics.jsonl"
+    # No wildcard in pattern, so rank0 is the same as pattern
+    assert metadata["metrics_file_rank0"] == "training_metrics.jsonl"
+
+    print("test execution complete")
+
+
+def test_lora_metrics_patterns_match_constants():
+    """Test that LoRA metrics patterns match the expected file pattern."""
+    print("Executing test: lora_metrics_patterns_match_constants")
+
+    spec = get_algorithm_spec("lora_sft")
+    patterns = list(spec.metrics_file_patterns)
+
+    # LoRA produces training_metrics.jsonl (no wildcard, single file)
+    assert "training_metrics.jsonl" in patterns
 
     print("test execution complete")
 
