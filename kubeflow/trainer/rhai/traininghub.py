@@ -362,8 +362,6 @@ def _create_training_hub_progression_instrumentation(
                 if last_line:
                     return json.loads(last_line)
 
-            except FileNotFoundError:
-                return {}
             except json.JSONDecodeError:
                 print("[Kubeflow] Warning: Failed to parse LoRA metrics JSON", flush=True)
                 return {}

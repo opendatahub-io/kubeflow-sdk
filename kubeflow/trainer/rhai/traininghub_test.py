@@ -19,10 +19,12 @@ from unittest.mock import patch
 
 import pytest
 
+from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai.traininghub import (
     TrainingHubAlgorithms,
     TrainingHubTrainer,
+    _create_training_hub_progression_instrumentation,
     _render_user_func_code,
     get_training_hub_instrumentation_wrapper,
 )
@@ -982,27 +984,36 @@ def test_render_user_func_code(test_case):
             )
 
 
-def test_instrumentation_cleans_lora_metrics_on_startup(tmp_path):
-    """Test that LoRA metrics files are cleaned before training starts."""
-    print("Executing test: LoRA metrics cleanup on startup")
+@pytest.fixture
+def lora_handler(tmp_path):
+    """Create a LoRA metrics handler for testing.
 
-    # Create stale metrics file (LoRA uses a single file, no per-rank wildcard)
+    Returns:
+        Tuple of (apply_fn, handler_instance, ckpt_dir).
+    """
     ckpt_dir = tmp_path / "checkpoints"
     ckpt_dir.mkdir()
 
-    stale_metrics_file = ckpt_dir / "training_metrics.jsonl"
-    stale_metrics_file.write_text('{"step": 50, "loss": 1.2}\n')
-
-    # Call instrumentation directly (no exec) with port 0 for random available port
-    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
-    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
-
     algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
-    apply_fn, _handler = _create_training_hub_progression_instrumentation(
+    apply_fn, handler_class = _create_training_hub_progression_instrumentation(
         algorithm_metadata=algorithm_metadata,
         ckpt_output_dir=str(ckpt_dir),
-        metrics_port=0,  # Use port 0 for random available port
+        metrics_port=0,
     )
+
+    handler = handler_class.__new__(handler_class)
+    return apply_fn, handler, ckpt_dir
+
+
+def test_instrumentation_cleans_lora_metrics_on_startup(lora_handler):
+    """Test that LoRA metrics files are cleaned before training starts."""
+    print("Executing test: LoRA metrics cleanup on startup")
+
+    apply_fn, _handler, ckpt_dir = lora_handler
+
+    # Create stale metrics file (LoRA uses a single file, no per-rank wildcard)
+    stale_metrics_file = ckpt_dir / "training_metrics.jsonl"
+    stale_metrics_file.write_text('{"step": 50, "loss": 1.2}\n')
 
     # Set JOB_COMPLETION_INDEX=0 to simulate primary pod (required for cleanup)
     with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0"}):
@@ -1020,12 +1031,11 @@ def test_instrumentation_cleans_lora_metrics_on_startup(tmp_path):
     print("test execution complete")
 
 
-def test_lora_metrics_reader(tmp_path):
+def test_lora_metrics_reader(lora_handler):
     """Test that LoRA metrics reader correctly reads training_metrics.jsonl."""
     print("Executing test: LoRA metrics reader")
 
-    ckpt_dir = tmp_path / "checkpoints"
-    ckpt_dir.mkdir()
+    _apply_fn, handler, ckpt_dir = lora_handler
 
     # Write metrics file with multiple lines (reader should return last line)
     metrics_file = ckpt_dir / "training_metrics.jsonl"
@@ -1034,21 +1044,6 @@ def test_lora_metrics_reader(tmp_path):
         '{"step": 2, "epoch": 0.02, "loss": 3.85, "learning_rate": 2e-6}\n'
     )
 
-    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
-    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
-
-    algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
-    _apply_fn, handler_class = _create_training_hub_progression_instrumentation(
-        algorithm_metadata=algorithm_metadata,
-        ckpt_output_dir=str(ckpt_dir),
-        metrics_port=0,
-    )
-
-    # Create handler instance to test reader method
-    # handler_class is the TrainingHubMetricsHandler class
-    # We can call _read_latest_metrics and _transform_schema as unbound-style
-    # by creating a minimal instance
-    handler = handler_class.__new__(handler_class)
     metrics = handler._read_latest_metrics()
 
     assert metrics["step"] == 2
@@ -1058,24 +1053,11 @@ def test_lora_metrics_reader(tmp_path):
     print("test execution complete")
 
 
-def test_lora_metrics_transformer(tmp_path):
+def test_lora_metrics_transformer(lora_handler):
     """Test that LoRA metrics transformer produces correct controller format."""
     print("Executing test: LoRA metrics transformer")
 
-    ckpt_dir = tmp_path / "checkpoints"
-    ckpt_dir.mkdir()
-
-    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
-    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
-
-    algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
-    _apply_fn, handler_class = _create_training_hub_progression_instrumentation(
-        algorithm_metadata=algorithm_metadata,
-        ckpt_output_dir=str(ckpt_dir),
-        metrics_port=0,
-    )
-
-    handler = handler_class.__new__(handler_class)
+    _apply_fn, handler, _ckpt_dir = lora_handler
 
     # Test with typical LoRA metrics
     metrics = {
@@ -1157,24 +1139,12 @@ def test_lora_metrics_transformer(tmp_path):
         ),
     ],
 )
-def test_lora_progress_clamped_below_100_until_final_step(test_case, tmp_path):
+def test_lora_progress_clamped_below_100_until_final_step(test_case, lora_handler):
     """Regression: progressPercentage must not reach 100 before the final step."""
     print(f"Executing test: {test_case.name}")
 
-    ckpt_dir = tmp_path / "checkpoints"
-    ckpt_dir.mkdir()
+    _apply_fn, handler, _ckpt_dir = lora_handler
 
-    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
-    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
-
-    algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
-    _apply_fn, handler_class = _create_training_hub_progression_instrumentation(
-        algorithm_metadata=algorithm_metadata,
-        ckpt_output_dir=str(ckpt_dir),
-        metrics_port=0,
-    )
-
-    handler = handler_class.__new__(handler_class)
     result = handler._transform_schema(test_case.config)
 
     assert test_case.expected_status == SUCCESS
