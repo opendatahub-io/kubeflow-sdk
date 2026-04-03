@@ -13,6 +13,13 @@ on:
         description: Upstream branch to sync from (source)
         required: false
         default: main
+      bypass_cve_gate:
+        description: >
+          Skip the CVE gate for this run (accepted risk).
+          Only use when no fix is available and a tracking issue exists.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -169,15 +176,17 @@ jobs:
         with:
           enable-cache: true
 
-      # Keep requirements.txt in sync after the upstream merge.
-      # Committed here so the change is included in the sync PR.
-      - name: Update requirements.txt
+      # Regenerate the lockfile so it reflects the merged pyproject.toml
+      # rather than relying on git's text-level merge of uv.lock.
+      # Then export requirements.txt from the clean lockfile.
+      - name: Regenerate lockfile and update requirements.txt
         if: steps.merge_step.outputs.has_conflict != 'true'
         run: |
+          uv lock
           uv export --format requirements-txt > requirements.txt
-          if ! git diff --quiet requirements.txt; then
-            git add requirements.txt
-            git commit -m "chore(deps): Update requirements.txt from uv.lock"
+          if ! git diff --quiet uv.lock requirements.txt; then
+            git add uv.lock requirements.txt
+            git commit -m "chore(deps): Regenerate uv.lock and requirements.txt after upstream merge"
           fi
 
       - name: Check for real changes (excluding owned paths)
@@ -250,15 +259,107 @@ jobs:
               --body "$BODY"
           fi
 
-  # Informational Snyk scan on the sync branch -- results appear in the
-  # Security tab but do not block the PR (fail_on_cves: false).
+  # Snyk scan on the sync branch -- blocks the PR when CVEs are found
+  # unless bypass_cve_gate is set for accepted-risk scenarios.
   snyk-scan:
     needs: sync
     if: needs.sync.outputs.has_changes == 'true'
     uses: ./.github/workflows/snyk-security-scan.yaml
     with:
       ref: ${{ needs.sync.outputs.head_branch }}
-      fail_on_cves: false
+      fail_on_cves: ${{ inputs.bypass_cve_gate != true }}
       sarif_category: midstream-snyk-audit
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  # Comment on the sync PR when Snyk finds CVEs, with remediation steps.
+  comment-on-cve-failure:
+    needs: [sync, snyk-scan]
+    if: always() && needs.snyk-scan.outputs.cves_found == 'true'
+    runs-on: ubuntu-latest
+    env:
+      HEAD_BRANCH: ${{ needs.sync.outputs.head_branch }}
+      DOWNSTREAM_BRANCH: ${{ inputs.downstream_branch || 'main' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Comment on sync PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER=$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --head "${HEAD_BRANCH}" \
+            --base "${DOWNSTREAM_BRANCH}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No open sync PR found for ${HEAD_BRANCH} — skipping comment"
+            exit 0
+          fi
+
+          COMMENT_MARKER="<!-- snyk-cve-gate -->"
+          BYPASS_LABEL="${{ inputs.bypass_cve_gate }}"
+
+          if [ "$BYPASS_LABEL" = "true" ]; then
+            BODY="${COMMENT_MARKER}
+          ## ⚠️ CVE Gate Bypassed
+
+          Snyk detected **HIGH or CRITICAL** vulnerabilities, but the CVE gate was bypassed for this run.
+
+          **Action required:** Ensure a tracking issue exists for each unresolved CVE and link it in this PR description."
+          else
+            BODY="${COMMENT_MARKER}
+          ## 🚫 CVE Gate Failed
+
+          Snyk detected **HIGH or CRITICAL** vulnerabilities in the merged dependencies. This PR is blocked until they are resolved.
+
+          Review the findings in the **Security tab** or the Snyk scan logs for this workflow run.
+
+          ### How to fix
+          1. Check out the sync branch:
+             \`\`\`bash
+             git checkout ${HEAD_BRANCH}
+             \`\`\`
+          2. Upgrade the affected package(s):
+             \`\`\`bash
+             # Direct dependency — bump the version floor in pyproject.toml, then:
+             uv lock
+
+             # Transitive dependency — upgrade just that package:
+             uv lock --upgrade-package <package-name>
+             \`\`\`
+          3. Commit and push:
+             \`\`\`bash
+             git add uv.lock pyproject.toml
+             git commit -m \"fix(deps): upgrade <package> to resolve <CVE-ID>\"
+             git push origin ${HEAD_BRANCH}
+             \`\`\`
+          4. The workflow will re-run automatically.
+
+          ### After pushing fixes
+          Use **Re-run failed jobs** from the PR checks UI to re-run the Snyk scan against your changes. Do not re-trigger the full Sync Upstream workflow, as it will overwrite your commits with a fresh merge.
+
+          ### No fix available?
+          If no patched version exists, re-run the **Sync Upstream** workflow manually with **bypass_cve_gate** enabled and create a tracking issue for the unresolved CVE."
+          fi
+
+          # Update existing comment or create a new one
+          EXISTING=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.body | contains(\"${COMMENT_MARKER}\")) | .id" \
+            | head -1 || true)
+
+          if [ -n "$EXISTING" ]; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING}" \
+              -f body="${BODY}"
+          else
+            gh pr comment "$PR_NUMBER" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --body "${BODY}"
+          fi
