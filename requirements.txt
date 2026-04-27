@@ -694,7 +694,7 @@ kubeflow-katib-api @ git+https://github.com/kubeflow/katib.git@9caa8bc1389c866a7
     # via kubeflow
 kubeflow-spark-api @ git+https://github.com/kubeflow/spark-operator.git@69d728aa0fbd77918f1b249ee8d69ac30ee41ce1#subdirectory=api/python_api
     # via kubeflow
-kubeflow-trainer-api @ git+https://github.com/kubeflow/trainer.git@e63ca78ffe127fbfb7cd8c5d0bc8b25453701f19#subdirectory=api/python_api
+kubeflow-trainer-api @ git+https://github.com/opendatahub-io/trainer.git@095d52e5673bdf4fd2ca4696d38a7b83ba74b622#subdirectory=api/python_api
     # via kubeflow
 kubernetes==35.0.0 \
     --hash=sha256:39e2b33b46e5834ef6c3985ebfe2047ab39135d41de51ce7641a7ca5b372a13d \
@@ -1658,15 +1658,9 @@ tzdata==2025.3 ; python_full_version < '3.11' or sys_platform == 'emscripten' or
     --hash=sha256:06a47e5700f3081aab02b2e513160914ff0694bce9947d6b76ebd6bf57cfc5d1 \
     --hash=sha256:de39c2ca5dc7b0344f2eba86f49d614019d29f060fc4ebc8a417896a620b56a7
     # via pandas
-urllib3==1.26.20 ; python_full_version < '3.10' \
-    --hash=sha256:0ed14ccfbf1c30a9072c7ca157e4319b70d65f623e91e7b32fadb2853431016e \
-    --hash=sha256:40c2dc0c681e47eb8f90e7e27bf6ff7df2e677421fd46756da1161c39ca70d32
-    # via
-    #   kubernetes
-    #   pygithub
-    #   requests
-urllib3==2.6.1 ; python_full_version >= '3.10' \
-    --hash=sha256:5379eb6e1aba4088bae84f8242960017ec8d8e3decf30480b3a1abdaa9671a3f
+urllib3==2.6.3 \
+    --hash=sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed \
+    --hash=sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4
     # via
     #   kubernetes
     #   pygithub
