@@ -690,6 +690,83 @@ def test_get_trainer_cr_custom_metrics_port():
     print("test execution complete")
 
 
+def test_get_trainer_cr_non_pytorch_framework():
+    """Test Trainer CRD generation with non-pytorch framework uses DEFAULT_COMMAND."""
+    print("Executing test: Trainer CRD with non-pytorch framework")
+
+    def dummy_train():
+        print("Training...")
+
+    from kubeflow.trainer.constants import constants
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="jax",
+            image="jax/jax:0.4.0",
+        ),
+    )
+    trainer = TransformersTrainer(func=dummy_train, enable_progression_tracking=False)
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    command_str = " ".join(trainer_crd.command)
+    assert "python" in command_str
+    assert "torchrun" not in command_str
+
+    print("test execution complete")
+
+
+def test_get_trainer_cr_with_checkpoint_and_packages():
+    """Test Trainer CRD generation with checkpoint injection and packages_to_install.
+
+    Validates that:
+    - Checkpoint header/footer code is injected around user code
+    - packages_to_install generates pip install script in the command
+    """
+    print("Executing test: Trainer CRD with checkpoint and packages")
+
+    def dummy_train():
+        print("Training...")
+
+    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    trainer = TransformersTrainer(
+        func=dummy_train,
+        enable_progression_tracking=False,
+        enable_jit_checkpoint=True,
+        output_dir="/tmp/checkpoints",
+        packages_to_install=["transformers", "datasets"],
+    )
+
+    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+    command_str = " ".join(trainer_crd.command)
+    # Checkpoint header should be present
+    assert "[Kubeflow] Initializing checkpoint instrumentation" in command_str
+    assert "apply_checkpointing()" in command_str
+    # Checkpoint footer should be present
+    assert "upload_final_model_to_cloud()" in command_str
+    # Package install script should be present
+    assert "pip install" in command_str
+    assert "transformers" in command_str
+    assert "datasets" in command_str
+
+    print("test execution complete")
+
+
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -4431,6 +4508,7 @@ def test_update_progression_metrics():
         if "transformers" in sys.modules:
             del sys.modules["transformers"]
 
+
 def test_get_progression_metrics_json():
     """Test _get_progression_metrics_json returns valid JSON with expected schema.
 
@@ -4549,7 +4627,6 @@ def test_progression_metrics_handler_do_get():
         ) = namespace["_create_progression_instrumentation"](28080)
 
         import http.server
-        import io
         import json
         import threading
 
@@ -4587,93 +4664,11 @@ def test_progression_metrics_handler_do_get():
             del sys.modules["transformers"]
 
 
-def test_progression_metrics_handler_error():
-    """Test ProgressionMetricsHandler returns 500 when metrics serialization fails.
-
-    Validates that a broken _get_progression_metrics_json causes a 500 response
-    without crashing the server.
-    """
-    print("Executing test: Progression Metrics Handler error path.")
-
-    import sys
-    from unittest.mock import Mock
-
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
-
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
-
-        (
-            _,
-            _,
-            handler_class,
-            _,
-            _,
-        ) = namespace["_create_progression_instrumentation"](28080)
-
-        import http.server
-        import threading
-        import unittest.mock
-
-        # Patch _get_progression_metrics_json inside the handler's closure to raise
-        original_do_get = handler_class.do_GET
-
-        def broken_do_get(self):
-            # Temporarily break the JSON getter by patching at the namespace level
-            real_getter = namespace.get("_get_progression_metrics_json")
-            try:
-                # Override the closure variable isn't possible, so we monkeypatch
-                # do_GET to simulate the error path directly
-                self.send_error(500)
-            finally:
-                pass
-
-        handler_class.do_GET = broken_do_get
-
-        server = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-
-        try:
-            import urllib.error
-            import urllib.request
-
-            with pytest.raises(urllib.error.HTTPError) as exc_info:
-                urllib.request.urlopen(f"http://127.0.0.1:{port}/")
-            assert exc_info.value.code == 500
-        finally:
-            handler_class.do_GET = original_do_get
-            server.shutdown()
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
-
-
 def test_on_train_begin_initial_metrics():
-    """Test on_train_begin sets initial metrics including checkpoint resume.
+    """Test on_train_begin sets initial metrics for a fresh training start.
 
     Validates that:
     - totalEpochs is set from args.num_train_epochs
-    - Checkpoint resume scenario (global_step > 0) sets initial progress
     - Fresh start (global_step = 0) sets progressPercentage to 0
     - Server is NOT started when is_world_process_zero is False
     """
@@ -4808,13 +4803,12 @@ def test_on_train_begin_checkpoint_resume():
             del sys.modules["transformers"]
 
 
-def test_on_train_end_termination_message(tmp_path):
+def test_on_train_end_termination_message():
     """Test on_train_end writes termination message for world process zero.
 
     Validates that:
     - /dev/termination-log receives valid JSON with final metrics
     - trainMetrics and evalMetrics are included in the termination message
-    - Non-world-process-zero skips writing
     """
     print("Executing test: on_train_end termination message.")
 

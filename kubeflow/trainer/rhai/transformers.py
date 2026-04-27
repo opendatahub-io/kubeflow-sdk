@@ -201,8 +201,13 @@ class TransformersTrainer:
             self.enable_jit_checkpoint = True
 
 
-def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
-    """Checkpoint instrumentation injected into training pods."""
+def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:  # pragma: no cover
+    """Checkpoint instrumentation injected into training pods.
+
+    Coverage: extracted via inspect.getsource() and exec'd as a string in pods;
+    the original function object is never called, so coverage.py cannot trace it.
+    Tested indirectly through exec-based tests (e.g. test_checkpoint_injection_code_execution_*).
+    """
     from collections.abc import Callable
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import os
@@ -1196,7 +1201,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     )
 
 
-def _create_progression_instrumentation(metrics_port: int) -> tuple:
+def _create_progression_instrumentation(metrics_port: int) -> tuple:  # pragma: no cover
     """Instrumentation code injected into training pods (extracted via inspect.getsource).
 
     This function is NOT called directly in the SDK - it's extracted as source code
