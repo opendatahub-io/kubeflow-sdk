@@ -38,10 +38,7 @@ class ContainerPatch:
     name: str
     env: list[dict] | None = None
     volume_mounts: list[dict] | None = None
-<<<<<<< HEAD
-=======
     security_context: dict | None = None
->>>>>>> upstream/main
 
     def __post_init__(self):
         """Validate the container patch configuration."""
@@ -110,16 +107,6 @@ class PodSpecPatch:
     """
 
     service_account_name: str | None = None
-<<<<<<< HEAD
-    node_selector: dict[str, str] | None = None
-    affinity: dict | None = None
-    tolerations: list[dict] | None = None
-    volumes: list[dict] | None = None
-    init_containers: list[ContainerOverride] | None = None
-    containers: list[ContainerOverride] | None = None
-    scheduling_gates: list[dict] | None = None
-    image_pull_secrets: list[dict] | None = None
-=======
     volumes: list[dict] | None = None
     init_containers: list[ContainerPatch] | None = None
     containers: list[ContainerPatch] | None = None
@@ -129,7 +116,6 @@ class PodSpecPatch:
     affinity: dict | None = None
     tolerations: list[dict] | None = None
     scheduling_gates: list[dict] | None = None
->>>>>>> upstream/main
 
 
 @dataclass
@@ -141,11 +127,6 @@ class PodTemplatePatch:
         spec: Pod spec patches.
     """
 
-<<<<<<< HEAD
-    target_jobs: list[str]
-    metadata: dict | None = None
-    spec: PodSpecOverride | None = None
-=======
     metadata: dict | None = None
     spec: PodSpecPatch | None = None
 
@@ -307,7 +288,6 @@ def _patch_to_dict(obj: Any) -> Any:
             result[key] = value
 
     return result
->>>>>>> upstream/main
 
 
 @dataclass
@@ -393,190 +373,6 @@ class Annotations:
 
 
 @dataclass
-<<<<<<< HEAD
-class SpecLabels:
-    """Add labels to derivative JobSet and Jobs (.spec.labels).
-
-    These labels will be merged with the TrainingRuntime values and applied to
-    the JobSet and Jobs created by the TrainJob.
-
-    Supported backends:
-        - Kubernetes
-
-    Args:
-        labels: Dictionary of label key-value pairs to add to JobSet and Jobs.
-    """
-
-    labels: dict[str, str]
-
-    def __call__(
-        self,
-        job_spec: dict[str, Any],
-        trainer: CustomTrainer | BuiltinTrainer | None,
-        backend: RuntimeBackend,
-    ) -> None:
-        """Apply spec-level labels to the job specification.
-
-        Args:
-            job_spec: Job specification dictionary to modify.
-            trainer: Optional trainer instance for context.
-            backend: Backend instance for validation.
-
-        Raises:
-            ValueError: If backend does not support spec labels.
-        """
-        from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
-
-        if not isinstance(backend, KubernetesBackend):
-            raise ValueError(
-                f"SpecLabels option is not compatible with {type(backend).__name__}. "
-                f"Supported backends: KubernetesBackend"
-            )
-
-        spec = job_spec.setdefault("spec", {})
-        spec["labels"] = self.labels
-
-
-@dataclass
-class SpecAnnotations:
-    """Add annotations to derivative JobSet and Jobs (.spec.annotations).
-
-    These annotations will be merged with the TrainingRuntime values and applied to
-    the JobSet and Jobs created by the TrainJob.
-
-    Supported backends:
-        - Kubernetes
-
-    Args:
-        annotations: Dictionary of annotation key-value pairs to add to JobSet and Jobs.
-    """
-
-    annotations: dict[str, str]
-
-    def __call__(
-        self,
-        job_spec: dict[str, Any],
-        trainer: CustomTrainer | BuiltinTrainer | None,
-        backend: RuntimeBackend,
-    ) -> None:
-        """Apply spec-level annotations to the job specification.
-
-        Args:
-            job_spec: Job specification dictionary to modify.
-            trainer: Optional trainer instance for context.
-            backend: Backend instance for validation.
-
-        Raises:
-            ValueError: If backend does not support spec annotations.
-        """
-        from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
-
-        if not isinstance(backend, KubernetesBackend):
-            raise ValueError(
-                f"SpecAnnotations option is not compatible with {type(backend).__name__}. "
-                f"Supported backends: KubernetesBackend"
-            )
-
-        spec = job_spec.setdefault("spec", {})
-        spec["annotations"] = self.annotations
-
-
-class PodTemplateOverrides:
-    """Add pod template overrides to the TrainJob (.spec.podTemplateOverrides).
-
-    Supported backends:
-        - Kubernetes
-
-    Args:
-        *overrides: One or more PodTemplateOverride objects.
-    """
-
-    def __init__(self, *overrides: PodTemplateOverride):
-        """Initialize with variable number of PodTemplateOverride objects."""
-        if not overrides:
-            raise ValueError("At least one PodTemplateOverride must be provided")
-        self.pod_overrides = list(overrides)
-
-    def __call__(
-        self,
-        job_spec: dict[str, Any],
-        trainer: CustomTrainer | BuiltinTrainer | None,
-        backend: RuntimeBackend,
-    ) -> None:
-        """Apply pod template overrides to the job specification.
-
-        Args:
-            job_spec: Job specification dictionary to modify.
-            trainer: Optional trainer instance for context.
-            backend: Backend instance for validation.
-
-        Raises:
-            ValueError: If backend does not support pod template overrides.
-        """
-        from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
-
-        if not isinstance(backend, KubernetesBackend):
-            raise ValueError(
-                f"PodTemplateOverrides option is not compatible with {type(backend).__name__}. "
-                f"Supported backends: KubernetesBackend"
-            )
-        spec = job_spec.setdefault("spec", {})
-        pod_overrides = spec.setdefault("podTemplateOverrides", [])
-
-        for override in self.pod_overrides:
-            api_override = {"targetJobs": [{"name": job} for job in override.target_jobs]}
-
-            if override.metadata:
-                api_override["metadata"] = override.metadata
-
-            if override.spec:
-                spec_dict = {}
-
-                if override.spec.service_account_name:
-                    spec_dict["serviceAccountName"] = override.spec.service_account_name
-                if override.spec.node_selector:
-                    spec_dict["nodeSelector"] = override.spec.node_selector
-                if override.spec.affinity:
-                    spec_dict["affinity"] = override.spec.affinity
-                if override.spec.tolerations:
-                    spec_dict["tolerations"] = override.spec.tolerations
-                if override.spec.volumes:
-                    spec_dict["volumes"] = override.spec.volumes
-                if override.spec.scheduling_gates:
-                    spec_dict["schedulingGates"] = override.spec.scheduling_gates
-                if override.spec.image_pull_secrets:
-                    spec_dict["imagePullSecrets"] = override.spec.image_pull_secrets
-
-                # Handle container overrides
-                if override.spec.init_containers:
-                    spec_dict["initContainers"] = []
-                    for container in override.spec.init_containers:
-                        container_dict = {"name": container.name}
-                        if container.env:
-                            container_dict["env"] = container.env
-                        if container.volume_mounts:
-                            container_dict["volumeMounts"] = container.volume_mounts
-                        spec_dict["initContainers"].append(container_dict)
-
-                if override.spec.containers:
-                    spec_dict["containers"] = []
-                    for container in override.spec.containers:
-                        container_dict = {"name": container.name}
-                        if container.env:
-                            container_dict["env"] = container.env
-                        if container.volume_mounts:
-                            container_dict["volumeMounts"] = container.volume_mounts
-                        spec_dict["containers"].append(container_dict)
-
-                if spec_dict:
-                    api_override["spec"] = spec_dict
-
-            pod_overrides.append(api_override)
-
-
-@dataclass
-=======
->>>>>>> upstream/main
 class TrainerCommand:
     """Override the trainer container command (.spec.trainer.command).
 

@@ -21,11 +21,7 @@ import random
 import re
 import string
 import time
-<<<<<<< HEAD
 from typing import Any, get_args
-=======
-from typing import Any
->>>>>>> upstream/main
 import uuid
 
 from kubeflow_trainer_api import models
@@ -767,13 +763,7 @@ class KubernetesBackend(RuntimeBackend):
         | types.BuiltinTrainer
         | None = None,
         trainer_overrides: dict[str, Any] | None = None,
-<<<<<<< HEAD
-        spec_labels: dict[str, str] | None = None,
-        spec_annotations: dict[str, str] | None = None,
-        pod_template_overrides: models.IoK8sApiCoreV1PodTemplateSpec | None = None,
-=======
         runtime_patches: list[dict[str, Any]] | None = None,
->>>>>>> upstream/main
     ) -> models.TrainerV1alpha1TrainJobSpec:
         """Get TrainJob spec from the given parameters."""
 
@@ -823,21 +813,18 @@ class KubernetesBackend(RuntimeBackend):
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
 
-<<<<<<< HEAD
-        # Setup RHAI trainer storage: parse output_dir for volume mounts (PVC/S3)
-        # and inject cloud storage credentials from data connection secret
+        # Setup RHAI trainer storage and merge generated patches with user-provided runtime patches.
         if is_rhai_trainer:
-            _, trainer_cr, pod_template_overrides = rhai_utils.setup_rhai_trainer_storage(
-                trainer, trainer_cr, pod_template_overrides, self.core_api, self.namespace
+            _, trainer_cr, runtime_patches = rhai_utils.setup_rhai_trainer_storage(
+                trainer, trainer_cr, runtime_patches, self.core_api, self.namespace
             )
-=======
+
         # Convert runtime patches dicts to native model objects.
         runtime_patch_models = None
         if runtime_patches:
             runtime_patch_models = [
                 models.TrainerV1alpha1RuntimePatch.from_dict(p) for p in runtime_patches
             ]
->>>>>>> upstream/main
 
         trainjob_spec = models.TrainerV1alpha1TrainJobSpec(
             runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),

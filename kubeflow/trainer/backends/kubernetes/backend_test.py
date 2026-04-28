@@ -324,12 +324,7 @@ def get_train_job(
     train_job_trainer: models.TrainerV1alpha1Trainer | None = None,
     labels: dict[str, str] | None = None,
     annotations: dict[str, str] | None = None,
-<<<<<<< HEAD
-    spec_labels: dict[str, str] | None = None,
-    spec_annotations: dict[str, str] | None = None,
-=======
     runtime_patches: list[models.TrainerV1alpha1RuntimePatch] | None = None,
->>>>>>> upstream/main
 ) -> models.TrainerV1alpha1TrainJob:
     """
     Create a mock TrainJob object with optional trainer configurations.
@@ -641,11 +636,7 @@ def create_cluster_training_runtime(
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
             mlPolicy=models.TrainerV1alpha1MLPolicy(
-<<<<<<< HEAD
-                torch=models.TrainerV1alpha1TorchMLPolicySource(),
-=======
                 torch={},
->>>>>>> upstream/main
                 numNodes=2,
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(
@@ -674,11 +665,7 @@ def create_training_runtime(
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
             mlPolicy=models.TrainerV1alpha1MLPolicy(
-<<<<<<< HEAD
-                torch=models.TrainerV1alpha1TorchMLPolicySource(),
-=======
                 torch={},
->>>>>>> upstream/main
                 numNodes=2,
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(

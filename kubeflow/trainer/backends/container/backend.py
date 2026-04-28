@@ -519,11 +519,7 @@ class ContainerBackend(RuntimeBackend):
         network_id: str,
     ):
         """
-<<<<<<< HEAD
-        Run dataset and model initializers before training starts.
-=======
         Run dataset and model initializers in parallel before training starts.
->>>>>>> upstream/main
 
         Args:
             job_name: Name of the training job.
@@ -534,37 +530,6 @@ class ContainerBackend(RuntimeBackend):
         Raises:
             RuntimeError: If initializer fails to complete successfully.
         """
-<<<<<<< HEAD
-        # Run dataset initializer if configured
-        if initializer.dataset:
-            dataset_init = container_utils.get_dataset_initializer(initializer.dataset, self.cfg)
-            container_utils.maybe_pull_image(
-                self._adapter, dataset_init.image, self.cfg.pull_policy
-            )
-
-            logger.debug("Running dataset initializer")
-            self._run_single_initializer(
-                job_name=job_name,
-                container_init=dataset_init,
-                workdir=workdir,
-                network_id=network_id,
-            )
-            logger.debug("Dataset initializer completed")
-
-        # Run model initializer if configured
-        if initializer.model:
-            model_init = container_utils.get_model_initializer(initializer.model, self.cfg)
-            container_utils.maybe_pull_image(self._adapter, model_init.image, self.cfg.pull_policy)
-
-            logger.debug("Running model initializer")
-            self._run_single_initializer(
-                job_name=job_name,
-                container_init=model_init,
-                workdir=workdir,
-                network_id=network_id,
-            )
-            logger.debug("Model initializer completed")
-=======
         # Build list of initializers that are configured
         initializer_configs = []
         if initializer.dataset:
@@ -599,7 +564,6 @@ class ContainerBackend(RuntimeBackend):
 
         completed = [futures[f] for f in futures]
         logger.debug("Initializers completed in parallel: %s", completed)
->>>>>>> upstream/main
 
     def _run_single_initializer(
         self,
@@ -842,8 +806,6 @@ class ContainerBackend(RuntimeBackend):
     def get_job_events(self, name: str) -> list[types.Event]:
         raise NotImplementedError()
 
-<<<<<<< HEAD
-=======
     def _build_failure_message(self, name: str) -> str:
         """Build a detailed failure message with per-container exit codes and log tails.
 
@@ -877,7 +839,6 @@ class ContainerBackend(RuntimeBackend):
             logger.debug(f"Failed to build failure details for TrainJob {name}: {e}")
         return "\n".join(lines)
 
->>>>>>> upstream/main
     def wait_for_job_status(
         self,
         name: str,

@@ -263,16 +263,11 @@ def get_script_for_python_packages(
     """
     Get init script to install Python packages from the given pip index URLs.
     """
-<<<<<<< HEAD
-    # Quote package names and URLs with shlex.quote() to prevent shell injection;
-    # each value becomes a single safe shell token when expanded inside the bash script.
-=======
     # Quote package names and URLs with shlex.quote() to prevent shell injection.
     # Use a bash array so that quotes are interpreted during array initialization;
     # storing shlex-quoted values in a plain string variable breaks because bash
     # does not re-interpret quotes during variable expansion (e.g. packages with
     # extras like 'transformers[torch]' would be passed to pip with literal quotes).
->>>>>>> upstream/main
     packages_str = " ".join(shlex.quote(pkg) for pkg in packages_to_install)
 
     # first url will be the index-url.
@@ -297,21 +292,6 @@ def get_script_for_python_packages(
     # on success we emit a single concise confirmation line.
     script_for_python_packages = header_script + textwrap.dedent(
         f"""
-<<<<<<< HEAD
-        PACKAGES="{packages_str}"
-        PIP_OPTS="{options_str}"
-        LOG_FILE="{install_log_file}"
-        rm -f "$LOG_FILE"
-
-        if PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\
-            --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then
-            echo "Successfully installed Python packages: $PACKAGES"
-        elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\
-            --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then
-            echo "Successfully installed Python packages: $PACKAGES"
-        else
-            echo "ERROR: Failed to install Python packages: $PACKAGES" >&2
-=======
         PACKAGES=({packages_str})
         PIP_OPTS=({options_str})
         LOG_FILE="{install_log_file}"
@@ -325,7 +305,6 @@ def get_script_for_python_packages(
             echo "Successfully installed Python packages (system-wide): ${{PACKAGES[*]}}"
         else
             echo "ERROR: Failed to install Python packages: ${{PACKAGES[*]}}" >&2
->>>>>>> upstream/main
             cat "$LOG_FILE" >&2
             exit 1
         fi
