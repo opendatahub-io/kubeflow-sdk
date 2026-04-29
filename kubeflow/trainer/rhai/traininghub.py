@@ -999,9 +999,8 @@ def get_trainer_cr_from_training_hub_trainer(
     # runtime ML policy and sets PET_NPROC_PER_NODE as expected. If it is not provided,
     # we leave it unset so the runtime ML policy determines the value.
     if nproc_per_node is not None:
-        trainer_crd.num_proc_per_node = models.IoK8sApimachineryPkgUtilIntstrIntOrString(
-            nproc_per_node
-        )
+        # KFT v2.2+: TrainerV1alpha1Trainer.num_proc_per_node is an int (not IntOrString).
+        trainer_crd.num_proc_per_node = int(nproc_per_node)
 
     # Map explicit resources_per_node exactly like CustomTrainer. If users want to
     # control GPU/CPU quantities, they should pass them via this field.
