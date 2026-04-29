@@ -2754,9 +2754,6 @@ print("TEST_COMPLETE=True")
     ],
 )
 
-# def test_jit_checkpoint_callback_on_train_end():
-#     """Test that JIT checkpoint callback is called on train end."""
-#     assert True
 
 def test_s3_download_execution(test_case, tmp_path):
     """Integration test: S3 checkpoint download behavior.
@@ -4375,141 +4372,153 @@ print("TEST_COMPLETE=True")
     print("test execution complete")
 
 
-def test_update_progression_metrics():
-    """Test _update_progression_metrics thread-safe metrics update function.
+@pytest.fixture
+def progression_instrumentation():
+    """Set up mock transformers and return progression instrumentation components.
 
-    Validates that:
-    - Scalar fields are set correctly
-    - Dict fields are merged (not replaced)
-    - Unknown keys are silently ignored
-    - Thread-safe updates via lock are consistent
+    Mocks sys.modules["transformers"] for the exec-based test environment,
+    executes the instrumentation wrapper, and yields all 5 components from
+    _create_progression_instrumentation. Restores original sys.modules state
+    on teardown.
+
+    Yields:
+        Tuple of (apply_fn, callback_class, handler_class, get_metrics_json,
+        update_progression_metrics).
     """
-    print("Executing test: Update Progression Metrics.")
-
     import sys
     from unittest.mock import Mock
 
-    # Mock transformers module for exec environment
+    _sentinel = object()
+    prev_transformers = sys.modules.get("transformers", _sentinel)
+
     mock_transformers = Mock()
     mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
     mock_transformers.trainer = Mock()
     sys.modules["transformers"] = mock_transformers
 
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+    wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
+    wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
+    lines = wrapper_code.split("\n")
+    modified_lines = []
+    for line in lines:
+        if line.strip() == "apply_progression_tracking()":
+            modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
+        else:
+            modified_lines.append(line)
+    wrapper_code = "\n".join(modified_lines)
+    namespace = {}
+    exec(wrapper_code, namespace)
 
-        (
-            _,
-            _,
-            _,
-            get_metrics_json,
-            update_progression_metrics,
-        ) = namespace["_create_progression_instrumentation"](28080)
+    components = namespace["_create_progression_instrumentation"](28080)
+    yield components
 
-        import json
-
-        # Verify initial state (all defaults)
-        metrics = json.loads(get_metrics_json())
-        assert metrics["currentStep"] == 0
-        assert metrics["currentEpoch"] == 0.0
-        assert metrics["progressPercentage"] is None
-        assert metrics["estimatedRemainingSeconds"] is None
-        assert metrics["totalSteps"] is None
-        assert metrics["totalEpochs"] is None
-        assert metrics["trainMetrics"] == {}
-        assert metrics["evalMetrics"] == {}
-
-        # Test scalar field updates
-        update_progression_metrics({
-            "currentStep": 50,
-            "totalSteps": 100,
-            "currentEpoch": 1.5,
-            "totalEpochs": 3,
-            "progressPercentage": 50,
-            "estimatedRemainingSeconds": 120,
-        })
-        metrics = json.loads(get_metrics_json())
-        assert metrics["currentStep"] == 50
-        assert metrics["totalSteps"] == 100
-        assert metrics["currentEpoch"] == 1.5
-        assert metrics["totalEpochs"] == 3
-        assert metrics["progressPercentage"] == 50
-        assert metrics["estimatedRemainingSeconds"] == 120
-
-        # Test dict fields are merged (not replaced)
-        update_progression_metrics({
-            "trainMetrics": {"loss": 0.5, "learning_rate": 0.001},
-        })
-        metrics = json.loads(get_metrics_json())
-        assert metrics["trainMetrics"] == {"loss": 0.5, "learning_rate": 0.001}
-
-        # Merge additional keys into existing dict
-        update_progression_metrics({
-            "trainMetrics": {"grad_norm": 1.2},
-        })
-        metrics = json.loads(get_metrics_json())
-        assert metrics["trainMetrics"] == {
-            "loss": 0.5,
-            "learning_rate": 0.001,
-            "grad_norm": 1.2,
-        }
-
-        # Overwrite existing key within dict
-        update_progression_metrics({
-            "trainMetrics": {"loss": 0.3},
-        })
-        metrics = json.loads(get_metrics_json())
-        assert metrics["trainMetrics"]["loss"] == 0.3
-        assert metrics["trainMetrics"]["learning_rate"] == 0.001
-
-        # Test evalMetrics dict merge
-        update_progression_metrics({
-            "evalMetrics": {"eval_loss": 0.8, "eval_accuracy": 0.92},
-        })
-        metrics = json.loads(get_metrics_json())
-        assert metrics["evalMetrics"] == {"eval_loss": 0.8, "eval_accuracy": 0.92}
-
-        # Test unknown keys are silently ignored
-        update_progression_metrics({
-            "nonExistentField": 999,
-            "currentStep": 75,
-        })
-        metrics = json.loads(get_metrics_json())
-        assert metrics["currentStep"] == 75
-        assert "nonExistentField" not in metrics
-
-        # Test scalar fields overwrite previous values
-        update_progression_metrics({
-            "progressPercentage": 100,
-            "estimatedRemainingSeconds": 0,
-        })
-        metrics = json.loads(get_metrics_json())
-        assert metrics["progressPercentage"] == 100
-        assert metrics["estimatedRemainingSeconds"] == 0
-
-        # Verify previously set scalar fields remain unchanged
-        assert metrics["currentStep"] == 75
-        assert metrics["totalSteps"] == 100
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+    if prev_transformers is _sentinel:
+        sys.modules.pop("transformers", None)
+    else:
+        sys.modules["transformers"] = prev_transformers
 
 
-def test_get_progression_metrics_json():
+def test_update_progression_metrics(progression_instrumentation):
+    """Test _update_progression_metrics metrics update function.
+
+    Validates that:
+    - Scalar fields are set correctly
+    - Dict fields are merged (not replaced)
+    - Unknown keys are silently ignored
+    """
+    print("Executing test: Update Progression Metrics.")
+
+    _, _, _, get_metrics_json, update_progression_metrics = progression_instrumentation
+
+    import json
+
+    # Verify initial state (all defaults)
+    metrics = json.loads(get_metrics_json())
+    assert metrics["currentStep"] == 0
+    assert metrics["currentEpoch"] == 0.0
+    assert metrics["progressPercentage"] is None
+    assert metrics["estimatedRemainingSeconds"] is None
+    assert metrics["totalSteps"] is None
+    assert metrics["totalEpochs"] is None
+    assert metrics["trainMetrics"] == {}
+    assert metrics["evalMetrics"] == {}
+
+    # Test scalar field updates
+    update_progression_metrics({
+        "currentStep": 50,
+        "totalSteps": 100,
+        "currentEpoch": 1.5,
+        "totalEpochs": 3,
+        "progressPercentage": 50,
+        "estimatedRemainingSeconds": 120,
+    })
+    metrics = json.loads(get_metrics_json())
+    assert metrics["currentStep"] == 50
+    assert metrics["totalSteps"] == 100
+    assert metrics["currentEpoch"] == 1.5
+    assert metrics["totalEpochs"] == 3
+    assert metrics["progressPercentage"] == 50
+    assert metrics["estimatedRemainingSeconds"] == 120
+
+    # Test dict fields are merged (not replaced)
+    update_progression_metrics({
+        "trainMetrics": {"loss": 0.5, "learning_rate": 0.001},
+    })
+    metrics = json.loads(get_metrics_json())
+    assert metrics["trainMetrics"] == {"loss": 0.5, "learning_rate": 0.001}
+
+    # Merge additional keys into existing dict
+    update_progression_metrics({
+        "trainMetrics": {"grad_norm": 1.2},
+    })
+    metrics = json.loads(get_metrics_json())
+    assert metrics["trainMetrics"] == {
+        "loss": 0.5,
+        "learning_rate": 0.001,
+        "grad_norm": 1.2,
+    }
+
+    # Overwrite existing key within dict
+    update_progression_metrics({
+        "trainMetrics": {"loss": 0.3},
+    })
+    metrics = json.loads(get_metrics_json())
+    assert metrics["trainMetrics"]["loss"] == 0.3
+    assert metrics["trainMetrics"]["learning_rate"] == 0.001
+
+    # Test evalMetrics dict merge
+    update_progression_metrics({
+        "evalMetrics": {"eval_loss": 0.8, "eval_accuracy": 0.92},
+    })
+    metrics = json.loads(get_metrics_json())
+    assert metrics["evalMetrics"] == {"eval_loss": 0.8, "eval_accuracy": 0.92}
+
+    # Test unknown keys are silently ignored
+    update_progression_metrics({
+        "nonExistentField": 999,
+        "currentStep": 75,
+    })
+    metrics = json.loads(get_metrics_json())
+    assert metrics["currentStep"] == 75
+    assert "nonExistentField" not in metrics
+
+    # Test scalar fields overwrite previous values
+    update_progression_metrics({
+        "progressPercentage": 100,
+        "estimatedRemainingSeconds": 0,
+    })
+    metrics = json.loads(get_metrics_json())
+    assert metrics["progressPercentage"] == 100
+    assert metrics["estimatedRemainingSeconds"] == 0
+
+    # Verify previously set scalar fields remain unchanged
+    assert metrics["currentStep"] == 75
+    assert metrics["totalSteps"] == 100
+
+    print("test execution complete")
+
+
+def test_get_progression_metrics_json(progression_instrumentation):
     """Test _get_progression_metrics_json returns valid JSON with expected schema.
 
     Validates that:
@@ -4519,74 +4528,41 @@ def test_get_progression_metrics_json():
     """
     print("Executing test: Get Progression Metrics JSON.")
 
-    import sys
-    from unittest.mock import Mock
+    _, _, _, get_metrics_json, update_progression_metrics = progression_instrumentation
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    import json
 
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+    # Verify default state returns valid JSON with all expected fields
+    raw = get_metrics_json()
+    assert isinstance(raw, str)
+    metrics = json.loads(raw)
+    expected_keys = {
+        "progressPercentage",
+        "estimatedRemainingSeconds",
+        "currentStep",
+        "totalSteps",
+        "currentEpoch",
+        "totalEpochs",
+        "trainMetrics",
+        "evalMetrics",
+    }
+    assert set(metrics.keys()) == expected_keys
 
-        (
-            _,
-            _,
-            _,
-            get_metrics_json,
-            update_progression_metrics,
-        ) = namespace["_create_progression_instrumentation"](28080)
+    # Verify JSON reflects updates
+    update_progression_metrics({
+        "currentStep": 42,
+        "progressPercentage": 84,
+        "trainMetrics": {"loss": 0.25},
+    })
+    metrics = json.loads(get_metrics_json())
+    assert metrics["currentStep"] == 42
+    assert metrics["progressPercentage"] == 84
+    assert metrics["trainMetrics"] == {"loss": 0.25}
 
-        import json
-
-        # Verify default state returns valid JSON with all expected fields
-        raw = get_metrics_json()
-        assert isinstance(raw, str)
-        metrics = json.loads(raw)
-        expected_keys = {
-            "progressPercentage",
-            "estimatedRemainingSeconds",
-            "currentStep",
-            "totalSteps",
-            "currentEpoch",
-            "totalEpochs",
-            "trainMetrics",
-            "evalMetrics",
-        }
-        assert set(metrics.keys()) == expected_keys
-
-        # Verify JSON reflects updates
-        update_progression_metrics({
-            "currentStep": 42,
-            "progressPercentage": 84,
-            "trainMetrics": {"loss": 0.25},
-        })
-        metrics = json.loads(get_metrics_json())
-        assert metrics["currentStep"] == 42
-        assert metrics["progressPercentage"] == 84
-        assert metrics["trainMetrics"] == {"loss": 0.25}
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+    print("test execution complete")
 
 
-def test_progression_metrics_handler_do_get():
+def test_progression_metrics_handler_do_get(progression_instrumentation):
     """Test ProgressionMetricsHandler serves metrics JSON over HTTP.
 
     Validates that:
@@ -4595,76 +4571,44 @@ def test_progression_metrics_handler_do_get():
     """
     print("Executing test: Progression Metrics Handler do_GET.")
 
-    import sys
-    from unittest.mock import Mock
+    _, _, handler_class, _, update_progression_metrics = progression_instrumentation
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    import http.server
+    import json
+    import threading
+
+    # Seed some state so we can verify it in the response
+    update_progression_metrics({
+        "currentStep": 10,
+        "totalSteps": 100,
+        "progressPercentage": 10,
+    })
+
+    # Start a real HTTP server on an ephemeral port
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        import urllib.request
 
-        (
-            _,
-            _,
-            handler_class,
-            _,
-            update_progression_metrics,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "application/json"
 
-        import http.server
-        import json
-        import threading
-
-        # Seed some state so we can verify it in the response
-        update_progression_metrics({
-            "currentStep": 10,
-            "totalSteps": 100,
-            "progressPercentage": 10,
-        })
-
-        # Start a real HTTP server on an ephemeral port
-        server = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-
-        try:
-            import urllib.request
-
-            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/")
-            assert resp.status == 200
-            assert resp.headers["Content-Type"] == "application/json"
-
-            body = json.loads(resp.read().decode("utf-8"))
-            assert body["currentStep"] == 10
-            assert body["totalSteps"] == 100
-            assert body["progressPercentage"] == 10
-        finally:
-            server.shutdown()
-
-        print("test execution complete")
+        body = json.loads(resp.read().decode("utf-8"))
+        assert body["currentStep"] == 10
+        assert body["totalSteps"] == 100
+        assert body["progressPercentage"] == 10
     finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+        server.shutdown()
+        server.server_close()
+
+    print("test execution complete")
 
 
-def test_on_train_begin_initial_metrics():
+def test_on_train_begin_initial_metrics(progression_instrumentation):
     """Test on_train_begin sets initial metrics for a fresh training start.
 
     Validates that:
@@ -4674,69 +4618,37 @@ def test_on_train_begin_initial_metrics():
     """
     print("Executing test: on_train_begin initial metrics.")
 
-    import sys
     from unittest.mock import Mock
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
 
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+    import json
 
-        (
-            _,
-            callback_class,
-            _,
-            get_metrics_json,
-            _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+    callback = callback_class(metrics_port=28080)
+    args = Mock()
+    args.num_train_epochs = 5
+    state = Mock()
+    state.global_step = 0
+    state.max_steps = 500
+    state.epoch = 0.0
+    state.is_world_process_zero = False
+    control = Mock()
 
-        import json
+    callback.on_train_begin(args, state, control)
 
-        # --- Test fresh start (global_step = 0) ---
-        callback = callback_class(metrics_port=28080)
-        args = Mock()
-        args.num_train_epochs = 5
-        state = Mock()
-        state.global_step = 0
-        state.max_steps = 500
-        state.epoch = 0.0
-        state.is_world_process_zero = False
-        control = Mock()
+    metrics = json.loads(get_metrics_json())
+    assert metrics["currentStep"] == 0
+    assert metrics["totalSteps"] == 500
+    assert metrics["totalEpochs"] == 5
+    assert metrics["currentEpoch"] == 0.0
+    assert metrics["progressPercentage"] == 0
+    assert callback.start_time is not None
+    assert callback.server is None
 
-        callback.on_train_begin(args, state, control)
-
-        metrics = json.loads(get_metrics_json())
-        assert metrics["currentStep"] == 0
-        assert metrics["totalSteps"] == 500
-        assert metrics["totalEpochs"] == 5
-        assert metrics["currentEpoch"] == 0.0
-        assert metrics["progressPercentage"] == 0
-        assert callback.start_time is not None
-        assert callback.server is None
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+    print("test execution complete")
 
 
-def test_on_train_begin_checkpoint_resume():
+def test_on_train_begin_checkpoint_resume(progression_instrumentation):
     """Test on_train_begin calculates initial progress for checkpoint resume.
 
     When global_step > 0 at the start, progressPercentage should reflect
@@ -4744,66 +4656,35 @@ def test_on_train_begin_checkpoint_resume():
     """
     print("Executing test: on_train_begin checkpoint resume.")
 
-    import sys
     from unittest.mock import Mock
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
 
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+    import json
 
-        (
-            _,
-            callback_class,
-            _,
-            get_metrics_json,
-            _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+    callback = callback_class(metrics_port=28080)
+    args = Mock()
+    args.num_train_epochs = 10
+    state = Mock()
+    state.global_step = 200
+    state.max_steps = 1000
+    state.epoch = 2.0
+    state.is_world_process_zero = False
+    control = Mock()
 
-        import json
+    callback.on_train_begin(args, state, control)
 
-        callback = callback_class(metrics_port=28080)
-        args = Mock()
-        args.num_train_epochs = 10
-        state = Mock()
-        state.global_step = 200
-        state.max_steps = 1000
-        state.epoch = 2.0
-        state.is_world_process_zero = False
-        control = Mock()
+    metrics = json.loads(get_metrics_json())
+    assert metrics["currentStep"] == 200
+    assert metrics["totalSteps"] == 1000
+    assert metrics["totalEpochs"] == 10
+    assert metrics["currentEpoch"] == 2.0
+    assert metrics["progressPercentage"] == 20
 
-        callback.on_train_begin(args, state, control)
-
-        metrics = json.loads(get_metrics_json())
-        assert metrics["currentStep"] == 200
-        assert metrics["totalSteps"] == 1000
-        assert metrics["totalEpochs"] == 10
-        assert metrics["currentEpoch"] == 2.0
-        assert metrics["progressPercentage"] == 20
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+    print("test execution complete")
 
 
-def test_on_train_end_termination_message():
+def test_on_train_end_termination_message(progression_instrumentation):
     """Test on_train_end writes termination message for world process zero.
 
     Validates that:
@@ -4812,90 +4693,59 @@ def test_on_train_end_termination_message():
     """
     print("Executing test: on_train_end termination message.")
 
-    import sys
+    import io
     from unittest.mock import Mock, mock_open, patch
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    _, callback_class, _, get_metrics_json, update_progression_metrics = (
+        progression_instrumentation
+    )
 
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+    import json
 
-        (
-            _,
-            callback_class,
-            _,
-            get_metrics_json,
-            update_progression_metrics,
-        ) = namespace["_create_progression_instrumentation"](28080)
+    # Pre-seed train/eval metrics so they appear in termination message
+    update_progression_metrics({
+        "trainMetrics": {"loss": 0.1, "learning_rate": 0.0001},
+        "evalMetrics": {"eval_loss": 0.2},
+    })
 
-        import json
+    callback = callback_class(metrics_port=28080)
+    args = Mock()
+    args.num_train_epochs = 3
+    state = Mock()
+    state.global_step = 300
+    state.max_steps = 300
+    state.epoch = 3.0
+    state.is_world_process_zero = True
+    control = Mock()
 
-        # Pre-seed train/eval metrics so they appear in termination message
-        update_progression_metrics({
-            "trainMetrics": {"loss": 0.1, "learning_rate": 0.0001},
-            "evalMetrics": {"eval_loss": 0.2},
-        })
+    # Capture what gets written to /dev/termination-log
+    written_data = io.StringIO()
+    m = mock_open()
+    m.return_value.write = written_data.write
 
-        callback = callback_class(metrics_port=28080)
-        args = Mock()
-        args.num_train_epochs = 3
-        state = Mock()
-        state.global_step = 300
-        state.max_steps = 300
-        state.epoch = 3.0
-        state.is_world_process_zero = True
-        control = Mock()
+    with patch("builtins.open", m):
+        callback.on_train_begin(args, state, control)
+        callback.on_train_end(args, state, control)
 
-        import io
+    m.assert_called_once_with("/dev/termination-log", "w")
+    termination_json = written_data.getvalue()
+    termination = json.loads(termination_json)
 
-        # Capture what gets written to /dev/termination-log
-        written_data = io.StringIO()
-        m = mock_open()
-        m.return_value.write = written_data.write
+    assert termination["currentStep"] == 300
+    assert termination["totalSteps"] == 300
+    assert termination["totalEpochs"] == 3
+    assert termination["currentEpoch"] == 3.0
+    assert termination["progressPercentage"] == 100
+    assert termination["estimatedRemainingSeconds"] == 0
+    assert termination["trainMetrics"]["loss"] == 0.1
+    assert termination["evalMetrics"]["eval_loss"] == 0.2
 
-        with patch("builtins.open", m):
-            callback.on_train_begin(args, state, control)
-            callback.on_train_end(args, state, control)
+    assert callback.training_finished is True
 
-        m.assert_called_once_with("/dev/termination-log", "w")
-        termination_json = written_data.getvalue()
-        termination = json.loads(termination_json)
-
-        assert termination["currentStep"] == 300
-        assert termination["totalSteps"] == 300
-        assert termination["totalEpochs"] == 3
-        assert termination["currentEpoch"] == 3.0
-        assert termination["progressPercentage"] == 100
-        assert termination["estimatedRemainingSeconds"] == 0
-        assert termination["trainMetrics"]["loss"] == 0.1
-        assert termination["evalMetrics"]["eval_loss"] == 0.2
-
-        # Verify training_finished flag is set
-        assert callback.training_finished is True
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+    print("test execution complete")
 
 
-def test_on_train_end_non_world_process_zero():
+def test_on_train_end_non_world_process_zero(progression_instrumentation):
     """Test on_train_end skips termination message for non-world-process-zero.
 
     Validates that training_finished is set and metrics are updated, but
@@ -4903,65 +4753,34 @@ def test_on_train_end_non_world_process_zero():
     """
     print("Executing test: on_train_end non-world-process-zero.")
 
-    import sys
     from unittest.mock import Mock, patch
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
 
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+    import json
 
-        (
-            _,
-            callback_class,
-            _,
-            get_metrics_json,
-            _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+    callback = callback_class(metrics_port=28080)
+    args = Mock()
+    args.num_train_epochs = 2
+    state = Mock()
+    state.global_step = 100
+    state.max_steps = 100
+    state.epoch = 2.0
+    state.is_world_process_zero = False
+    control = Mock()
 
-        import json
+    with patch("builtins.open") as mock_file:
+        callback.on_train_begin(args, state, control)
+        callback.on_train_end(args, state, control)
+        mock_file.assert_not_called()
 
-        callback = callback_class(metrics_port=28080)
-        args = Mock()
-        args.num_train_epochs = 2
-        state = Mock()
-        state.global_step = 100
-        state.max_steps = 100
-        state.epoch = 2.0
-        state.is_world_process_zero = False
-        control = Mock()
+    assert callback.training_finished is True
 
-        with patch("builtins.open") as mock_file:
-            callback.on_train_begin(args, state, control)
-            callback.on_train_end(args, state, control)
-            mock_file.assert_not_called()
+    metrics = json.loads(get_metrics_json())
+    assert metrics["progressPercentage"] == 100
+    assert metrics["estimatedRemainingSeconds"] == 0
 
-        assert callback.training_finished is True
-
-        metrics = json.loads(get_metrics_json())
-        assert metrics["progressPercentage"] == 100
-        assert metrics["estimatedRemainingSeconds"] == 0
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+    print("test execution complete")
 
 
 def test_apply_progression_tracking():
@@ -4971,6 +4790,9 @@ def test_apply_progression_tracking():
     - Trainer.__init__ is replaced with an instrumented version
     - The original __init__ is still called
     - KubeflowProgressCallback is added to the trainer callbacks
+
+    Note: uses a custom mock setup (FakeTrainer class) instead of the shared
+    fixture because Mock objects forbid setting __init__.
     """
     print("Executing test: apply_progression_tracking.")
 
@@ -4978,7 +4800,6 @@ def test_apply_progression_tracking():
     import types
     from unittest.mock import Mock
 
-    # Build a real trainer module stub with a real class so __init__ can be patched
     trainer_stub = types.ModuleType("transformers.trainer")
     init_call_log = []
 
@@ -5023,20 +4844,15 @@ def test_apply_progression_tracking():
 
         original_init = FakeTrainer.__init__
 
-        # Apply the patch
         apply_fn()
 
-        # Verify Trainer.__init__ was replaced
         assert trainer_stub.Trainer.__init__ != original_init
 
-        # Create a Trainer instance through the patched __init__
         instance = trainer_stub.Trainer()
 
-        # Verify original __init__ was called
         assert len(init_call_log) == 1
         assert init_call_log[0][0] == "original"
 
-        # Verify KubeflowProgressCallback was added
         assert len(instance.callback_handler.callbacks) == 1
         added_callback = instance.callback_handler.callbacks[0]
         assert isinstance(added_callback, callback_class)
@@ -5044,14 +4860,13 @@ def test_apply_progression_tracking():
 
         print("test execution complete")
     finally:
-        # Clean up mock
         if "transformers" in sys.modules:
             del sys.modules["transformers"]
         if "transformers.trainer" in sys.modules:
             del sys.modules["transformers.trainer"]
 
 
-def test_on_log_ignores_non_numeric_values():
+def test_on_log_ignores_non_numeric_values(progression_instrumentation):
     """Test on_log silently ignores non-numeric, non-tensor metric values.
 
     Validates that:
@@ -5062,71 +4877,40 @@ def test_on_log_ignores_non_numeric_values():
     """
     print("Executing test: on_log ignores non-numeric values.")
 
-    import sys
     from unittest.mock import Mock
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
 
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+    import json
 
-        (
-            _,
-            callback_class,
-            _,
-            get_metrics_json,
-            _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+    callback = callback_class(metrics_port=28080)
+    args = Mock()
+    state = Mock()
+    control = Mock()
 
-        import json
+    callback.on_log(
+        args,
+        state,
+        control,
+        logs={
+            "loss": 0.5,
+            "some_string": "not a number",
+            "some_none": None,
+            "some_list": [1, 2, 3],
+            "some_dict": {"nested": True},
+            "eval_loss": 0.3,
+            "eval_string": "also not a number",
+        },
+    )
 
-        callback = callback_class(metrics_port=28080)
-        args = Mock()
-        state = Mock()
-        control = Mock()
+    metrics = json.loads(get_metrics_json())
+    assert metrics["trainMetrics"] == {"loss": 0.5}
+    assert metrics["evalMetrics"] == {"eval_loss": 0.3}
 
-        callback.on_log(
-            args,
-            state,
-            control,
-            logs={
-                "loss": 0.5,
-                "some_string": "not a number",
-                "some_none": None,
-                "some_list": [1, 2, 3],
-                "some_dict": {"nested": True},
-                "eval_loss": 0.3,
-                "eval_string": "also not a number",
-            },
-        )
-
-        metrics = json.loads(get_metrics_json())
-        assert metrics["trainMetrics"] == {"loss": 0.5}
-        assert metrics["evalMetrics"] == {"eval_loss": 0.3}
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+    print("test execution complete")
 
 
-def test_on_log_empty_and_none_logs():
+def test_on_log_empty_and_none_logs(progression_instrumentation):
     """Test on_log handles empty and None logs gracefully.
 
     Validates that:
@@ -5135,64 +4919,33 @@ def test_on_log_empty_and_none_logs():
     """
     print("Executing test: on_log empty and None logs.")
 
-    import sys
     from unittest.mock import Mock
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
 
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+    import json
 
-        (
-            _,
-            callback_class,
-            _,
-            get_metrics_json,
-            _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+    callback = callback_class(metrics_port=28080)
+    args = Mock()
+    state = Mock()
+    control = Mock()
 
-        import json
+    # Test with None logs
+    callback.on_log(args, state, control, logs=None)
+    metrics = json.loads(get_metrics_json())
+    assert metrics["trainMetrics"] == {}
+    assert metrics["evalMetrics"] == {}
 
-        callback = callback_class(metrics_port=28080)
-        args = Mock()
-        state = Mock()
-        control = Mock()
+    # Test with empty logs
+    callback.on_log(args, state, control, logs={})
+    metrics = json.loads(get_metrics_json())
+    assert metrics["trainMetrics"] == {}
+    assert metrics["evalMetrics"] == {}
 
-        # Test with None logs
-        callback.on_log(args, state, control, logs=None)
-        metrics = json.loads(get_metrics_json())
-        assert metrics["trainMetrics"] == {}
-        assert metrics["evalMetrics"] == {}
-
-        # Test with empty logs
-        callback.on_log(args, state, control, logs={})
-        metrics = json.loads(get_metrics_json())
-        assert metrics["trainMetrics"] == {}
-        assert metrics["evalMetrics"] == {}
-
-        print("test execution complete")
-    finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+    print("test execution complete")
 
 
-def test_on_train_begin_server_startup():
+def test_on_train_begin_server_startup(progression_instrumentation):
     """Test on_train_begin starts HTTP server for world process zero.
 
     Validates that:
@@ -5202,70 +4955,40 @@ def test_on_train_begin_server_startup():
     """
     print("Executing test: on_train_begin server startup.")
 
-    import sys
     from unittest.mock import Mock
 
-    # Mock transformers module for exec environment
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
+    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
+
+    import json
+    import urllib.request
+
+    # Use port 0 to let the OS assign an ephemeral port
+    callback = callback_class(metrics_port=0)
+    args = Mock()
+    args.num_train_epochs = 3
+    state = Mock()
+    state.global_step = 0
+    state.max_steps = 100
+    state.epoch = 0.0
+    state.is_world_process_zero = True
+    control = Mock()
+
+    callback.on_train_begin(args, state, control)
+
+    assert callback.server is not None
+    port = callback.server.server_address[1]
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=0)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
-
-        (
-            _,
-            callback_class,
-            _,
-            get_metrics_json,
-            _,
-        ) = namespace["_create_progression_instrumentation"](0)
-
-        import json
-        import urllib.request
-
-        # Use port 0 to let the OS assign an ephemeral port
-        callback = callback_class(metrics_port=0)
-        args = Mock()
-        args.num_train_epochs = 3
-        state = Mock()
-        state.global_step = 0
-        state.max_steps = 100
-        state.epoch = 0.0
-        state.is_world_process_zero = True
-        control = Mock()
-
-        callback.on_train_begin(args, state, control)
-
-        assert callback.server is not None
-        port = callback.server.server_address[1]
-
-        try:
-            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/")
-            assert resp.status == 200
-            body = json.loads(resp.read().decode("utf-8"))
-            assert body["totalSteps"] == 100
-            assert body["totalEpochs"] == 3
-        finally:
-            callback.server.shutdown()
-
-        print("test execution complete")
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
+        assert resp.status == 200
+        body = json.loads(resp.read().decode("utf-8"))
+        assert body["totalSteps"] == 100
+        assert body["totalEpochs"] == 3
     finally:
-        # Clean up mock
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
+        callback.server.shutdown()
+        callback.server.server_close()
+
+    print("test execution complete")
 
 
 if __name__ == "__main__":

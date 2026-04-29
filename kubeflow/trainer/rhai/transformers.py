@@ -202,12 +202,7 @@ class TransformersTrainer:
 
 
 def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:  # pragma: no cover
-    """Checkpoint instrumentation injected into training pods.
-
-    Coverage: extracted via inspect.getsource() and exec'd as a string in pods;
-    the original function object is never called, so coverage.py cannot trace it.
-    Tested indirectly through exec-based tests (e.g. test_checkpoint_injection_code_execution_*).
-    """
+    """Checkpoint instrumentation injected into training pods."""
     from collections.abc import Callable
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import os
