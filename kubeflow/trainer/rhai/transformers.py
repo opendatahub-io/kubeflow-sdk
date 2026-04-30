@@ -744,7 +744,7 @@ def get_jit_checkpoint_injection_code(
 # =============================================================================
 
 # Import checkpoint instrumentation from installed package
-from kubeflow.trainer.checkpoint_instrumentation import create_checkpoint_instrumentation
+from kubeflow.trainer.rhai.instrumentation.checkpoint import create_checkpoint_instrumentation
 
 print("[Kubeflow] Initializing checkpoint instrumentation", flush=True)
 

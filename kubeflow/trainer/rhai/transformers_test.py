@@ -2091,7 +2091,7 @@ def test_auto_resume_code_generation():
 
     # Verify checkpoint instrumentation is imported from package (not inlined)
     assert (
-        "from kubeflow.trainer.checkpoint_instrumentation import create_checkpoint_instrumentation"
+        "from kubeflow.trainer.rhai.instrumentation.checkpoint import create_checkpoint_instrumentation"
         in checkpoint_header
     ), "Should import checkpoint instrumentation from package"
     assert (
