@@ -21,7 +21,11 @@ import random
 import re
 import string
 import time
+<<<<<<< HEAD
 from typing import Any, get_args
+=======
+from typing import Any
+>>>>>>> upstream/main
 import uuid
 
 from kubeflow_trainer_api import models
@@ -290,10 +294,8 @@ class KubernetesBackend(RuntimeBackend):
         labels = None
         annotations = None
         name = None
-        spec_labels = None
-        spec_annotations = None
         trainer_overrides = {}
-        pod_template_overrides = None
+        runtime_patches = None
 
         if options:
             for option in options:
@@ -304,12 +306,10 @@ class KubernetesBackend(RuntimeBackend):
             annotations = metadata_section.get("annotations")
             name = metadata_section.get("name")
 
-            # Extract spec-level labels/annotations and other spec configurations
+            # Extract spec-level configurations
             spec_section = job_spec.get("spec", {})
-            spec_labels = spec_section.get("labels")
-            spec_annotations = spec_section.get("annotations")
             trainer_overrides = spec_section.get("trainer", {})
-            pod_template_overrides = spec_section.get("podTemplateOverrides")
+            runtime_patches = spec_section.get("runtimePatches")
 
         train_job_name = name or (
             random.choice(string.ascii_lowercase)
@@ -322,9 +322,7 @@ class KubernetesBackend(RuntimeBackend):
             initializer=initializer,
             trainer=trainer,
             trainer_overrides=trainer_overrides,
-            spec_labels=spec_labels,
-            spec_annotations=spec_annotations,
-            pod_template_overrides=pod_template_overrides,
+            runtime_patches=runtime_patches,
         )
 
         # Apply RHAI trainer progression tracking annotations to metadata
@@ -474,9 +472,14 @@ class KubernetesBackend(RuntimeBackend):
         if not status.issubset(job_statuses):
             raise ValueError(f"Expected status {status} must be a subset of {job_statuses}")
 
-        if polling_interval > timeout:
+        if polling_interval <= 0:
             raise ValueError(
-                f"Polling interval {polling_interval} must be less than timeout: {timeout}"
+                f"Polling interval must be a positive number, got polling_interval={polling_interval}"
+            )
+        if polling_interval >= timeout:
+            raise ValueError(
+                f"Polling interval must be strictly less than timeout. "
+                f"Received polling_interval={polling_interval}, timeout={timeout}"
             )
 
         for _ in range(round(timeout / polling_interval)):
@@ -764,11 +767,15 @@ class KubernetesBackend(RuntimeBackend):
         | types.BuiltinTrainer
         | None = None,
         trainer_overrides: dict[str, Any] | None = None,
+<<<<<<< HEAD
         spec_labels: dict[str, str] | None = None,
         spec_annotations: dict[str, str] | None = None,
         pod_template_overrides: models.IoK8sApiCoreV1PodTemplateSpec | None = None,
+=======
+        runtime_patches: list[dict[str, Any]] | None = None,
+>>>>>>> upstream/main
     ) -> models.TrainerV1alpha1TrainJobSpec:
-        """Get TrainJob spec from the given parameters"""
+        """Get TrainJob spec from the given parameters."""
 
         if runtime is None:
             runtime = self.get_runtime(constants.DEFAULT_TRAINING_RUNTIME)
@@ -816,19 +823,26 @@ class KubernetesBackend(RuntimeBackend):
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
 
+<<<<<<< HEAD
         # Setup RHAI trainer storage: parse output_dir for volume mounts (PVC/S3)
         # and inject cloud storage credentials from data connection secret
         if is_rhai_trainer:
             _, trainer_cr, pod_template_overrides = rhai_utils.setup_rhai_trainer_storage(
                 trainer, trainer_cr, pod_template_overrides, self.core_api, self.namespace
             )
+=======
+        # Convert runtime patches dicts to native model objects.
+        runtime_patch_models = None
+        if runtime_patches:
+            runtime_patch_models = [
+                models.TrainerV1alpha1RuntimePatch.from_dict(p) for p in runtime_patches
+            ]
+>>>>>>> upstream/main
 
         trainjob_spec = models.TrainerV1alpha1TrainJobSpec(
             runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name),
             trainer=trainer_cr if trainer_cr != models.TrainerV1alpha1Trainer() else None,
-            labels=spec_labels,
-            annotations=spec_annotations,
-            pod_template_overrides=pod_template_overrides,
+            runtimePatches=runtime_patch_models,
         )
 
         # Add initializer if users define it.
