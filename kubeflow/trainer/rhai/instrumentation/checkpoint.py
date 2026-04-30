@@ -18,6 +18,7 @@ This module provides checkpoint management functionality that runs inside traini
 It's imported by training scripts instead of being inlined, reducing command size significantly.
 """
 
+
 def create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
     """Checkpoint instrumentation injected into training pods."""
     from collections.abc import Callable
