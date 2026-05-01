@@ -713,7 +713,8 @@ def test_get_trainer_cr_non_pytorch_framework():
     trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
 
     command_str = " ".join(trainer_crd.command)
-    assert "python" in command_str
+    # DEFAULT_COMMAND uses "python" as entrypoint, TORCH_COMMAND uses "torchrun"
+    assert 'python "' in command_str
     assert "torchrun" not in command_str
 
     print("test execution complete")
@@ -4393,26 +4394,27 @@ def progression_instrumentation():
     mock_transformers.trainer = Mock()
     sys.modules["transformers"] = mock_transformers
 
-    wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-    wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-    lines = wrapper_code.split("\n")
-    modified_lines = []
-    for line in lines:
-        if line.strip() == "apply_progression_tracking()":
-            modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
+    try:
+        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
+        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
+        lines = wrapper_code.split("\n")
+        modified_lines = []
+        for line in lines:
+            if line.strip() == "apply_progression_tracking()":
+                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
+            else:
+                modified_lines.append(line)
+        wrapper_code = "\n".join(modified_lines)
+        namespace = {}
+        exec(wrapper_code, namespace)
+
+        components = namespace["_create_progression_instrumentation"](28080)
+        yield components
+    finally:
+        if prev_transformers is _sentinel:
+            sys.modules.pop("transformers", None)
         else:
-            modified_lines.append(line)
-    wrapper_code = "\n".join(modified_lines)
-    namespace = {}
-    exec(wrapper_code, namespace)
-
-    components = namespace["_create_progression_instrumentation"](28080)
-    yield components
-
-    if prev_transformers is _sentinel:
-        sys.modules.pop("transformers", None)
-    else:
-        sys.modules["transformers"] = prev_transformers
+            sys.modules["transformers"] = prev_transformers
 
 
 def test_update_progression_metrics(progression_instrumentation):
@@ -4991,9 +4993,9 @@ def test_on_train_begin_server_startup(progression_instrumentation):
     callback.on_train_begin(args, state, control)
 
     assert callback.server is not None
-    port = callback.server.server_address[1]
 
     try:
+        port = callback.server.server_address[1]
         resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
         assert resp.status == 200
         body = json.loads(resp.read().decode("utf-8"))
