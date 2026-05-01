@@ -4061,6 +4061,11 @@ except Exception as e:
     assert result.returncode == 0, "Compatible version test failed"
     assert "SUCCESS: Different but compatible SDK versions work without error" in result.stdout
 
+    # Verify warning message is shown for version mismatch
+    assert "[Kubeflow] Warning: This job was created with SDK" in result.stdout
+    assert "but the runtime image has SDK" in result.stdout
+    assert "If you encounter unexpected errors" in result.stdout
+
     print("test execution complete")
 
 

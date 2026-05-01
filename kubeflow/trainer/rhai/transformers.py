@@ -264,6 +264,17 @@ if not client_version_valid or not runtime_version_valid:
 
     raise RuntimeError("\\n".join(error_parts))
 
+# Warn if versions are mismatched (both valid but different)
+if CLIENT_SDK_VERSION != RUNTIME_SDK_VERSION:
+    print(
+        f"[Kubeflow] Warning: This job was created with SDK {{CLIENT_SDK_VERSION}} "
+        f"but the runtime image has SDK {{RUNTIME_SDK_VERSION}}. "
+        f"If you encounter unexpected errors, consider matching the versions by either: "
+        f"(1) adding 'kubeflow-trainer={{{{CLIENT_SDK_VERSION}}}}' to packages_to_install, or "
+        f"(2) using a training runtime image with SDK {{CLIENT_SDK_VERSION}}.",
+        flush=True
+    )
+
 try:
     # Import progression instrumentation (guaranteed to exist if both versions >= 0.4.0)
     from kubeflow.trainer.rhai.instrumentation.progression import create_progression_instrumentation
@@ -528,6 +539,17 @@ if not client_version_valid or not runtime_version_valid:
         )
 
     raise RuntimeError("\\n".join(error_parts))
+
+# Warn if versions are mismatched (both valid but different)
+if CLIENT_SDK_VERSION != RUNTIME_SDK_VERSION:
+    print(
+        f"[Kubeflow] Warning: This job was created with SDK {{CLIENT_SDK_VERSION}} "
+        f"but the runtime image has SDK {{RUNTIME_SDK_VERSION}}. "
+        f"If you encounter unexpected errors, consider matching the versions by either: "
+        f"(1) adding 'kubeflow-trainer={{{{CLIENT_SDK_VERSION}}}}' to packages_to_install, or "
+        f"(2) using a training runtime image with SDK {{CLIENT_SDK_VERSION}}.",
+        flush=True
+    )
 
 try:
     # Import checkpoint instrumentation (guaranteed to exist if both versions >= 0.4.0)
