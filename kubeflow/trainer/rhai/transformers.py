@@ -796,9 +796,7 @@ try:
     print("[Kubeflow] Checkpoint instrumentation enabled", flush=True)
 except Exception as e:
     raise RuntimeError(
-        f"Failed to initialize checkpoint instrumentation.\\n"
-        f"Client SDK: {{CLIENT_SDK_VERSION}}, Runtime SDK: {{RUNTIME_SDK_VERSION}}\\n"
-        f"Error: {{type(e).__name__}}: {{e}}"
+        f"Failed to initialize checkpoint instrumentation: {{type(e).__name__}}: {{e}}"
     ) from e
 """
 

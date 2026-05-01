@@ -4192,10 +4192,13 @@ with patch('kubeflow.trainer.rhai.instrumentation.checkpoint.create_checkpoint_i
         sys.exit(1)
     except RuntimeError as e:
         error_msg = str(e)
-        # Verify error message shows the actual error
+        # Verify error message shows the actual error (not SDK versions)
         assert "Failed to initialize checkpoint instrumentation" in error_msg
-        assert "Invalid configuration" in error_msg
         assert "ValueError" in error_msg
+        assert "Invalid configuration" in error_msg
+        # Should NOT mention SDK versions (already verified as compatible)
+        assert "Client SDK:" not in error_msg
+        assert "Runtime SDK:" not in error_msg
         print("SUCCESS: Generic exception handled correctly")
         sys.exit(0)
 """
