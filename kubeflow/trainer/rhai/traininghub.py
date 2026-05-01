@@ -369,7 +369,7 @@ from packaging import version
 
 CLIENT_SDK_VERSION = "{client_sdk_version}"
 RUNTIME_SDK_VERSION = runtime_kubeflow.__version__
-MIN_SDK_VERSION = "0.4.0"
+MIN_SDK_VERSION = "{constants.MIN_SDK_VERSION}"
 
 # Check if both client and runtime SDK versions meet minimum requirement
 client_version_valid = version.parse(CLIENT_SDK_VERSION) >= version.parse(MIN_SDK_VERSION)
