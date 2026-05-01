@@ -23,6 +23,9 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    concurrency:
+      group: sync-upstream-${{ github.repository }}-${{ inputs.upstream_branch || 'main' }}
+      cancel-in-progress: false
     # Outputs are consumed by the snyk-scan job (separate runner)
     outputs:
       has_changes: ${{ steps.diffcheck.outputs.has_changes }}
@@ -42,6 +45,7 @@ jobs:
           EXISTING=$(gh pr list \
             --repo "$GITHUB_REPOSITORY" \
             --head "${HEAD_BRANCH}" \
+            --base "${DOWNSTREAM_BRANCH}" \
             --state open \
             --label "${LABEL}" \
             --json number \
