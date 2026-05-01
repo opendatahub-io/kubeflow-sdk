@@ -263,29 +263,28 @@ def test_func_callable_validation(test_case):
     "test_case",
     [
         TestCase(
-            name="basic generation - returns string",
+            name="basic generation - returns string with module import",
             expected_status="success",
             config={"port": 28080},
             expected_output=[
                 ("isinstance", str),
-                ("class KubeflowProgressCallback", True),
-                ("class ProgressionMetricsHandler", True),
-                ("def apply_progression_tracking", True),
+                ("import kubeflow as runtime_kubeflow", True),
+                ("from kubeflow.trainer.rhai.instrumentation.progression import create_progression_instrumentation", True),
+                ("apply_progression_tracking", True),
                 ("{{user_func_import_and_call}}", True),
                 ("metrics_port=28080", True),
             ],
         ),
         TestCase(
-            name="self-contained - no SDK imports",
+            name="module import - SDK version checking",
             expected_status="success",
             config={"port": 28080},
             expected_output=[
-                ("from kubeflow", False),
-                ("import kubeflow", False),
-                ("class ProgressionMetricsHandler", True),
-                ("class KubeflowProgressCallback", True),
-                ("def apply_progression_tracking", True),
-                ("from transformers import", True),
+                ("import kubeflow", True),
+                ("CLIENT_SDK_VERSION", True),
+                ("RUNTIME_SDK_VERSION", True),
+                ("MIN_SDK_VERSION", True),
+                ("version.parse", True),
             ],
         ),
         TestCase(
@@ -300,66 +299,25 @@ def test_func_callable_validation(test_case):
             ],
         ),
         TestCase(
-            name="completeness - all callback methods",
+            name="error handling - version compatibility",
             expected_status="success",
             config={"port": 28080},
             expected_output=[
-                ("def on_train_begin", True),
-                ("def on_step_end", True),
-                ("def on_log", True),
-                ("def on_train_end", True),
-                ("_original_init", True),
-                ("def _instrumented_trainer_init", True),
+                ("if not client_version_valid or not runtime_version_valid:", True),
+                ("packages_to_install", True),
+                ("clusterTrainingRuntimes", True),
+                ("RuntimeError", True),
             ],
         ),
         TestCase(
-            name="implementation details - progress tracking logic",
+            name="initialization messages",
             expected_status="success",
             config={"port": 28080},
             expected_output=[
-                ("from kubeflow.trainer.rhai", False),
-                ("state.global_step", True),
-                ("progress_pct", True),
-                ("elapsed_sec", True),
-            ],
-        ),
-        TestCase(
-            name="dataclass - ProgressionMetricsState",
-            expected_status="success",
-            config={"port": 28080},
-            expected_output=[
-                ("@dataclass", True),
-                ("class ProgressionMetricsState", True),
-                ("progressPercentage", True),
-                ("estimatedRemainingSeconds", True),
-                ("currentStep", True),
-                ("totalSteps", True),
-                ("trainMetrics", True),
-                ("evalMetrics", True),
-                ("asdict", True),
-            ],
-        ),
-        TestCase(
-            name="metrics state initialization",
-            expected_status="success",
-            config={"port": 28080},
-            expected_output=[
-                ("progressPercentage: int | None = None", True),
-                ("currentStep: int = 0", True),
-                ("currentEpoch: float = 0.0", True),
-                ("trainMetrics: dict[str, Any] = field(default_factory=dict)", True),
-                ("evalMetrics: dict[str, Any] = field(default_factory=dict)", True),
-            ],
-        ),
-        TestCase(
-            name="thread safety mechanisms",
-            expected_status="success",
-            config={"port": 28080},
-            expected_output=[
-                ("_progression_metrics_lock", True),
-                ("threading.Lock()", True),
-                ("with _progression_metrics_lock:", True),
-                ("_update_progression_metrics", True),
+                ("[Kubeflow] Initializing progression tracking", True),
+                ("[Kubeflow] Progression tracking enabled", True),
+                ("Client SDK", True),
+                ("Runtime SDK", True),
             ],
         ),
     ],
@@ -791,21 +749,10 @@ def test_callback_completion_state_protection(test_case):
     sys.modules["transformers"] = mock_transformers
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        # Replace user code placeholder
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        # Skip the actual patching call (line after _create_progression_instrumentation)
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            # Comment out the standalone apply_progression_tracking() call
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        # Import progression instrumentation directly from module
+        from kubeflow.trainer.rhai.instrumentation.progression import (
+            create_progression_instrumentation,
+        )
 
         (
             _,
@@ -813,7 +760,7 @@ def test_callback_completion_state_protection(test_case):
             _,
             get_metrics_json,
             _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        ) = create_progression_instrumentation(28080)
         callback = callback_class(metrics_port=28080)
 
         import json
@@ -949,20 +896,10 @@ def test_completion_detection_via_on_step_end(test_case):
     sys.modules["transformers"] = mock_transformers
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        # Replace user code placeholder
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        # Skip the actual patching call
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        # Import progression instrumentation directly from module
+        from kubeflow.trainer.rhai.instrumentation.progression import (
+            create_progression_instrumentation,
+        )
 
         (
             _,
@@ -970,7 +907,7 @@ def test_completion_detection_via_on_step_end(test_case):
             _,
             get_metrics_json,
             _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        ) = create_progression_instrumentation(28080)
         callback = callback_class(metrics_port=28080)
 
         import json
@@ -1099,21 +1036,10 @@ def test_callback_metrics_categorization(test_case):
     sys.modules["transformers"] = mock_transformers
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        # Replace user code placeholder
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        # Skip the actual patching call (line after _create_progression_instrumentation)
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            # Comment out the standalone apply_progression_tracking() call
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        # Import progression instrumentation directly from module
+        from kubeflow.trainer.rhai.instrumentation.progression import (
+            create_progression_instrumentation,
+        )
 
         (
             _,
@@ -1121,7 +1047,7 @@ def test_callback_metrics_categorization(test_case):
             _,
             get_metrics_json,
             _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        ) = create_progression_instrumentation(28080)
         callback = callback_class(metrics_port=28080)
 
         import json
@@ -1247,18 +1173,10 @@ def test_honest_progress_reporting(test_case):
     sys.modules["transformers"] = mock_transformers
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        # Import progression instrumentation directly from module
+        from kubeflow.trainer.rhai.instrumentation.progression import (
+            create_progression_instrumentation,
+        )
 
         (
             _,
@@ -1266,7 +1184,7 @@ def test_honest_progress_reporting(test_case):
             _,
             get_metrics_json,
             _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        ) = create_progression_instrumentation(28080)
         callback = callback_class(metrics_port=28080)
 
         import json
@@ -4034,7 +3952,8 @@ except RuntimeError as e:
     # Verify error message content
     assert "Checkpoint instrumentation requires SDK version" in error_msg, f"Wrong error: {{error_msg}}"
     assert "Runtime SDK version 0.3.0 is below minimum" in error_msg
-    assert "Update runtime image to use SDK 0.4.0 or later" in error_msg
+    assert "packages_to_install" in error_msg
+    assert "clusterTrainingRuntimes" in error_msg
     print("SUCCESS: Correct error raised for old runtime SDK")
     sys.exit(0)
 except Exception as e:
