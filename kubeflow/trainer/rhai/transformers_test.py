@@ -269,7 +269,10 @@ def test_func_callable_validation(test_case):
             expected_output=[
                 ("isinstance", str),
                 ("import kubeflow as runtime_kubeflow", True),
-                ("from kubeflow.trainer.rhai.instrumentation.progression import create_progression_instrumentation", True),
+                (
+                    "from kubeflow.trainer.rhai.instrumentation.progression import create_progression_instrumentation",
+                    True,
+                ),
                 ("apply_progression_tracking", True),
                 ("{{user_func_import_and_call}}", True),
                 ("metrics_port=28080", True),
