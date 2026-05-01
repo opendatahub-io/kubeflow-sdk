@@ -3996,8 +3996,8 @@ print("TEST_COMPLETE=True")
 
 
 def test_checkpoint_error_handling_module_not_found(tmp_path):
-    """Test error handling when checkpoint instrumentation module is not found."""
-    print("Executing test: checkpoint error handling - ModuleNotFoundError")
+    """Test error handling when runtime SDK version is below minimum requirement."""
+    print("Executing test: checkpoint error handling - runtime SDK version too old")
 
     import subprocess
     import sys
@@ -4012,21 +4012,16 @@ def test_checkpoint_error_handling_module_not_found(tmp_path):
     checkpoint_file = tmp_path / "checkpoint_code.py"
     checkpoint_file.write_text(checkpoint_header)
 
-    # Create test file that simulates missing module
-    test_file = tmp_path / "test_module_not_found.py"
+    # Create test file that simulates old runtime SDK version
+    test_file = tmp_path / "test_old_runtime_version.py"
     test_code = f"""
 import sys
-from importlib.machinery import ModuleSpec
-from importlib.util import module_from_spec
 
-# Block the checkpoint instrumentation import specifically
-class ImportBlocker:
-    def find_spec(self, fullname, path, target=None):
-        if fullname == 'kubeflow.trainer.rhai.instrumentation.checkpoint':
-            raise ModuleNotFoundError(f"No module named '{{fullname}}'")
-        return None
-
-sys.meta_path.insert(0, ImportBlocker())
+# Mock old runtime kubeflow version before executing checkpoint code
+from unittest.mock import Mock
+mock_kubeflow = Mock()
+mock_kubeflow.__version__ = "0.3.0"  # Below minimum 0.4.0
+sys.modules['kubeflow'] = mock_kubeflow
 
 try:
     # Execute checkpoint code
@@ -4037,14 +4032,15 @@ try:
 except RuntimeError as e:
     error_msg = str(e)
     # Verify error message content
-    assert "Checkpoint instrumentation module not found" in error_msg, f"Wrong error: {{error_msg}}"
-    assert "Client SDK:" in error_msg
-    assert "Runtime SDK:" in error_msg
-    assert "Update the runtime image" in error_msg
-    print("SUCCESS: Correct error raised")
+    assert "Checkpoint instrumentation requires SDK version" in error_msg, f"Wrong error: {{error_msg}}"
+    assert "Runtime SDK version 0.3.0 is below minimum" in error_msg
+    assert "Update runtime image to use SDK 0.4.0 or later" in error_msg
+    print("SUCCESS: Correct error raised for old runtime SDK")
     sys.exit(0)
 except Exception as e:
     print(f"ERROR: Unexpected exception: {{type(e).__name__}}: {{e}}")
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 """
 
@@ -4059,14 +4055,14 @@ except Exception as e:
         print(f"Test stderr: {result.stderr}")
 
     assert result.returncode == 0, "Error handling test failed"
-    assert "SUCCESS: Correct error raised" in result.stdout
+    assert "SUCCESS: Correct error raised for old runtime SDK" in result.stdout
 
     print("test execution complete")
 
 
 def test_checkpoint_error_handling_version_mismatch_warning(tmp_path):
-    """Test warning when SDK versions differ between client and runtime."""
-    print("Executing test: checkpoint error handling - version mismatch warning")
+    """Test that different SDK versions are allowed as long as both are >= 0.4.0."""
+    print("Executing test: checkpoint with different but compatible SDK versions")
 
     import subprocess
     import sys
@@ -4081,11 +4077,10 @@ def test_checkpoint_error_handling_version_mismatch_warning(tmp_path):
     checkpoint_file = tmp_path / "checkpoint_code.py"
     checkpoint_file.write_text(checkpoint_header)
 
-    # Mock modules with different version
-    test_file = tmp_path / "test_version_warning.py"
+    # Mock modules with different version (but both >= 0.4.0)
+    test_file = tmp_path / "test_version_compatible.py"
     test_code = f"""
 import sys
-import warnings
 from unittest.mock import Mock, patch
 
 # Mock transformers
@@ -4111,27 +4106,18 @@ try:
     def mock_create(*args, **kwargs):
         return None, None, lambda: None, lambda: None
 
-    # Capture warnings
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
+    # Patch create_checkpoint_instrumentation and execute checkpoint code
+    with patch('kubeflow.trainer.rhai.instrumentation.checkpoint.create_checkpoint_instrumentation', side_effect=mock_create):
+        # Modify runtime version before executing checkpoint code
+        import kubeflow
+        kubeflow.__version__ = "0.5.0"  # Different from client version (but >= 0.4.0)
 
-        # Patch create_checkpoint_instrumentation and execute checkpoint code
-        with patch('kubeflow.trainer.rhai.instrumentation.checkpoint.create_checkpoint_instrumentation', side_effect=mock_create):
-            # Modify runtime version before executing checkpoint code
-            import kubeflow
-            kubeflow.__version__ = "0.1.0"  # Different from client version
+        with open('{checkpoint_file}', 'r') as f:
+            exec(f.read())
 
-            with open('{checkpoint_file}', 'r') as f:
-                exec(f.read())
-
-        # Verify warning was raised
-        assert len(w) > 0, "No warning raised for version mismatch"
-        warning_msg = str(w[0].message)
-        assert "SDK version mismatch" in warning_msg
-        assert "Client SDK:" in warning_msg
-        assert "Runtime SDK:" in warning_msg
-        print("SUCCESS: Version mismatch warning raised correctly")
-        sys.exit(0)
+    # If we get here, no exception was raised - success!
+    print("SUCCESS: Different but compatible SDK versions work without error")
+    sys.exit(0)
 
 except Exception as e:
     print(f"ERROR: {{e}}")
@@ -4150,83 +4136,8 @@ except Exception as e:
         print(f"Test output: {result.stdout}")
         print(f"Test stderr: {result.stderr}")
 
-    assert result.returncode == 0, "Version warning test failed"
-    assert "SUCCESS: Version mismatch warning raised correctly" in result.stdout
-
-    print("test execution complete")
-
-
-def test_checkpoint_error_handling_api_incompatibility(tmp_path):
-    """Test error handling for API incompatibility (TypeError)."""
-    print("Executing test: checkpoint error handling - API incompatibility")
-
-    import subprocess
-    import sys
-
-    # Generate checkpoint code
-    checkpoint_header, _ = get_jit_checkpoint_injection_code(
-        output_dir="/tmp/checkpoints",
-        enable_jit_checkpoint=True,
-    )
-
-    # Write checkpoint header to a separate file
-    checkpoint_file = tmp_path / "checkpoint_code.py"
-    checkpoint_file.write_text(checkpoint_header)
-
-    test_file = tmp_path / "test_api_incompatibility.py"
-    test_code = f"""
-import sys
-from unittest.mock import Mock, patch
-
-# Mock modules
-mock_transformers = Mock()
-mock_transformers.TrainerCallback = type("TrainerCallback", (), {{}})
-mock_transformers.trainer_utils = Mock()
-mock_transformers.trainer_utils.PREFIX_CHECKPOINT_DIR = "checkpoint"
-sys.modules['transformers'] = mock_transformers
-sys.modules['transformers.trainer_utils'] = mock_transformers.trainer_utils
-
-mock_torch = Mock()
-mock_torch.cuda.is_available.return_value = False
-mock_torch.distributed.is_available.return_value = False
-sys.modules['torch'] = mock_torch
-sys.modules['torch.distributed'] = mock_torch.distributed
-
-# Create a mock that raises TypeError (API incompatibility)
-def mock_create_checkpoint(*args, **kwargs):
-    raise TypeError("create_checkpoint_instrumentation() missing 1 required positional argument: 'new_param'")
-
-# Patch the import
-with patch('kubeflow.trainer.rhai.instrumentation.checkpoint.create_checkpoint_instrumentation', side_effect=mock_create_checkpoint):
-    try:
-        # Execute checkpoint code
-        with open('{checkpoint_file}', 'r') as f:
-            exec(f.read())
-        print("ERROR: Should have raised RuntimeError")
-        sys.exit(1)
-    except RuntimeError as e:
-        error_msg = str(e)
-        # Verify error message for API incompatibility
-        assert "API incompatibility" in error_msg
-        assert "Client SDK:" in error_msg
-        assert "Runtime SDK:" in error_msg
-        assert "Update runtime image" in error_msg
-        print("SUCCESS: API incompatibility error raised correctly")
-        sys.exit(0)
-"""
-
-    test_file.write_text(test_code)
-
-    result = subprocess.run(
-        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
-    )
-
-    if result.returncode != 0:
-        print(f"Test output: {result.stdout}")
-        print(f"Test stderr: {result.stderr}")
-
-    assert result.returncode == 0, "API incompatibility test failed"
-    assert "SUCCESS: API incompatibility error raised correctly" in result.stdout
+    assert result.returncode == 0, "Compatible version test failed"
+    assert "SUCCESS: Different but compatible SDK versions work without error" in result.stdout
 
     print("test execution complete")
 
@@ -4282,9 +4193,9 @@ with patch('kubeflow.trainer.rhai.instrumentation.checkpoint.create_checkpoint_i
     except RuntimeError as e:
         error_msg = str(e)
         # Verify error message shows the actual error
-        assert "Failed to create checkpoint instrumentation" in error_msg
+        assert "Failed to initialize checkpoint instrumentation" in error_msg
         assert "Invalid configuration" in error_msg
-        # Should NOT mention SDK version for config errors
+        assert "ValueError" in error_msg
         print("SUCCESS: Generic exception handled correctly")
         sys.exit(0)
 """

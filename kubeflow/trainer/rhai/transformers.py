@@ -747,50 +747,59 @@ def get_jit_checkpoint_injection_code(
 # =============================================================================
 
 import kubeflow as runtime_kubeflow
-import warnings
+from packaging import version
 
 CLIENT_SDK_VERSION = "{client_sdk_version}"
 RUNTIME_SDK_VERSION = runtime_kubeflow.__version__
+MIN_SDK_VERSION = "0.4.0"
+
+# Check if both client and runtime SDK versions meet minimum requirement
+client_version_valid = version.parse(CLIENT_SDK_VERSION) >= version.parse(MIN_SDK_VERSION)
+runtime_version_valid = version.parse(RUNTIME_SDK_VERSION) >= version.parse(MIN_SDK_VERSION)
+
+if not client_version_valid or not runtime_version_valid:
+    error_parts = []
+    error_parts.append("Checkpoint instrumentation requires SDK version {{MIN_SDK_VERSION}} or later.")
+    error_parts.append(f"Current versions - Client: {{CLIENT_SDK_VERSION}}, Runtime: {{RUNTIME_SDK_VERSION}}")
+
+    if not client_version_valid and not runtime_version_valid:
+        error_parts.append(
+            f"Both client and runtime SDK versions are below {{MIN_SDK_VERSION}}.\\n"
+            f"Actions required:\\n"
+            f"  1. Upgrade client SDK: pip install --upgrade kubeflow-trainer>=0.4.0\\n"
+            f"  2. Update runtime image to use SDK {{MIN_SDK_VERSION}} or later"
+        )
+    elif not client_version_valid:
+        error_parts.append(
+            f"Client SDK version {{CLIENT_SDK_VERSION}} is below minimum {{MIN_SDK_VERSION}}.\\n"
+            f"Action required: pip install --upgrade kubeflow-trainer>=0.4.0"
+        )
+    else:  # not runtime_version_valid
+        error_parts.append(
+            f"Runtime SDK version {{RUNTIME_SDK_VERSION}} is below minimum {{MIN_SDK_VERSION}}.\\n"
+            f"Action required: Update runtime image to use SDK {{MIN_SDK_VERSION}} or later"
+        )
+
+    raise RuntimeError("\\n".join(error_parts))
 
 try:
+    # Import checkpoint instrumentation (guaranteed to exist if both versions >= 0.4.0)
     from kubeflow.trainer.rhai.instrumentation.checkpoint import create_checkpoint_instrumentation
-except ModuleNotFoundError as e:
-    raise RuntimeError(
-        f"Checkpoint instrumentation module not found.\\n"
-        f"Client SDK: {{CLIENT_SDK_VERSION}}, Runtime SDK: {{RUNTIME_SDK_VERSION}}\\n"
-        f"Update the runtime image with matching SDK version."
-    ) from e
 
-if CLIENT_SDK_VERSION != RUNTIME_SDK_VERSION:
-    warnings.warn(
-        f"SDK version mismatch detected:\\n"
-        f"  Client SDK: {{CLIENT_SDK_VERSION}}\\n"
-        f"  Runtime SDK: {{RUNTIME_SDK_VERSION}}\\n"
-        f"This may work, but using matching versions is recommended.",
-        RuntimeWarning
-    )
+    print("[Kubeflow] Initializing checkpoint instrumentation", flush=True)
+    print(f"[Kubeflow] Client SDK: {{CLIENT_SDK_VERSION}}, Runtime SDK: {{RUNTIME_SDK_VERSION}}", flush=True)
 
-print("[Kubeflow] Initializing checkpoint instrumentation", flush=True)
-print(f"[Kubeflow] Client SDK: {{CLIENT_SDK_VERSION}}, Runtime SDK: {{RUNTIME_SDK_VERSION}}", flush=True)
+    checkpoint_config = {config_dict_str}
 
-checkpoint_config = {config_dict_str}
-
-try:
     _, _, apply_checkpointing, upload_final_model_to_cloud = create_checkpoint_instrumentation(checkpoint_config)
-except TypeError as e:
-    raise RuntimeError(
-        f"Checkpoint instrumentation API incompatibility.\\n"
-        f"Client SDK: {{CLIENT_SDK_VERSION}}, Runtime SDK: {{RUNTIME_SDK_VERSION}}\\n"
-        f"Error: {{e}}\\n"
-        f"Update runtime image with matching SDK version."
-    ) from e
+    apply_checkpointing()
+    print("[Kubeflow] Checkpoint instrumentation enabled", flush=True)
 except Exception as e:
     raise RuntimeError(
-        f"Failed to create checkpoint instrumentation: {{e}}"
+        f"Failed to initialize checkpoint instrumentation.\\n"
+        f"Client SDK: {{CLIENT_SDK_VERSION}}, Runtime SDK: {{RUNTIME_SDK_VERSION}}\\n"
+        f"Error: {{type(e).__name__}}: {{e}}"
     ) from e
-
-apply_checkpointing()
-print("[Kubeflow] Checkpoint instrumentation enabled", flush=True)
 """
 
     # Build the footer (runs after user code)
