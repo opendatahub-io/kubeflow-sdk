@@ -697,7 +697,6 @@ def test_get_trainer_cr_non_pytorch_framework():
     def dummy_train():
         print("Training...")
 
-    from kubeflow.trainer.constants import constants
     from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
     from kubeflow.trainer.types import types
 
@@ -2753,8 +2752,6 @@ print("TEST_COMPLETE=True")
         ),
     ],
 )
-
-
 def test_s3_download_execution(test_case, tmp_path):
     """Integration test: S3 checkpoint download behavior.
 
@@ -4444,14 +4441,16 @@ def test_update_progression_metrics(progression_instrumentation):
     assert metrics["evalMetrics"] == {}
 
     # Test scalar field updates
-    update_progression_metrics({
-        "currentStep": 50,
-        "totalSteps": 100,
-        "currentEpoch": 1.5,
-        "totalEpochs": 3,
-        "progressPercentage": 50,
-        "estimatedRemainingSeconds": 120,
-    })
+    update_progression_metrics(
+        {
+            "currentStep": 50,
+            "totalSteps": 100,
+            "currentEpoch": 1.5,
+            "totalEpochs": 3,
+            "progressPercentage": 50,
+            "estimatedRemainingSeconds": 120,
+        }
+    )
     metrics = json.loads(get_metrics_json())
     assert metrics["currentStep"] == 50
     assert metrics["totalSteps"] == 100
@@ -4461,16 +4460,20 @@ def test_update_progression_metrics(progression_instrumentation):
     assert metrics["estimatedRemainingSeconds"] == 120
 
     # Test dict fields are merged (not replaced)
-    update_progression_metrics({
-        "trainMetrics": {"loss": 0.5, "learning_rate": 0.001},
-    })
+    update_progression_metrics(
+        {
+            "trainMetrics": {"loss": 0.5, "learning_rate": 0.001},
+        }
+    )
     metrics = json.loads(get_metrics_json())
     assert metrics["trainMetrics"] == {"loss": 0.5, "learning_rate": 0.001}
 
     # Merge additional keys into existing dict
-    update_progression_metrics({
-        "trainMetrics": {"grad_norm": 1.2},
-    })
+    update_progression_metrics(
+        {
+            "trainMetrics": {"grad_norm": 1.2},
+        }
+    )
     metrics = json.loads(get_metrics_json())
     assert metrics["trainMetrics"] == {
         "loss": 0.5,
@@ -4479,34 +4482,42 @@ def test_update_progression_metrics(progression_instrumentation):
     }
 
     # Overwrite existing key within dict
-    update_progression_metrics({
-        "trainMetrics": {"loss": 0.3},
-    })
+    update_progression_metrics(
+        {
+            "trainMetrics": {"loss": 0.3},
+        }
+    )
     metrics = json.loads(get_metrics_json())
     assert metrics["trainMetrics"]["loss"] == 0.3
     assert metrics["trainMetrics"]["learning_rate"] == 0.001
 
     # Test evalMetrics dict merge
-    update_progression_metrics({
-        "evalMetrics": {"eval_loss": 0.8, "eval_accuracy": 0.92},
-    })
+    update_progression_metrics(
+        {
+            "evalMetrics": {"eval_loss": 0.8, "eval_accuracy": 0.92},
+        }
+    )
     metrics = json.loads(get_metrics_json())
     assert metrics["evalMetrics"] == {"eval_loss": 0.8, "eval_accuracy": 0.92}
 
     # Test unknown keys are silently ignored
-    update_progression_metrics({
-        "nonExistentField": 999,
-        "currentStep": 75,
-    })
+    update_progression_metrics(
+        {
+            "nonExistentField": 999,
+            "currentStep": 75,
+        }
+    )
     metrics = json.loads(get_metrics_json())
     assert metrics["currentStep"] == 75
     assert "nonExistentField" not in metrics
 
     # Test scalar fields overwrite previous values
-    update_progression_metrics({
-        "progressPercentage": 100,
-        "estimatedRemainingSeconds": 0,
-    })
+    update_progression_metrics(
+        {
+            "progressPercentage": 100,
+            "estimatedRemainingSeconds": 0,
+        }
+    )
     metrics = json.loads(get_metrics_json())
     assert metrics["progressPercentage"] == 100
     assert metrics["estimatedRemainingSeconds"] == 0
@@ -4549,11 +4560,13 @@ def test_get_progression_metrics_json(progression_instrumentation):
     assert set(metrics.keys()) == expected_keys
 
     # Verify JSON reflects updates
-    update_progression_metrics({
-        "currentStep": 42,
-        "progressPercentage": 84,
-        "trainMetrics": {"loss": 0.25},
-    })
+    update_progression_metrics(
+        {
+            "currentStep": 42,
+            "progressPercentage": 84,
+            "trainMetrics": {"loss": 0.25},
+        }
+    )
     metrics = json.loads(get_metrics_json())
     assert metrics["currentStep"] == 42
     assert metrics["progressPercentage"] == 84
@@ -4578,11 +4591,13 @@ def test_progression_metrics_handler_do_get(progression_instrumentation):
     import threading
 
     # Seed some state so we can verify it in the response
-    update_progression_metrics({
-        "currentStep": 10,
-        "totalSteps": 100,
-        "progressPercentage": 10,
-    })
+    update_progression_metrics(
+        {
+            "currentStep": 10,
+            "totalSteps": 100,
+            "progressPercentage": 10,
+        }
+    )
 
     # Start a real HTTP server on an ephemeral port
     server = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
@@ -4696,17 +4711,17 @@ def test_on_train_end_termination_message(progression_instrumentation):
     import io
     from unittest.mock import Mock, mock_open, patch
 
-    _, callback_class, _, get_metrics_json, update_progression_metrics = (
-        progression_instrumentation
-    )
+    _, callback_class, _, get_metrics_json, update_progression_metrics = progression_instrumentation
 
     import json
 
     # Pre-seed train/eval metrics so they appear in termination message
-    update_progression_metrics({
-        "trainMetrics": {"loss": 0.1, "learning_rate": 0.0001},
-        "evalMetrics": {"eval_loss": 0.2},
-    })
+    update_progression_metrics(
+        {
+            "trainMetrics": {"loss": 0.1, "learning_rate": 0.0001},
+            "evalMetrics": {"eval_loss": 0.2},
+        }
+    )
 
     callback = callback_class(metrics_port=28080)
     args = Mock()
