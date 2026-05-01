@@ -2,7 +2,7 @@ name: Sync Upstream
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * 1'
   workflow_dispatch:
     inputs:
       downstream_branch:
@@ -23,6 +23,9 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    concurrency:
+      group: sync-upstream-${{ github.repository }}-${{ inputs.upstream_branch || 'main' }}
+      cancel-in-progress: false
     # Outputs are consumed by the snyk-scan job (separate runner)
     outputs:
       has_changes: ${{ steps.diffcheck.outputs.has_changes }}
@@ -34,7 +37,28 @@ jobs:
       LABEL: automated-rebase
 
     steps:
+      - name: Check for existing sync PR
+        id: check_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXISTING=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "${HEAD_BRANCH}" \
+            --base "${DOWNSTREAM_BRANCH}" \
+            --state open \
+            --label "${LABEL}" \
+            --json number \
+            --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Sync PR #${EXISTING} already open — skipping to avoid clobbering manual work"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout downstream repository
+        if: steps.check_pr.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ env.DOWNSTREAM_BRANCH }}
@@ -43,22 +67,26 @@ jobs:
           token: ${{ secrets.REPO_WORKFLOW_PAT }}
 
       - name: Set up Git
+        if: steps.check_pr.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Add upstream remote and fetch
+        if: steps.check_pr.outputs.skip != 'true'
         run: |
           git remote add upstream https://github.com/kubeflow/sdk || git remote set-url upstream https://github.com/kubeflow/sdk
           git fetch upstream "${UPSTREAM_BRANCH}"
           git fetch origin "${DOWNSTREAM_BRANCH}"
 
       - name: Create sync branch from downstream
+        if: steps.check_pr.outputs.skip != 'true'
         run: |
           # Start from downstream - preserves midstream commits on top
           git checkout -B "${HEAD_BRANCH}" "origin/${DOWNSTREAM_BRANCH}"
 
       - name: Merge upstream and handle excluded paths
+        if: steps.check_pr.outputs.skip != 'true'
         id: merge_step
         run: |
           set -euo pipefail
@@ -165,6 +193,7 @@ jobs:
           fi
 
       - name: Install uv
+        if: steps.check_pr.outputs.skip != 'true'
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -172,7 +201,7 @@ jobs:
       # Keep requirements.txt in sync after the upstream merge.
       # Committed here so the change is included in the sync PR.
       - name: Update requirements.txt
-        if: steps.merge_step.outputs.has_conflict != 'true'
+        if: steps.check_pr.outputs.skip != 'true' && steps.merge_step.outputs.has_conflict != 'true'
         run: |
           uv export --format requirements-txt > requirements.txt
           if ! git diff --quiet requirements.txt; then
@@ -181,6 +210,7 @@ jobs:
           fi
 
       - name: Check for real changes (excluding owned paths)
+        if: steps.check_pr.outputs.skip != 'true'
         id: diffcheck
         run: |
           # If there's a conflict, always create PR
@@ -201,12 +231,12 @@ jobs:
           fi
 
       - name: Push sync branch
-        if: steps.diffcheck.outputs.has_changes == 'true'
+        if: steps.check_pr.outputs.skip != 'true' && steps.diffcheck.outputs.has_changes == 'true'
         run: |
           git push origin "${HEAD_BRANCH}" --force-with-lease
 
       - name: Create or update PR
-        if: steps.diffcheck.outputs.has_changes == 'true'
+        if: steps.check_pr.outputs.skip != 'true' && steps.diffcheck.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
