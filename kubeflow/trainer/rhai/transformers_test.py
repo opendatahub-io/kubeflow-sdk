@@ -713,7 +713,9 @@ def test_get_trainer_cr_non_pytorch_framework():
     trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
 
     command_str = " ".join(trainer_crd.command)
-    # DEFAULT_COMMAND uses "python" as entrypoint, TORCH_COMMAND uses "torchrun"
+    # Can't compare directly with constants.DEFAULT_COMMAND because {func_code}
+    # and {func_file} placeholders are expanded. DEFAULT_COMMAND uses "python"
+    # as entrypoint, TORCH_COMMAND uses "torchrun".
     assert 'python "' in command_str
     assert "torchrun" not in command_str
 
