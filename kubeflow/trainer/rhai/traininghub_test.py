@@ -24,7 +24,6 @@ from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai.traininghub import (
     TrainingHubAlgorithms,
     TrainingHubTrainer,
-    _create_training_hub_progression_instrumentation,
     _render_user_func_code,
     get_training_hub_instrumentation_wrapper,
 )
@@ -192,52 +191,52 @@ def test_metrics_port_validation(test_case):
     "test_case",
     [
         TestCase(
-            name="basic SFT generation - returns string",
+            name="basic SFT generation - returns string with module import",
             expected_status="success",
             config={"algorithm": "sft", "ckpt_output_dir": "/tmp/checkpoints", "port": 28080},
             expected_output=[
                 ("isinstance", str),
-                ("class TrainingHubMetricsHandler", True),
-                ("def apply_progression_tracking", True),
-                ("def _read_sft_metrics", True),
-                ("def _transform_sft", True),
+                ("from kubeflow.trainer.rhai.instrumentation.traininghub_progression import", True),
+                ("create_traininghub_progression_instrumentation", True),
+                ("apply_progression_tracking", True),
                 ("algorithm_metadata=", True),
                 ("/tmp/checkpoints", True),
                 ("metrics_port=28080", True),
             ],
         ),
         TestCase(
-            name="basic OSFT generation - returns string",
+            name="basic OSFT generation - returns string with module import",
             expected_status="success",
             config={"algorithm": "osft", "ckpt_output_dir": "/tmp/outputs", "port": 28090},
             expected_output=[
                 ("isinstance", str),
-                ("class TrainingHubMetricsHandler", True),
-                ("def apply_progression_tracking", True),
-                ("def _read_osft_metrics", True),
-                ("def _transform_osft", True),
+                ("from kubeflow.trainer.rhai.instrumentation.traininghub_progression import", True),
+                ("create_traininghub_progression_instrumentation", True),
+                ("apply_progression_tracking", True),
                 ("algorithm_metadata=", True),
                 ("/tmp/outputs", True),
                 ("metrics_port=28090", True),
             ],
         ),
         TestCase(
-            name="self-contained - no SDK imports",
+            name="module-based imports present",
             expected_status="success",
             config={"algorithm": "sft", "ckpt_output_dir": "/tmp", "port": 28080},
             expected_output=[
-                ("from kubeflow", False),
-                ("import kubeflow", False),
-                ("class TrainingHubMetricsHandler", True),
-                ("def apply_progression_tracking", True),
+                ("import kubeflow as runtime_kubeflow", True),
+                ("from packaging import version", True),
+                ("from kubeflow.trainer.rhai.instrumentation.traininghub_progression", True),
+                ("apply_progression_tracking", True),
             ],
         ),
         TestCase(
-            name="structure - function call and metadata",
+            name="structure - SDK version checks and metadata",
             expected_status="success",
             config={"algorithm": "sft", "ckpt_output_dir": "/tmp", "port": 28080},
             expected_output=[
-                ("apply_progression_tracking", True),
+                ("CLIENT_SDK_VERSION", True),
+                ("RUNTIME_SDK_VERSION", True),
+                ("MIN_SDK_VERSION", True),
                 ("apply_progression_tracking()", True),
                 ("algorithm_metadata", True),
                 ("metrics_file_pattern", True),
@@ -245,19 +244,15 @@ def test_metrics_port_validation(test_case):
             ],
         ),
         TestCase(
-            name="completeness - all methods present",
+            name="version validation and warning present",
             expected_status="success",
             config={"algorithm": "osft", "ckpt_output_dir": "/tmp", "port": 28080},
             expected_output=[
-                ("def _read_latest_metrics", True),
-                ("def _read_osft_metrics", True),
-                ("def _read_sft_metrics", True),
-                ("def _read_lora_sft_metrics", True),
-                ("def _transform_schema", True),
-                ("def _transform_osft", True),
-                ("def _transform_sft", True),
-                ("def _transform_lora_sft", True),
-                ("def do_GET", True),
+                ("version.parse(CLIENT_SDK_VERSION)", True),
+                ("version.parse(RUNTIME_SDK_VERSION)", True),
+                ("if CLIENT_SDK_VERSION != RUNTIME_SDK_VERSION:", True),
+                ("Warning: This job was created with SDK", True),
+                ("but the runtime image has SDK", True),
             ],
         ),
     ],
@@ -319,16 +314,16 @@ def test_instrumentation_metadata_embedded():
     assert "'name': 'sft'" in wrapper
     assert "'metrics_file_pattern':" in wrapper
     assert "'metrics_file_rank0':" in wrapper
-    # Verify the metadata extraction in the function
-    assert 'algorithm = algorithm_metadata["name"]' in wrapper
-    assert 'metrics_file_pattern = algorithm_metadata["metrics_file_pattern"]' in wrapper
+    # Verify it's passed to create function
+    assert "create_traininghub_progression_instrumentation(" in wrapper
+    assert "algorithm_metadata=algorithm_metadata" in wrapper
 
     print("test execution complete")
 
 
 def test_algorithm_parameter_used_not_detected():
-    """Test that algorithm parameter is used directly, not detected from metrics."""
-    print("Executing test: Algorithm parameter used (no heuristic detection)")
+    """Test that algorithm metadata is passed from registry, not detected from metrics."""
+    print("Executing test: Algorithm metadata from registry (no heuristic detection)")
 
     wrapper = get_training_hub_instrumentation_wrapper(
         algorithm="sft",
@@ -336,11 +331,14 @@ def test_algorithm_parameter_used_not_detected():
         metrics_port=28080,
     )
 
-    # Verify algorithm metadata is used (extracted from centralized registry)
+    # Verify algorithm metadata dict is passed to instrumentation module
     assert "algorithm_metadata" in wrapper
-    assert 'algorithm = algorithm_metadata["name"]' in wrapper
+    assert "'name': 'sft'" in wrapper
+    # Verify it's passed to the instrumentation creation function
+    assert "create_traininghub_progression_instrumentation" in wrapper
 
-    # Verify NO heuristic detection based on metrics keys
+    # Verify NO heuristic detection based on metrics keys in wrapper
+    # (algorithm detection is now in the module, not the wrapper)
     assert 'if "tokens_per_second" in metrics' not in wrapper
     assert 'if "samples_per_second" in metrics' not in wrapper
 
@@ -464,16 +462,17 @@ def test_progression_tracking_enabled_has_server():
 
     # Script is in command (matches CustomTrainer pattern after refactor)
     script = " ".join(trainer_crd.command) if trainer_crd.command else ""
-    # Should contain progression tracking code
+    # Should contain progression tracking code (module import pattern)
     assert "[Kubeflow]" in script  # Message is in the script
-    assert "TrainingHubMetricsHandler" in script
+    assert "create_traininghub_progression_instrumentation" in script
+    assert "apply_progression_tracking" in script
 
     print("test execution complete")
 
 
 def test_instrumentation_wrapper_termination_log_path():
-    """Test that termination log path is used in wrapper."""
-    print("Executing test: Termination log path used")
+    """Test that wrapper uses progression module that handles termination log."""
+    print("Executing test: Wrapper uses progression tracking module")
 
     wrapper = get_training_hub_instrumentation_wrapper(
         algorithm="sft",
@@ -481,14 +480,16 @@ def test_instrumentation_wrapper_termination_log_path():
         metrics_port=28080,
     )
 
-    # Verify /dev/termination-log path is used directly
-    assert '"/dev/termination-log"' in wrapper
+    # Verify the wrapper uses the progression instrumentation module
+    # (which internally handles /dev/termination-log writing)
+    assert "from kubeflow.trainer.rhai.instrumentation.traininghub_progression" in wrapper
+    assert "create_traininghub_progression_instrumentation" in wrapper
     print("test execution complete")
 
 
 def test_instrumentation_wrapper_termination_method():
-    """Test that _maybe_write_termination_message method is in wrapper."""
-    print("Executing test: Termination message method in HTTP handler")
+    """Test that wrapper initializes progression tracking (which handles termination messages)."""
+    print("Executing test: Wrapper initializes progression tracking")
 
     wrapper = get_training_hub_instrumentation_wrapper(
         algorithm="sft",
@@ -496,21 +497,20 @@ def test_instrumentation_wrapper_termination_method():
         metrics_port=28080,
     )
 
-    # Verify termination message method exists in HTTP handler
-    assert "def _maybe_write_termination_message(self, metrics)" in wrapper
-    # Verify it checks for 100% progress
-    assert "progress >= 100" in wrapper
-    # Verify it writes to termination log path
-    assert '"/dev/termination-log"' in wrapper
-    # Verify it has write-once flag
-    assert "_termination_message_written" in wrapper
+    # Verify wrapper imports and initializes the progression tracking module
+    # (which internally handles termination message writing via _maybe_write_termination_message)
+    assert "create_traininghub_progression_instrumentation" in wrapper
+    assert "apply_progression_tracking()" in wrapper
+    # Verify initialization logging
+    assert "[Kubeflow] Initializing Training Hub progression tracking" in wrapper
+    assert "[Kubeflow] Training Hub progression tracking enabled" in wrapper
 
     print("test execution complete")
 
 
 def test_instrumentation_wrapper_explicit_bind_address():
-    """Test that HTTP server binds to 0.0.0.0 explicitly."""
-    print("Executing test: Explicit 0.0.0.0 bind address")
+    """Test that wrapper passes metrics_port to instrumentation module."""
+    print("Executing test: Metrics port configuration")
 
     wrapper = get_training_hub_instrumentation_wrapper(
         algorithm="sft",
@@ -518,10 +518,10 @@ def test_instrumentation_wrapper_explicit_bind_address():
         metrics_port=28080,
     )
 
-    # Verify explicit 0.0.0.0 bind (not empty string)
-    assert '("0.0.0.0", metrics_port)' in wrapper
-    # Verify NOT using empty string bind
-    assert '("", metrics_port)' not in wrapper
+    # Verify metrics_port is passed to the instrumentation module
+    # (which internally binds to 0.0.0.0)
+    assert "metrics_port=28080" in wrapper
+    assert "create_traininghub_progression_instrumentation" in wrapper
 
     print("test execution complete")
 
@@ -602,8 +602,8 @@ def test_traininghub_wrapper_reraises_failure(test_case: TestCase, capsys):
 
 
 def test_instrumentation_wrapper_oserror_handling():
-    """Test that wrapper has OSError handling for port binding issues."""
-    print("Executing test: OSError handling for server start")
+    """Test that wrapper has exception handling for initialization failures."""
+    print("Executing test: Exception handling for instrumentation initialization")
 
     wrapper = get_training_hub_instrumentation_wrapper(
         algorithm="sft",
@@ -611,19 +611,19 @@ def test_instrumentation_wrapper_oserror_handling():
         metrics_port=28080,
     )
 
-    # Verify OSError is specifically caught
-    assert "except OSError as e:" in wrapper
-    # Verify generic Exception is also caught as fallback
+    # Verify generic Exception is caught (wraps all initialization errors including OSError)
     assert "except Exception as e:" in wrapper
-    # Verify helpful error message mentions port and server
-    assert "Failed to start metrics server on port" in wrapper
+    # Verify helpful error message
+    assert "Failed to initialize Training Hub progression tracking" in wrapper
+    # Verify it re-raises with context
+    assert ") from e" in wrapper
 
     print("test execution complete")
 
 
 def test_instrumentation_wrapper_do_get_try_except_else():
-    """Test that do_GET uses try/except/else pattern for clean error handling."""
-    print("Executing test: do_GET try/except/else pattern")
+    """Test that wrapper delegates to module for HTTP handling."""
+    print("Executing test: wrapper delegates to instrumentation module")
 
     wrapper = get_training_hub_instrumentation_wrapper(
         algorithm="sft",
@@ -631,11 +631,11 @@ def test_instrumentation_wrapper_do_get_try_except_else():
         metrics_port=28080,
     )
 
-    # Verify try/except/else pattern (send_error in except, send_response after else)
-    # The pattern should have send_error(500) in except block
-    assert "self.send_error(500)" in wrapper
-    # And send_response(200) for success case
-    assert "self.send_response(200)" in wrapper
+    # Verify the wrapper imports and uses the module-based instrumentation
+    assert "from kubeflow.trainer.rhai.instrumentation.traininghub_progression import" in wrapper
+    assert "create_traininghub_progression_instrumentation" in wrapper
+    # Verify it calls the apply function
+    assert "apply_progression_tracking()" in wrapper
 
     print("test execution complete")
 
@@ -696,14 +696,30 @@ def test_instrumentation_wrapper_flush_all_prints():
         metrics_port=28080,
     )
 
-    # Count print statements and verify they have flush=True
-    import re
+    # Count [Kubeflow] print statements and verify each has flush=True
+    # Split by 'print(' to find all print calls
+    print_calls = wrapper.split("print(")
 
-    print_statements = re.findall(r"print\([^)]+\)", wrapper)
-    for stmt in print_statements:
-        # Logging statements with [Kubeflow] should have flush=True
-        if "flush" not in stmt and "[Kubeflow]" in stmt:
-            pytest.fail(f"Print statement missing flush=True: {stmt}")
+    kubeflow_prints = 0
+    kubeflow_prints_with_flush = 0
+
+    for _i, segment in enumerate(print_calls[1:], 1):  # Skip first split (before any print)
+        # Check if this print call contains [Kubeflow]
+        if "[Kubeflow]" in segment:
+            kubeflow_prints += 1
+            # Find the end of this print statement (matching closing paren)
+            # For simplicity, check if flush=True appears before the next print( or end of string
+            next_print_idx = segment.find("print(")
+            stmt_segment = segment[:next_print_idx] if next_print_idx != -1 else segment
+            if "flush=True" in stmt_segment:
+                kubeflow_prints_with_flush += 1
+
+    # All [Kubeflow] prints should have flush=True
+    assert kubeflow_prints > 0, "Expected at least one [Kubeflow] print statement"
+    assert kubeflow_prints == kubeflow_prints_with_flush, (
+        f"Found {kubeflow_prints} [Kubeflow] print statements but only "
+        f"{kubeflow_prints_with_flush} have flush=True"
+    )
 
     print("test execution complete")
 
@@ -727,7 +743,9 @@ def test_instrumentation_cleans_sft_metrics_on_startup(tmp_path):
 
     # Call instrumentation directly (no exec) with port 0 for random available port
     from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
-    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+    from kubeflow.trainer.rhai.instrumentation.traininghub_progression import (
+        create_traininghub_progression_instrumentation as _create_training_hub_progression_instrumentation,
+    )
 
     algorithm_metadata = get_algorithm_pod_metadata("sft")
     apply_fn, _handler = _create_training_hub_progression_instrumentation(
@@ -782,7 +800,9 @@ def test_instrumentation_cleans_osft_metrics_on_startup(tmp_path):
 
     # Call instrumentation directly (no exec) with port 0 for random available port
     from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
-    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+    from kubeflow.trainer.rhai.instrumentation.traininghub_progression import (
+        create_traininghub_progression_instrumentation as _create_training_hub_progression_instrumentation,
+    )
 
     algorithm_metadata = get_algorithm_pod_metadata("osft")
     apply_fn, _handler = _create_training_hub_progression_instrumentation(
@@ -827,7 +847,9 @@ def test_instrumentation_cleanup_handles_missing_files(tmp_path):
 
     # Call instrumentation directly (no exec) with port 0 for random available port
     from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
-    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+    from kubeflow.trainer.rhai.instrumentation.traininghub_progression import (
+        create_traininghub_progression_instrumentation as _create_training_hub_progression_instrumentation,
+    )
 
     algorithm_metadata = get_algorithm_pod_metadata("sft")
     apply_fn, _handler = _create_training_hub_progression_instrumentation(
@@ -849,8 +871,8 @@ def test_instrumentation_cleanup_handles_missing_files(tmp_path):
 
 
 def test_instrumentation_cleanup_continues_on_error():
-    """Test that training continues even if cleanup fails."""
-    print("Executing test: Training continues on cleanup failure")
+    """Test that wrapper handles initialization errors gracefully."""
+    print("Executing test: Wrapper handles initialization errors")
 
     # Get instrumentation wrapper with non-existent directory
     wrapper = get_training_hub_instrumentation_wrapper(
@@ -859,8 +881,10 @@ def test_instrumentation_cleanup_continues_on_error():
         metrics_port=28080,
     )
 
-    # Verify error handling is present
-    assert "Warning: Metrics cleanup failed" in wrapper, "Should log cleanup failures"
+    # Verify wrapper has exception handling for initialization
+    # (cleanup failures are handled inside the module)
+    assert "except Exception as e:" in wrapper
+    assert "Failed to initialize Training Hub progression tracking" in wrapper
 
     print("test execution complete")
 
@@ -991,11 +1015,15 @@ def lora_handler(tmp_path):
     Returns:
         Tuple of (apply_fn, handler_instance, ckpt_dir).
     """
+    from kubeflow.trainer.rhai.instrumentation.traininghub_progression import (
+        create_traininghub_progression_instrumentation,
+    )
+
     ckpt_dir = tmp_path / "checkpoints"
     ckpt_dir.mkdir()
 
     algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
-    apply_fn, handler_class = _create_training_hub_progression_instrumentation(
+    apply_fn, handler_class = create_traininghub_progression_instrumentation(
         algorithm_metadata=algorithm_metadata,
         ckpt_output_dir=str(ckpt_dir),
         metrics_port=0,
@@ -1163,7 +1191,9 @@ def test_lora_metrics_transformer_empty_metrics(tmp_path):
     ckpt_dir.mkdir()
 
     from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
-    from kubeflow.trainer.rhai.traininghub import _create_training_hub_progression_instrumentation
+    from kubeflow.trainer.rhai.instrumentation.traininghub_progression import (
+        create_traininghub_progression_instrumentation as _create_training_hub_progression_instrumentation,
+    )
 
     algorithm_metadata = get_algorithm_pod_metadata("lora_sft")
     _apply_fn, handler_class = _create_training_hub_progression_instrumentation(
