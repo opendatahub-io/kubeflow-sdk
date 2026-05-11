@@ -87,8 +87,6 @@ TorchTune Examples
      - Llama 3.2-1B
      - Alpaca
      - `Open Notebook <https://github.com/kubeflow/trainer/blob/master/examples/torchtune/llama3_2/alpaca-trainjob-yaml.ipynb>`_
-<<<<<<< HEAD
-=======
 
 Spark Examples
 --------------
@@ -117,4 +115,3 @@ Spark Examples
      - Spark Connect URL
      - Connect to Spark Connect using a connection URL
      - `View Example <https://github.com/kubeflow/sdk/blob/main/examples/spark/test_connect_url.py>`_
->>>>>>> upstream/main

@@ -111,10 +111,7 @@ class TrainerClient:
         trainer: types.CustomTrainer
         | types.CustomTrainerContainer
         | types.BuiltinTrainer
-<<<<<<< HEAD
         | RHAITrainer
-=======
->>>>>>> upstream/main
         | None = None,
         options: list | None = None,
     ) -> str:

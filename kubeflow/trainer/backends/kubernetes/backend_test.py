@@ -18,7 +18,6 @@ This module uses pytest and unittest.mock to simulate Kubernetes API interaction
 It tests KubernetesBackend's behavior across job listing, resource creation etc.
 """
 
-import copy
 from dataclasses import asdict
 import datetime
 import logging
@@ -48,11 +47,6 @@ from kubeflow.trainer.options import (
     ReplicatedJobPatch,
     RuntimePatch,
     TrainingRuntimeSpecPatch,
-)
-from kubeflow.trainer.rhai import (
-    TrainingHubAlgorithms,
-    TrainingHubTrainer,
-    traininghub as rhai_traininghub,
 )
 from kubeflow.trainer.test.common import (
     DEFAULT_NAMESPACE,
@@ -324,12 +318,7 @@ def get_train_job(
     train_job_trainer: models.TrainerV1alpha1Trainer | None = None,
     labels: dict[str, str] | None = None,
     annotations: dict[str, str] | None = None,
-<<<<<<< HEAD
-    spec_labels: dict[str, str] | None = None,
-    spec_annotations: dict[str, str] | None = None,
-=======
     runtime_patches: list[models.TrainerV1alpha1RuntimePatch] | None = None,
->>>>>>> upstream/main
 ) -> models.TrainerV1alpha1TrainJob:
     """
     Create a mock TrainJob object with optional trainer configurations.
@@ -350,28 +339,6 @@ def get_train_job(
     )
 
     return train_job
-
-
-def get_traininghub_trainer_for_expected(
-    runtime: types.Runtime,
-    algo: TrainingHubAlgorithms,
-    func_args: dict | None = None,
-    packages_to_install: list[str] | None = None,
-    pip_index_urls: list[str] | None = None,
-    env: dict[str, str] | None = None,
-    enable_progression_tracking: bool = False,
-) -> models.TrainerV1alpha1Trainer:
-    """Use production builder to construct expected TrainingHub Trainer CR."""
-    trainer_cfg = TrainingHubTrainer(
-        func=None,
-        func_args=func_args,
-        packages_to_install=packages_to_install,
-        pip_index_urls=pip_index_urls or constants.DEFAULT_PIP_INDEX_URLS,
-        env=env,
-        algorithm=algo,
-        enable_progression_tracking=enable_progression_tracking,
-    )
-    return rhai_traininghub.get_trainer_cr_from_training_hub_trainer(runtime, trainer_cfg)
 
 
 def get_cluster_custom_object_response(*args, **kwargs):
@@ -641,11 +608,7 @@ def create_cluster_training_runtime(
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
             mlPolicy=models.TrainerV1alpha1MLPolicy(
-<<<<<<< HEAD
-                torch=models.TrainerV1alpha1TorchMLPolicySource(),
-=======
                 torch={},
->>>>>>> upstream/main
                 numNodes=2,
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(
@@ -674,11 +637,7 @@ def create_training_runtime(
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
             mlPolicy=models.TrainerV1alpha1MLPolicy(
-<<<<<<< HEAD
-                torch=models.TrainerV1alpha1TorchMLPolicySource(),
-=======
                 torch={},
->>>>>>> upstream/main
                 numNodes=2,
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(
@@ -1176,33 +1135,7 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
             ),
         ),
         TestCase(
-            name="valid flow with experimental TrainingHub trainer (SFT)",
-            expected_status=SUCCESS,
-            config={
-                "trainer": TrainingHubTrainer(
-                    func=None,
-                    func_args={"nnodes": 2, "nproc_per_node": 2, "data_path": "/data/file.json"},
-                    packages_to_install=["training_hub"],
-                    pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
-                    algorithm=TrainingHubAlgorithms.SFT,
-                    enable_progression_tracking=False,
-                )
-            },
-            expected_output=get_train_job(
-                runtime_name=TORCH_RUNTIME,
-                train_job_name=TRAIN_JOB_WITH_CUSTOM_TRAINER,
-                train_job_trainer=get_traininghub_trainer_for_expected(
-                    runtime=create_runtime_type(name=TORCH_RUNTIME),
-                    algo=TrainingHubAlgorithms.SFT,
-                    func_args={"nnodes": 2, "nproc_per_node": 2, "data_path": "/data/file.json"},
-                    packages_to_install=["training_hub"],
-                    pip_index_urls=constants.DEFAULT_PIP_INDEX_URLS,
-                    enable_progression_tracking=False,
-                ),
-            ),
-        ),
-        TestCase(
-            name="valid flow with custom trainer and env vars",
+            name="valid flow with custom trainer that has env and image",
             expected_status=SUCCESS,
             config={
                 "trainer": types.CustomTrainer(
@@ -1437,28 +1370,13 @@ def test_train(kubernetes_backend, test_case):
         expected_output = test_case.expected_output
         expected_output.metadata.name = train_job_name
 
-        # Compare request payload with tolerance for empty podTemplateOverrides
-        call_args, call_kwargs = (
-            kubernetes_backend.custom_api.create_namespaced_custom_object.call_args
+        kubernetes_backend.custom_api.create_namespaced_custom_object.assert_called_with(
+            constants.GROUP,
+            constants.VERSION,
+            DEFAULT_NAMESPACE,
+            constants.TRAINJOB_PLURAL,
+            expected_output.to_dict(),
         )
-        assert call_args[0] == constants.GROUP
-        assert call_args[1] == constants.VERSION
-        assert call_args[2] == DEFAULT_NAMESPACE
-        assert call_args[3] == constants.TRAINJOB_PLURAL
-
-        actual_body = copy.deepcopy(call_args[4])
-        expected_body = expected_output.to_dict()
-
-        # If backend included an empty podTemplateOverrides list, drop it for comparison
-        if (
-            isinstance(actual_body, dict)
-            and "spec" in actual_body
-            and isinstance(actual_body["spec"], dict)
-            and actual_body["spec"].get("podTemplateOverrides") == []
-        ):
-            actual_body["spec"].pop("podTemplateOverrides", None)
-
-        assert actual_body == expected_body
 
     except Exception as e:
         assert type(e) is test_case.expected_error

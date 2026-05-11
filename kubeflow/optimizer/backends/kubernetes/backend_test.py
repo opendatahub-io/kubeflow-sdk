@@ -25,11 +25,7 @@ import pytest
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.optimizer.backends.kubernetes.backend import KubernetesBackend
 from kubeflow.optimizer.types.search_types import Search
-<<<<<<< HEAD
-from kubeflow.trainer.test.common import SUCCESS, TestCase
-=======
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
->>>>>>> upstream/main
 from kubeflow.trainer.types.types import CustomTrainer, TrainJobTemplate
 
 
@@ -120,8 +116,6 @@ def test_optimize(optimizer_backend, test_case):
         assert isinstance(e, test_case.expected_error)
 
     print("test execution complete")
-<<<<<<< HEAD
-=======
 
 
 @pytest.mark.parametrize(
@@ -158,4 +152,3 @@ def test_wait_for_job_status(optimizer_backend, test_case):
     print("Executing test:", test_case.name)
     with pytest.raises(test_case.expected_error):
         optimizer_backend.wait_for_job_status(**test_case.config)
->>>>>>> upstream/main

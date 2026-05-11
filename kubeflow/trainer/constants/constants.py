@@ -20,6 +20,9 @@ GROUP = "trainer.kubeflow.org"
 VERSION = "v1alpha1"
 API_VERSION = f"{GROUP}/{VERSION}"
 
+# Minimum SDK version required for progression tracking and checkpoint features.
+MIN_SDK_VERSION = "0.4.0"
+
 # The Kind name for the ClusterTrainingRuntime.
 CLUSTER_TRAINING_RUNTIME_KIND = "ClusterTrainingRuntime"
 
