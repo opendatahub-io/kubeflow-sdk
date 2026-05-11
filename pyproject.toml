@@ -28,11 +28,12 @@ classifiers = [
 dependencies = [
   "kubernetes>=27.2.0",
   "pydantic>=2.10.0",
-  "kubeflow-trainer-api>=2.0.0",
+  "kubeflow-trainer-api>=2.2.0",
   "kubeflow-katib-api>=0.19.0",
 ]
 
 [project.optional-dependencies]
+<<<<<<< HEAD
 docker = [
   "docker>=6.1.3",
 ]
@@ -53,7 +54,19 @@ spark = [
 ]
 hub = [
   "model-registry>=0.3.6",
+=======
+docker = ["docker>=6.1.3"]
+podman = ["podman>=5.6.0"]
+spark = [
+  # pyspark-connect is Apache Spark Python API with Spark Connect by default
+  # Match major.minor of pyspark-connect to Spark constants declared in kubeflow.spark.backends.kubernetes.constants
+  # Ensure pyspark-connect and the spark image align with the Spark version used in the Spark operator image
+  # https://github.com/kubeflow/spark-operator/blob/master/Dockerfile#L17
+  "pyspark-connect==4.0.1",
+  "kubeflow-spark-api>=2.4.0",
+>>>>>>> upstream/main
 ]
+hub = ["model-registry>=0.3.6"]
 
 [dependency-groups]
 docs = [
@@ -142,8 +155,13 @@ select = [
 ]
 
 ignore = [
+<<<<<<< HEAD
   "B006",  # mutable-argument-default
   "E501",  # Embedded HTML/SVG has long lines
+=======
+  "B006", # mutable-argument-default
+  "E501", # Embedded HTML/SVG has long lines
+>>>>>>> upstream/main
 ]
 
 
@@ -161,9 +179,13 @@ markers = [
   "timeout: marks tests with timeout limit",
   "options: marks tests for Spark options pattern",
 ]
+<<<<<<< HEAD
 filterwarnings = [
   "ignore::pydantic.warnings.PydanticDeprecatedSince20",
 ]
+=======
+filterwarnings = ["ignore::pydantic.warnings.PydanticDeprecatedSince20"]
+>>>>>>> upstream/main
 
 [tool.ty.environment]
 python-version = "3.10"
