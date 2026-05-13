@@ -20,6 +20,9 @@ GROUP = "trainer.kubeflow.org"
 VERSION = "v1alpha1"
 API_VERSION = f"{GROUP}/{VERSION}"
 
+# Minimum SDK version required for progression tracking and checkpoint features.
+MIN_SDK_VERSION = "0.4.0"
+
 # The Kind name for the ClusterTrainingRuntime.
 CLUSTER_TRAINING_RUNTIME_KIND = "ClusterTrainingRuntime"
 
@@ -73,7 +76,7 @@ MODEL_INITIALIZER = "model-initializer"
 INITIALIZER_ENV_ACCESS_TOKEN = "ACCESS_TOKEN"
 
 # The default value for initializer to ignore files.
-INITIALIZER_DEFAULT_IGNORE_PATTERNS = ["*.msgpack", "*.h5", "*.bin", ".pt", ".pth"]
+INITIALIZER_DEFAULT_IGNORE_PATTERNS = ["*.msgpack", "*.h5", "*.bin", "*.pt", "*.pth"]
 
 # The default path to the users' workspace.
 # TODO (andreyvelich): Discuss how to keep this path is sync with pkg.initializers.constants

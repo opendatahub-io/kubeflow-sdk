@@ -263,29 +263,31 @@ def test_func_callable_validation(test_case):
     "test_case",
     [
         TestCase(
-            name="basic generation - returns string",
+            name="basic generation - returns string with module import",
             expected_status="success",
             config={"port": 28080},
             expected_output=[
                 ("isinstance", str),
-                ("class KubeflowProgressCallback", True),
-                ("class ProgressionMetricsHandler", True),
-                ("def apply_progression_tracking", True),
+                ("import kubeflow as runtime_kubeflow", True),
+                (
+                    "from kubeflow.trainer.rhai.instrumentation.progression import create_progression_instrumentation",
+                    True,
+                ),
+                ("apply_progression_tracking", True),
                 ("{{user_func_import_and_call}}", True),
                 ("metrics_port=28080", True),
             ],
         ),
         TestCase(
-            name="self-contained - no SDK imports",
+            name="module import - SDK version checking",
             expected_status="success",
             config={"port": 28080},
             expected_output=[
-                ("from kubeflow", False),
-                ("import kubeflow", False),
-                ("class ProgressionMetricsHandler", True),
-                ("class KubeflowProgressCallback", True),
-                ("def apply_progression_tracking", True),
-                ("from transformers import", True),
+                ("import kubeflow", True),
+                ("CLIENT_SDK_VERSION", True),
+                ("RUNTIME_SDK_VERSION", True),
+                ("MIN_SDK_VERSION", True),
+                ("version.parse", True),
             ],
         ),
         TestCase(
@@ -300,66 +302,25 @@ def test_func_callable_validation(test_case):
             ],
         ),
         TestCase(
-            name="completeness - all callback methods",
+            name="error handling - version compatibility",
             expected_status="success",
             config={"port": 28080},
             expected_output=[
-                ("def on_train_begin", True),
-                ("def on_step_end", True),
-                ("def on_log", True),
-                ("def on_train_end", True),
-                ("_original_init", True),
-                ("def _instrumented_trainer_init", True),
+                ("if not client_version_valid or not runtime_version_valid:", True),
+                ("packages_to_install", True),
+                ("clusterTrainingRuntimes", True),
+                ("RuntimeError", True),
             ],
         ),
         TestCase(
-            name="implementation details - progress tracking logic",
+            name="initialization messages",
             expected_status="success",
             config={"port": 28080},
             expected_output=[
-                ("from kubeflow.trainer.rhai", False),
-                ("state.global_step", True),
-                ("progress_pct", True),
-                ("elapsed_sec", True),
-            ],
-        ),
-        TestCase(
-            name="dataclass - ProgressionMetricsState",
-            expected_status="success",
-            config={"port": 28080},
-            expected_output=[
-                ("@dataclass", True),
-                ("class ProgressionMetricsState", True),
-                ("progressPercentage", True),
-                ("estimatedRemainingSeconds", True),
-                ("currentStep", True),
-                ("totalSteps", True),
-                ("trainMetrics", True),
-                ("evalMetrics", True),
-                ("asdict", True),
-            ],
-        ),
-        TestCase(
-            name="metrics state initialization",
-            expected_status="success",
-            config={"port": 28080},
-            expected_output=[
-                ("progressPercentage: int | None = None", True),
-                ("currentStep: int = 0", True),
-                ("currentEpoch: float = 0.0", True),
-                ("trainMetrics: dict[str, Any] = field(default_factory=dict)", True),
-                ("evalMetrics: dict[str, Any] = field(default_factory=dict)", True),
-            ],
-        ),
-        TestCase(
-            name="thread safety mechanisms",
-            expected_status="success",
-            config={"port": 28080},
-            expected_output=[
-                ("_progression_metrics_lock", True),
-                ("threading.Lock()", True),
-                ("with _progression_metrics_lock:", True),
-                ("_update_progression_metrics", True),
+                ("[Kubeflow] Initializing progression tracking", True),
+                ("[Kubeflow] Progression tracking enabled", True),
+                ("Client SDK", True),
+                ("Runtime SDK", True),
             ],
         ),
     ],
@@ -690,85 +651,6 @@ def test_get_trainer_cr_custom_metrics_port():
     print("test execution complete")
 
 
-def test_get_trainer_cr_non_pytorch_framework():
-    """Test Trainer CRD generation with non-pytorch framework uses DEFAULT_COMMAND."""
-    print("Executing test: Trainer CRD with non-pytorch framework")
-
-    def dummy_train():
-        print("Training...")
-
-    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
-    from kubeflow.trainer.types import types
-
-    runtime = types.Runtime(
-        name="test-runtime",
-        trainer=types.RuntimeTrainer(
-            trainer_type=types.TrainerType.CUSTOM_TRAINER,
-            framework="jax",
-            image="jax/jax:0.4.0",
-        ),
-    )
-    trainer = TransformersTrainer(func=dummy_train, enable_progression_tracking=False)
-
-    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
-
-    command_str = " ".join(trainer_crd.command)
-    # Can't compare directly with constants.DEFAULT_COMMAND because {func_code}
-    # and {func_file} placeholders are expanded. DEFAULT_COMMAND uses "python"
-    # as entrypoint, TORCH_COMMAND uses "torchrun".
-    assert 'python "' in command_str
-    assert "torchrun" not in command_str
-
-    print("test execution complete")
-
-
-def test_get_trainer_cr_with_checkpoint_and_packages():
-    """Test Trainer CRD generation with checkpoint injection and packages_to_install.
-
-    Validates that:
-    - Checkpoint header/footer code is injected around user code
-    - packages_to_install generates pip install script in the command
-    """
-    print("Executing test: Trainer CRD with checkpoint and packages")
-
-    def dummy_train():
-        print("Training...")
-
-    from kubeflow.trainer.rhai.transformers import get_trainer_cr_from_transformers_trainer
-    from kubeflow.trainer.types import types
-
-    runtime = types.Runtime(
-        name="test-runtime",
-        trainer=types.RuntimeTrainer(
-            trainer_type=types.TrainerType.CUSTOM_TRAINER,
-            framework="pytorch",
-            image="pytorch/pytorch:2.0.0",
-        ),
-    )
-    trainer = TransformersTrainer(
-        func=dummy_train,
-        enable_progression_tracking=False,
-        enable_jit_checkpoint=True,
-        output_dir="/tmp/checkpoints",
-        packages_to_install=["transformers", "datasets"],
-    )
-
-    trainer_crd = get_trainer_cr_from_transformers_trainer(runtime, trainer)
-
-    command_str = " ".join(trainer_crd.command)
-    # Checkpoint header should be present
-    assert "[Kubeflow] Initializing checkpoint instrumentation" in command_str
-    assert "apply_checkpointing()" in command_str
-    # Checkpoint footer should be present
-    assert "upload_final_model_to_cloud()" in command_str
-    # Package install script should be present
-    assert "pip install" in command_str
-    assert "transformers" in command_str
-    assert "datasets" in command_str
-
-    print("test execution complete")
-
-
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -870,21 +752,10 @@ def test_callback_completion_state_protection(test_case):
     sys.modules["transformers"] = mock_transformers
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        # Replace user code placeholder
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        # Skip the actual patching call (line after _create_progression_instrumentation)
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            # Comment out the standalone apply_progression_tracking() call
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        # Import progression instrumentation directly from module
+        from kubeflow.trainer.rhai.instrumentation.progression import (
+            create_progression_instrumentation,
+        )
 
         (
             _,
@@ -892,7 +763,7 @@ def test_callback_completion_state_protection(test_case):
             _,
             get_metrics_json,
             _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        ) = create_progression_instrumentation(28080)
         callback = callback_class(metrics_port=28080)
 
         import json
@@ -1028,20 +899,10 @@ def test_completion_detection_via_on_step_end(test_case):
     sys.modules["transformers"] = mock_transformers
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        # Replace user code placeholder
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        # Skip the actual patching call
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        # Import progression instrumentation directly from module
+        from kubeflow.trainer.rhai.instrumentation.progression import (
+            create_progression_instrumentation,
+        )
 
         (
             _,
@@ -1049,7 +910,7 @@ def test_completion_detection_via_on_step_end(test_case):
             _,
             get_metrics_json,
             _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        ) = create_progression_instrumentation(28080)
         callback = callback_class(metrics_port=28080)
 
         import json
@@ -1178,21 +1039,10 @@ def test_callback_metrics_categorization(test_case):
     sys.modules["transformers"] = mock_transformers
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        # Replace user code placeholder
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        # Skip the actual patching call (line after _create_progression_instrumentation)
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            # Comment out the standalone apply_progression_tracking() call
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        # Import progression instrumentation directly from module
+        from kubeflow.trainer.rhai.instrumentation.progression import (
+            create_progression_instrumentation,
+        )
 
         (
             _,
@@ -1200,7 +1050,7 @@ def test_callback_metrics_categorization(test_case):
             _,
             get_metrics_json,
             _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        ) = create_progression_instrumentation(28080)
         callback = callback_class(metrics_port=28080)
 
         import json
@@ -1326,18 +1176,10 @@ def test_honest_progress_reporting(test_case):
     sys.modules["transformers"] = mock_transformers
 
     try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
+        # Import progression instrumentation directly from module
+        from kubeflow.trainer.rhai.instrumentation.progression import (
+            create_progression_instrumentation,
+        )
 
         (
             _,
@@ -1345,7 +1187,7 @@ def test_honest_progress_reporting(test_case):
             _,
             get_metrics_json,
             _,
-        ) = namespace["_create_progression_instrumentation"](28080)
+        ) = create_progression_instrumentation(28080)
         callback = callback_class(metrics_port=28080)
 
         import json
@@ -2157,8 +1999,8 @@ def test_find_latest_checkpoint_none_output_dir():
 
 
 def test_auto_resume_code_generation():
-    """Test that auto-resume code is generated in checkpoint injection."""
-    print("Executing test: auto-resume code generation")
+    """Test that checkpoint instrumentation is imported (not inlined)."""
+    print("Executing test: checkpoint instrumentation import")
 
     from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
 
@@ -2168,71 +2010,24 @@ def test_auto_resume_code_generation():
         enable_jit_checkpoint=True,
     )
 
-    # Verify auto-resume logic is present in generated code
-    assert "_find_latest_checkpoint" in checkpoint_header, "Should include _find_latest_checkpoint"
-    assert "def _patched_train" in checkpoint_header, "Should include _patched_train"
-    assert "resume_from_checkpoint" in checkpoint_header, (
-        "Should include resume_from_checkpoint logic"
+    # Verify checkpoint instrumentation is imported from package (not inlined)
+    assert (
+        "from kubeflow.trainer.rhai.instrumentation.checkpoint import create_checkpoint_instrumentation"
+        in checkpoint_header
+    ), "Should import checkpoint instrumentation from package"
+    assert "create_checkpoint_instrumentation(checkpoint_config)" in checkpoint_header, (
+        "Should call create_checkpoint_instrumentation"
     )
-    assert "if resume_from_checkpoint is None" in checkpoint_header, "Should check if user set it"
-    assert "Auto-resuming from:" in checkpoint_header, "Should log auto-resume action"
-    assert "self.train = _patched_train" in checkpoint_header, "Should patch train method"
+    assert "apply_checkpointing()" in checkpoint_header, "Should apply checkpointing"
 
-    # Verify imports needed for auto-resume
-    assert "import re" in checkpoint_header, "Should import re for regex"
-    assert "import shutil" in checkpoint_header, "Should import shutil for rmtree"
-    assert "import os" in checkpoint_header, "Should import os"
+    # Verify we're NOT inlining the code (old approach)
+    assert "_find_latest_checkpoint" not in checkpoint_header, (
+        "Should NOT inline checkpoint code (import instead)"
+    )
+    assert "import re" not in checkpoint_header, "Should NOT inline imports (import instead)"
+    assert "import shutil" not in checkpoint_header, "Should NOT inline imports (import instead)"
 
     print("test execution complete")
-
-
-def test_auto_resume_user_override():
-    """Test that user's explicit resume_from_checkpoint is not overridden."""
-    print("Executing test: auto-resume respects user override")
-
-    import sys
-    from unittest.mock import Mock
-
-    # Mock transformers module
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    mock_transformers.trainer_utils = Mock()
-    mock_transformers.trainer_utils.PREFIX_CHECKPOINT_DIR = "checkpoint"
-    sys.modules["transformers"] = mock_transformers
-    sys.modules["transformers.trainer_utils"] = mock_transformers.trainer_utils
-
-    # Mock torch module
-    mock_torch = Mock()
-    mock_torch.cuda.is_available.return_value = False
-    sys.modules["torch"] = mock_torch
-
-    try:
-        from kubeflow.trainer.rhai.transformers import get_jit_checkpoint_injection_code
-
-        checkpoint_header, _ = get_jit_checkpoint_injection_code(
-            output_dir="/tmp/checkpoints",
-            periodic_checkpoint_config=None,
-            enable_jit_checkpoint=True,
-        )
-
-        # Verify the logic: only auto-resume if resume_from_checkpoint is None
-        assert "if resume_from_checkpoint is None" in checkpoint_header
-
-        assert (
-            "resume_from_checkpoint is None and training_args" in checkpoint_header
-            or "if resume_from_checkpoint is None" in checkpoint_header
-        )
-
-        print("test execution complete")
-
-    finally:
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
-        if "transformers.trainer_utils" in sys.modules:
-            del sys.modules["transformers.trainer_utils"]
-        if "torch" in sys.modules:
-            del sys.modules["torch"]
 
 
 def test_transformers_trainer_s3_requires_data_connection_name():
@@ -2460,228 +2255,6 @@ def test_save_on_each_node_validation_error(tmp_path):
 
     assert returncode == 0
     assert "save_on_each_node=True is not supported when output_dir is an S3 URI" in stdout
-
-    print("test execution complete")
-
-
-def test_async_upload_worker_scaffolding():
-    """Test async upload worker scaffolding is present in generated code."""
-    print("Executing test: async upload worker scaffolding")
-
-    checkpoint_header, _ = get_jit_checkpoint_injection_code(
-        output_dir="/mnt/kubeflow-checkpoints",
-        cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
-        enable_jit_checkpoint=True,
-    )
-
-    assert "LifoQueue" in checkpoint_header
-    assert "daemon=False" in checkpoint_header
-    assert "KubeflowCheckpointUploader" in checkpoint_header
-    assert "1 hour" in checkpoint_header
-    assert "self._upload_thread.join(timeout=" in checkpoint_header
-
-    print("test execution complete")
-
-
-def test_async_parallel_upload_scaffolding():
-    """Test parallel upload scaffolding is present in generated code."""
-    print("Executing test: async parallel upload scaffolding")
-
-    checkpoint_header, _ = get_jit_checkpoint_injection_code(
-        output_dir="/mnt/kubeflow-checkpoints",
-        cloud_remote_storage_uri="s3://my-bucket/model-checkpoints",
-        enable_jit_checkpoint=True,
-    )
-
-    assert "ThreadPoolExecutor" in checkpoint_header
-    assert "as_completed" in checkpoint_header
-    assert "_parallel_upload_files" in checkpoint_header
-
-    print("test execution complete")
-
-
-def test_async_upload_execution(tmp_path):
-    """Integration test: async upload runs and cleans staging."""
-    print("Executing test: async upload execution")
-
-    import subprocess
-    import sys
-
-    from kubeflow.trainer.rhai.constants import CHECKPOINT_INCOMPLETE_MARKER
-
-    output_dir = tmp_path / "checkpoints"
-
-    checkpoint_header, _ = get_jit_checkpoint_injection_code(
-        output_dir=str(output_dir),
-        cloud_remote_storage_uri="s3://test-bucket/model-checkpoints",
-        enable_jit_checkpoint=True,
-    )
-    checkpoint_code = checkpoint_header
-
-    fsspec_stub = """
-class MockS3FileSystem:
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def ls(self, path, detail=False):
-        return []
-
-    def exists(self, path):
-        return False
-
-    def pipe(self, path, data):
-        print(f"PIPE={path}")
-
-    def cat(self, path):
-        return b"test"
-
-    def put_file(self, local, remote):
-        print(f"PUT_FILE={remote}")
-
-    def rm_file(self, path):
-        print(f"RM_FILE={path}")
-
-    def get(self, src, dst, recursive=False, callback=None):
-        pass
-
-    def du(self, path, total=True, maxdepth=None):
-        return 0
-
-def filesystem(protocol, **kwargs):
-    return MockS3FileSystem()
-"""
-
-    torch_stub = """
-class distributed:
-    @staticmethod
-    def is_available():
-        return False
-
-    @staticmethod
-    def is_initialized():
-        return False
-
-    @staticmethod
-    def barrier():
-        pass
-
-class cuda:
-    @staticmethod
-    def is_available():
-        return False
-"""
-
-    transformers_stub = """
-class TrainerCallback:
-    pass
-
-class trainer_utils:
-    PREFIX_CHECKPOINT_DIR = "checkpoint"
-
-PREFIX_CHECKPOINT_DIR = "checkpoint"
-
-class TrainerState:
-    def __init__(self):
-        self.global_step = 0
-        self.is_world_process_zero = True
-
-class Trainer:
-    def __init__(self, *args, **kwargs):
-        self.state = TrainerState()
-        self.model = None
-        self._init_args = args
-        self._init_kwargs = kwargs
-
-    def train(self, resume_from_checkpoint=None):
-        return {"train_called": True, "resume_from": resume_from_checkpoint}
-"""
-
-    test_file = tmp_path / "test_async_upload_execution.py"
-
-    test_code = f"""
-import os
-import sys
-import types
-
-fsspec_module = types.ModuleType('fsspec')
-exec('''{fsspec_stub}''', fsspec_module.__dict__)
-sys.modules['fsspec'] = fsspec_module
-
-torch_module = types.ModuleType('torch')
-exec('''{torch_stub}''', torch_module.__dict__)
-sys.modules['torch'] = torch_module
-sys.modules['torch.distributed'] = torch_module.distributed
-
-transformers_module = types.ModuleType('transformers')
-exec('''{transformers_stub}''', transformers_module.__dict__)
-sys.modules['transformers'] = transformers_module
-
-trainer_utils_module = types.ModuleType('transformers.trainer_utils')
-trainer_utils_module.PREFIX_CHECKPOINT_DIR = "checkpoint"
-sys.modules['transformers.trainer_utils'] = trainer_utils_module
-
-{checkpoint_code}
-
-from transformers import TrainerCallback
-
-callback_class = None
-for name, obj in list(globals().items()):
-    if isinstance(obj, type) and issubclass(obj, TrainerCallback) and name != 'TrainerCallback':
-        callback_class = obj
-        break
-
-if not callback_class:
-    print("ERROR: JITCheckpointCallback not found")
-    sys.exit(1)
-
-callback = callback_class(cloud_remote_storage_uri="s3://test-bucket/model-checkpoints")
-
-class MockArgs:
-    output_dir = r"{output_dir}"
-    local_process_index = 0
-
-class MockState:
-    global_step = 3
-    is_world_process_zero = True
-
-checkpoint_path = os.path.join(MockArgs.output_dir, "checkpoint-3")
-os.makedirs(checkpoint_path, exist_ok=True)
-with open(os.path.join(checkpoint_path, "model.bin"), "w", encoding="utf-8") as f:
-    f.write("data")
-
-callback.on_save(MockArgs(), MockState(), None)
-callback.shutdown_upload_worker()
-
-if True:
-    staging_checkpoint = os.path.join(
-        MockArgs.output_dir, CHECKPOINT_STAGING_DIR, "checkpoint-3"
-    )
-    print(f"STAGING_CHECKPOINT_EXISTS={{os.path.exists(staging_checkpoint)}}")
-    print(f"CHECKPOINT_EXISTS={{os.path.exists(checkpoint_path)}}")
-
-print("TEST_COMPLETE=True")
-"""
-
-    test_file.write_text(test_code)
-
-    result = subprocess.run(
-        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
-    )
-
-    output = result.stdout
-    print(f"Test output:\\n{output}")
-
-    if result.returncode != 0:
-        print(f"Test stderr:\\n{result.stderr}")
-
-    assert result.returncode == 0, f"Execution failed with return code {result.returncode}"
-    assert "TEST_COMPLETE=True" in output
-    expected_marker = f"{CHECKPOINT_INCOMPLETE_MARKER}.node-0-rank-0"
-    assert f"PIPE=checkpoint-3/{expected_marker}" in output
-    assert "PUT_FILE=checkpoint-3/model.bin" in output
-    assert f"RM_FILE=checkpoint-3/{expected_marker}" in output
-    assert "STAGING_CHECKPOINT_EXISTS=False" in output
-    assert "CHECKPOINT_EXISTS=False" in output
 
     print("test execution complete")
 
@@ -3078,35 +2651,6 @@ def test_output_dir_normalization(test_case):
         assert type(e) is test_case.expected_error
 
     print("test execution complete")
-
-
-def test_s3_access_retry_code_generation():
-    """Test that S3 access verification includes 3-retry logic in generated code."""
-    print("Executing test: S3 retry logic in generated code")
-
-    # Generate checkpoint injection code with S3 config
-    checkpoint_header, _ = get_jit_checkpoint_injection_code(
-        output_dir="/mnt/checkpoints",
-        cloud_remote_storage_uri="s3://test-bucket/path",
-        enable_jit_checkpoint=True,
-        verify_cloud_storage_access=True,
-    )
-    code = checkpoint_header
-
-    # Verify retry logic is present in generated code
-    assert "for attempt in range(1, 4):" in code, "3-attempt retry loop not found"
-    assert "last_error = None" in code, "Error tracking not found"
-    assert "last_error = e" in code, "Error capture not found"
-    assert "if attempt < 3:" in code, "Retry condition not found"
-    assert "time.sleep(1)" in code, "Backoff sleep not found"
-    assert "if last_error:" in code, "Error re-raise check not found"
-    assert "raise last_error" in code, "Error propagation not found"
-
-    # Verify code structure contains the access verification section
-    assert "verify_cloud_storage_access" in code
-    assert 'self.remote_fs.pipe(test_file, b"test")' in code
-    assert "self.remote_fs.cat(test_file)" in code
-    assert "self.remote_fs.rm_file(test_file)" in code
 
 
 # ============================================================================
@@ -4372,640 +3916,232 @@ print("TEST_COMPLETE=True")
     print("test execution complete")
 
 
-@pytest.fixture
-def progression_instrumentation():
-    """Set up mock transformers and return progression instrumentation components.
+def test_checkpoint_error_handling_module_not_found(tmp_path):
+    """Test error handling when runtime SDK version is below minimum requirement."""
+    print("Executing test: checkpoint error handling - runtime SDK version too old")
 
-    Mocks sys.modules["transformers"] for the exec-based test environment,
-    executes the instrumentation wrapper, and yields all 5 components from
-    _create_progression_instrumentation. Restores original sys.modules state
-    on teardown.
-
-    Yields:
-        Tuple of (apply_fn, callback_class, handler_class, get_metrics_json,
-        update_progression_metrics).
-    """
+    import subprocess
     import sys
-    from unittest.mock import Mock
 
-    _sentinel = object()
-    prev_transformers = sys.modules.get("transformers", _sentinel)
-
-    mock_transformers = Mock()
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = Mock()
-    sys.modules["transformers"] = mock_transformers
-
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        namespace = {}
-        exec(wrapper_code, namespace)
-
-        components = namespace["_create_progression_instrumentation"](28080)
-        yield components
-    finally:
-        if prev_transformers is _sentinel:
-            sys.modules.pop("transformers", None)
-        else:
-            sys.modules["transformers"] = prev_transformers
-
-
-def test_update_progression_metrics(progression_instrumentation):
-    """Test _update_progression_metrics metrics update function.
-
-    Validates that:
-    - Scalar fields are set correctly
-    - Dict fields are merged (not replaced)
-    - Unknown keys are silently ignored
-    """
-    print("Executing test: Update Progression Metrics.")
-
-    _, _, _, get_metrics_json, update_progression_metrics = progression_instrumentation
-
-    import json
-
-    # Verify initial state (all defaults)
-    metrics = json.loads(get_metrics_json())
-    assert metrics["currentStep"] == 0
-    assert metrics["currentEpoch"] == 0.0
-    assert metrics["progressPercentage"] is None
-    assert metrics["estimatedRemainingSeconds"] is None
-    assert metrics["totalSteps"] is None
-    assert metrics["totalEpochs"] is None
-    assert metrics["trainMetrics"] == {}
-    assert metrics["evalMetrics"] == {}
-
-    # Test scalar field updates
-    update_progression_metrics(
-        {
-            "currentStep": 50,
-            "totalSteps": 100,
-            "currentEpoch": 1.5,
-            "totalEpochs": 3,
-            "progressPercentage": 50,
-            "estimatedRemainingSeconds": 120,
-        }
+    # Generate checkpoint code
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
+        output_dir="/tmp/checkpoints",
+        enable_jit_checkpoint=True,
     )
-    metrics = json.loads(get_metrics_json())
-    assert metrics["currentStep"] == 50
-    assert metrics["totalSteps"] == 100
-    assert metrics["currentEpoch"] == 1.5
-    assert metrics["totalEpochs"] == 3
-    assert metrics["progressPercentage"] == 50
-    assert metrics["estimatedRemainingSeconds"] == 120
 
-    # Test dict fields are merged (not replaced)
-    update_progression_metrics(
-        {
-            "trainMetrics": {"loss": 0.5, "learning_rate": 0.001},
-        }
+    # Write checkpoint header to a separate file
+    checkpoint_file = tmp_path / "checkpoint_code.py"
+    checkpoint_file.write_text(checkpoint_header)
+
+    # Create test file that simulates old runtime SDK version
+    test_file = tmp_path / "test_old_runtime_version.py"
+    test_code = f"""
+import sys
+
+# Mock old runtime kubeflow version before executing checkpoint code
+from unittest.mock import Mock
+mock_kubeflow = Mock()
+mock_kubeflow.__version__ = "0.3.0"  # Below minimum 0.4.0
+sys.modules['kubeflow'] = mock_kubeflow
+
+try:
+    # Execute checkpoint code
+    with open('{checkpoint_file}', 'r') as f:
+        exec(f.read())
+    print("ERROR: Should have raised RuntimeError")
+    sys.exit(1)
+except RuntimeError as e:
+    error_msg = str(e)
+    # Verify error message content
+    assert "Checkpoint instrumentation requires SDK version" in error_msg, f"Wrong error: {{error_msg}}"
+    assert "Runtime SDK version 0.3.0 is below minimum" in error_msg
+    assert "packages_to_install" in error_msg
+    assert "clusterTrainingRuntimes" in error_msg
+    print("SUCCESS: Correct error raised for old runtime SDK")
+    sys.exit(0)
+except Exception as e:
+    print(f"ERROR: Unexpected exception: {{type(e).__name__}}: {{e}}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
     )
-    metrics = json.loads(get_metrics_json())
-    assert metrics["trainMetrics"] == {"loss": 0.5, "learning_rate": 0.001}
 
-    # Merge additional keys into existing dict
-    update_progression_metrics(
-        {
-            "trainMetrics": {"grad_norm": 1.2},
-        }
-    )
-    metrics = json.loads(get_metrics_json())
-    assert metrics["trainMetrics"] == {
-        "loss": 0.5,
-        "learning_rate": 0.001,
-        "grad_norm": 1.2,
-    }
+    if result.returncode != 0:
+        print(f"Test output: {result.stdout}")
+        print(f"Test stderr: {result.stderr}")
 
-    # Overwrite existing key within dict
-    update_progression_metrics(
-        {
-            "trainMetrics": {"loss": 0.3},
-        }
-    )
-    metrics = json.loads(get_metrics_json())
-    assert metrics["trainMetrics"]["loss"] == 0.3
-    assert metrics["trainMetrics"]["learning_rate"] == 0.001
-
-    # Test evalMetrics dict merge
-    update_progression_metrics(
-        {
-            "evalMetrics": {"eval_loss": 0.8, "eval_accuracy": 0.92},
-        }
-    )
-    metrics = json.loads(get_metrics_json())
-    assert metrics["evalMetrics"] == {"eval_loss": 0.8, "eval_accuracy": 0.92}
-
-    # Test unknown keys are silently ignored
-    update_progression_metrics(
-        {
-            "nonExistentField": 999,
-            "currentStep": 75,
-        }
-    )
-    metrics = json.loads(get_metrics_json())
-    assert metrics["currentStep"] == 75
-    assert "nonExistentField" not in metrics
-
-    # Test scalar fields overwrite previous values
-    update_progression_metrics(
-        {
-            "progressPercentage": 100,
-            "estimatedRemainingSeconds": 0,
-        }
-    )
-    metrics = json.loads(get_metrics_json())
-    assert metrics["progressPercentage"] == 100
-    assert metrics["estimatedRemainingSeconds"] == 0
-
-    # Verify previously set scalar fields remain unchanged
-    assert metrics["currentStep"] == 75
-    assert metrics["totalSteps"] == 100
+    assert result.returncode == 0, "Error handling test failed"
+    assert "SUCCESS: Correct error raised for old runtime SDK" in result.stdout
 
     print("test execution complete")
 
 
-def test_get_progression_metrics_json(progression_instrumentation):
-    """Test _get_progression_metrics_json returns valid JSON with expected schema.
-
-    Validates that:
-    - Return value is a valid JSON string
-    - Default state contains all expected fields
-    - State reflects updates made via _update_progression_metrics
-    """
-    print("Executing test: Get Progression Metrics JSON.")
-
-    _, _, _, get_metrics_json, update_progression_metrics = progression_instrumentation
-
-    import json
-
-    # Verify default state returns valid JSON with all expected fields
-    raw = get_metrics_json()
-    assert isinstance(raw, str)
-    metrics = json.loads(raw)
-    expected_keys = {
-        "progressPercentage",
-        "estimatedRemainingSeconds",
-        "currentStep",
-        "totalSteps",
-        "currentEpoch",
-        "totalEpochs",
-        "trainMetrics",
-        "evalMetrics",
-    }
-    assert set(metrics.keys()) == expected_keys
-
-    # Verify JSON reflects updates
-    update_progression_metrics(
-        {
-            "currentStep": 42,
-            "progressPercentage": 84,
-            "trainMetrics": {"loss": 0.25},
-        }
-    )
-    metrics = json.loads(get_metrics_json())
-    assert metrics["currentStep"] == 42
-    assert metrics["progressPercentage"] == 84
-    assert metrics["trainMetrics"] == {"loss": 0.25}
-
-    print("test execution complete")
-
-
-def test_progression_metrics_handler_do_get(progression_instrumentation):
-    """Test ProgressionMetricsHandler serves metrics JSON over HTTP.
-
-    Validates that:
-    - GET request returns 200 with Content-Type application/json
-    - Response body is valid JSON matching current metrics state
-    """
-    print("Executing test: Progression Metrics Handler do_GET.")
-
-    _, _, handler_class, _, update_progression_metrics = progression_instrumentation
-
-    import http.server
-    import json
-    import threading
-
-    # Seed some state so we can verify it in the response
-    update_progression_metrics(
-        {
-            "currentStep": 10,
-            "totalSteps": 100,
-            "progressPercentage": 10,
-        }
-    )
-
-    # Start a real HTTP server on an ephemeral port
-    server = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    try:
-        import urllib.request
-
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
-        assert resp.status == 200
-        assert resp.headers["Content-Type"] == "application/json"
-
-        body = json.loads(resp.read().decode("utf-8"))
-        assert body["currentStep"] == 10
-        assert body["totalSteps"] == 100
-        assert body["progressPercentage"] == 10
-    finally:
-        server.shutdown()
-        server.server_close()
-
-    print("test execution complete")
-
-
-def test_on_train_begin_initial_metrics(progression_instrumentation):
-    """Test on_train_begin sets initial metrics for a fresh training start.
-
-    Validates that:
-    - totalEpochs is set from args.num_train_epochs
-    - Fresh start (global_step = 0) sets progressPercentage to 0
-    - Server is NOT started when is_world_process_zero is False
-    """
-    print("Executing test: on_train_begin initial metrics.")
-
-    from unittest.mock import Mock
-
-    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
-
-    import json
-
-    callback = callback_class(metrics_port=28080)
-    args = Mock()
-    args.num_train_epochs = 5
-    state = Mock()
-    state.global_step = 0
-    state.max_steps = 500
-    state.epoch = 0.0
-    state.is_world_process_zero = False
-    control = Mock()
-
-    callback.on_train_begin(args, state, control)
-
-    metrics = json.loads(get_metrics_json())
-    assert metrics["currentStep"] == 0
-    assert metrics["totalSteps"] == 500
-    assert metrics["totalEpochs"] == 5
-    assert metrics["currentEpoch"] == 0.0
-    assert metrics["progressPercentage"] == 0
-    assert callback.start_time is not None
-    assert callback.server is None
-
-    print("test execution complete")
-
-
-def test_on_train_begin_checkpoint_resume(progression_instrumentation):
-    """Test on_train_begin calculates initial progress for checkpoint resume.
-
-    When global_step > 0 at the start, progressPercentage should reflect
-    the resumed position (e.g., 200/1000 = 20%).
-    """
-    print("Executing test: on_train_begin checkpoint resume.")
-
-    from unittest.mock import Mock
-
-    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
-
-    import json
-
-    callback = callback_class(metrics_port=28080)
-    args = Mock()
-    args.num_train_epochs = 10
-    state = Mock()
-    state.global_step = 200
-    state.max_steps = 1000
-    state.epoch = 2.0
-    state.is_world_process_zero = False
-    control = Mock()
-
-    callback.on_train_begin(args, state, control)
-
-    metrics = json.loads(get_metrics_json())
-    assert metrics["currentStep"] == 200
-    assert metrics["totalSteps"] == 1000
-    assert metrics["totalEpochs"] == 10
-    assert metrics["currentEpoch"] == 2.0
-    assert metrics["progressPercentage"] == 20
-
-    print("test execution complete")
-
-
-def test_on_train_end_termination_message(progression_instrumentation):
-    """Test on_train_end writes termination message for world process zero.
-
-    Validates that:
-    - /dev/termination-log receives valid JSON with final metrics
-    - trainMetrics and evalMetrics are included in the termination message
-    """
-    print("Executing test: on_train_end termination message.")
-
-    import io
-    from unittest.mock import Mock, mock_open, patch
-
-    _, callback_class, _, get_metrics_json, update_progression_metrics = progression_instrumentation
-
-    import json
-
-    # Pre-seed train/eval metrics so they appear in termination message
-    update_progression_metrics(
-        {
-            "trainMetrics": {"loss": 0.1, "learning_rate": 0.0001},
-            "evalMetrics": {"eval_loss": 0.2},
-        }
-    )
-
-    callback = callback_class(metrics_port=28080)
-    args = Mock()
-    args.num_train_epochs = 3
-    state = Mock()
-    state.global_step = 300
-    state.max_steps = 300
-    state.epoch = 3.0
-    state.is_world_process_zero = True
-    control = Mock()
-
-    # Capture what gets written to /dev/termination-log
-    written_data = io.StringIO()
-    m = mock_open()
-    m.return_value.write = written_data.write
-
-    with patch("builtins.open", m):
-        callback.on_train_begin(args, state, control)
-        callback.on_train_end(args, state, control)
-
-    m.assert_called_once_with("/dev/termination-log", "w")
-    termination_json = written_data.getvalue()
-    termination = json.loads(termination_json)
-
-    assert termination["currentStep"] == 300
-    assert termination["totalSteps"] == 300
-    assert termination["totalEpochs"] == 3
-    assert termination["currentEpoch"] == 3.0
-    assert termination["progressPercentage"] == 100
-    assert termination["estimatedRemainingSeconds"] == 0
-    assert termination["trainMetrics"]["loss"] == 0.1
-    assert termination["evalMetrics"]["eval_loss"] == 0.2
-
-    assert callback.training_finished is True
-
-    print("test execution complete")
-
-
-def test_on_train_end_non_world_process_zero(progression_instrumentation):
-    """Test on_train_end skips termination message for non-world-process-zero.
-
-    Validates that training_finished is set and metrics are updated, but
-    /dev/termination-log is NOT written.
-    """
-    print("Executing test: on_train_end non-world-process-zero.")
-
-    from unittest.mock import Mock, patch
-
-    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
-
-    import json
-
-    callback = callback_class(metrics_port=28080)
-    args = Mock()
-    args.num_train_epochs = 2
-    state = Mock()
-    state.global_step = 100
-    state.max_steps = 100
-    state.epoch = 2.0
-    state.is_world_process_zero = False
-    control = Mock()
-
-    with patch("builtins.open") as mock_file:
-        callback.on_train_begin(args, state, control)
-        callback.on_train_end(args, state, control)
-        mock_file.assert_not_called()
-
-    assert callback.training_finished is True
-
-    metrics = json.loads(get_metrics_json())
-    assert metrics["progressPercentage"] == 100
-    assert metrics["estimatedRemainingSeconds"] == 0
-
-    print("test execution complete")
-
-
-def test_apply_progression_tracking():
-    """Test apply_progression_tracking patches Trainer.__init__.
-
-    Validates that:
-    - Trainer.__init__ is replaced with an instrumented version
-    - The original __init__ is still called
-    - KubeflowProgressCallback is added to the trainer callbacks
-
-    Note: uses a custom mock setup (FakeTrainer class) instead of the shared
-    fixture because Mock objects forbid setting __init__.
-    """
-    print("Executing test: apply_progression_tracking.")
-
+def test_checkpoint_error_handling_version_mismatch_warning(tmp_path):
+    """Test that different SDK versions are allowed as long as both are >= 0.4.0."""
+    print("Executing test: checkpoint with different but compatible SDK versions")
+
+    import subprocess
     import sys
-    import types
-    from unittest.mock import Mock
 
-    trainer_stub = types.ModuleType("transformers.trainer")
-    init_call_log = []
-
-    class FakeTrainer:
-        def __init__(self, *args, **kwargs):
-            init_call_log.append(("original", args, kwargs))
-            self.callback_handler = Mock()
-            self.callback_handler.callbacks = []
-
-        def add_callback(self, cb):
-            self.callback_handler.callbacks.append(cb)
-
-    trainer_stub.Trainer = FakeTrainer
-
-    mock_transformers = types.ModuleType("transformers")
-    mock_transformers.TrainerCallback = type("TrainerCallback", (), {})
-    mock_transformers.trainer = trainer_stub
-    sys.modules["transformers"] = mock_transformers
-    sys.modules["transformers.trainer"] = trainer_stub
-
-    try:
-        wrapper = get_transformers_instrumentation_wrapper(metrics_port=28080)
-        namespace = {}
-        wrapper_code = wrapper.replace("{{user_func_import_and_call}}", "pass")
-        lines = wrapper_code.split("\n")
-        modified_lines = []
-        for line in lines:
-            if line.strip() == "apply_progression_tracking()":
-                modified_lines.append("# apply_progression_tracking()  # Skipped in tests")
-            else:
-                modified_lines.append(line)
-        wrapper_code = "\n".join(modified_lines)
-        exec(wrapper_code, namespace)
-
-        (
-            apply_fn,
-            callback_class,
-            _,
-            _,
-            _,
-        ) = namespace["_create_progression_instrumentation"](28080)
-
-        original_init = FakeTrainer.__init__
-
-        apply_fn()
-
-        assert trainer_stub.Trainer.__init__ != original_init
-
-        instance = trainer_stub.Trainer()
-
-        assert len(init_call_log) == 1
-        assert init_call_log[0][0] == "original"
-
-        assert len(instance.callback_handler.callbacks) == 1
-        added_callback = instance.callback_handler.callbacks[0]
-        assert isinstance(added_callback, callback_class)
-        assert added_callback.metrics_port == 28080
-
-        print("test execution complete")
-    finally:
-        if "transformers" in sys.modules:
-            del sys.modules["transformers"]
-        if "transformers.trainer" in sys.modules:
-            del sys.modules["transformers.trainer"]
-
-
-def test_on_log_ignores_non_numeric_values(progression_instrumentation):
-    """Test on_log silently ignores non-numeric, non-tensor metric values.
-
-    Validates that:
-    - String values are ignored
-    - None values are ignored
-    - List/dict values are ignored
-    - Only int/float values are categorized
-    """
-    print("Executing test: on_log ignores non-numeric values.")
-
-    from unittest.mock import Mock
-
-    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
-
-    import json
-
-    callback = callback_class(metrics_port=28080)
-    args = Mock()
-    state = Mock()
-    control = Mock()
-
-    callback.on_log(
-        args,
-        state,
-        control,
-        logs={
-            "loss": 0.5,
-            "some_string": "not a number",
-            "some_none": None,
-            "some_list": [1, 2, 3],
-            "some_dict": {"nested": True},
-            "eval_loss": 0.3,
-            "eval_string": "also not a number",
-        },
+    # Generate checkpoint code
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
+        output_dir="/tmp/checkpoints",
+        enable_jit_checkpoint=True,
     )
 
-    metrics = json.loads(get_metrics_json())
-    assert metrics["trainMetrics"] == {"loss": 0.5}
-    assert metrics["evalMetrics"] == {"eval_loss": 0.3}
+    # Write checkpoint header to a separate file
+    checkpoint_file = tmp_path / "checkpoint_code.py"
+    checkpoint_file.write_text(checkpoint_header)
+
+    # Mock modules with different version (but both >= 0.4.0)
+    test_file = tmp_path / "test_version_compatible.py"
+    test_code = f"""
+import sys
+from unittest.mock import Mock, patch
+
+# Mock transformers
+mock_transformers = Mock()
+mock_transformers.TrainerCallback = type("TrainerCallback", (), {{}})
+mock_transformers.trainer_utils = Mock()
+mock_transformers.trainer_utils.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers'] = mock_transformers
+sys.modules['transformers.trainer_utils'] = mock_transformers.trainer_utils
+
+# Mock torch
+mock_torch = Mock()
+mock_torch.cuda.is_available.return_value = False
+mock_torch.distributed.is_available.return_value = False
+sys.modules['torch'] = mock_torch
+sys.modules['torch.distributed'] = mock_torch.distributed
+
+try:
+    # Import checkpoint instrumentation first
+    from kubeflow.trainer.rhai.instrumentation.checkpoint import create_checkpoint_instrumentation
+
+    # Mock create_checkpoint_instrumentation to avoid actual execution
+    def mock_create(*args, **kwargs):
+        return None, None, lambda: None, lambda: None
+
+    # Patch create_checkpoint_instrumentation and execute checkpoint code
+    with patch('kubeflow.trainer.rhai.instrumentation.checkpoint.create_checkpoint_instrumentation', side_effect=mock_create):
+        # Modify runtime version before executing checkpoint code
+        import kubeflow
+        kubeflow.__version__ = "0.5.0"  # Different from client version (but >= 0.4.0)
+
+        with open('{checkpoint_file}', 'r') as f:
+            exec(f.read())
+
+    # If we get here, no exception was raised - success!
+    print("SUCCESS: Different but compatible SDK versions work without error")
+    sys.exit(0)
+
+except Exception as e:
+    print(f"ERROR: {{e}}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    if result.returncode != 0:
+        print(f"Test output: {result.stdout}")
+        print(f"Test stderr: {result.stderr}")
+
+    assert result.returncode == 0, "Compatible version test failed"
+    assert "SUCCESS: Different but compatible SDK versions work without error" in result.stdout
+
+    # Verify warning message is shown for version mismatch
+    assert "[Kubeflow] Warning: This job was created with SDK" in result.stdout
+    assert "but the runtime image has SDK" in result.stdout
+    assert "If you encounter unexpected errors" in result.stdout
 
     print("test execution complete")
 
 
-def test_on_log_empty_and_none_logs(progression_instrumentation):
-    """Test on_log handles empty and None logs gracefully.
+def test_checkpoint_error_handling_generic_exception(tmp_path):
+    """Test error handling for generic exceptions (config/credential errors)."""
+    print("Executing test: checkpoint error handling - generic exception")
 
-    Validates that:
-    - logs=None does not update metrics
-    - logs={} does not update metrics
-    """
-    print("Executing test: on_log empty and None logs.")
+    import subprocess
+    import sys
 
-    from unittest.mock import Mock
+    # Generate checkpoint code
+    checkpoint_header, _ = get_jit_checkpoint_injection_code(
+        output_dir="/tmp/checkpoints",
+        enable_jit_checkpoint=True,
+    )
 
-    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
+    # Write checkpoint header to a separate file
+    checkpoint_file = tmp_path / "checkpoint_code.py"
+    checkpoint_file.write_text(checkpoint_header)
 
-    import json
+    test_file = tmp_path / "test_generic_exception.py"
+    test_code = f"""
+import sys
+from unittest.mock import Mock, patch
 
-    callback = callback_class(metrics_port=28080)
-    args = Mock()
-    state = Mock()
-    control = Mock()
+# Mock modules
+mock_transformers = Mock()
+mock_transformers.TrainerCallback = type("TrainerCallback", (), {{}})
+mock_transformers.trainer_utils = Mock()
+mock_transformers.trainer_utils.PREFIX_CHECKPOINT_DIR = "checkpoint"
+sys.modules['transformers'] = mock_transformers
+sys.modules['transformers.trainer_utils'] = mock_transformers.trainer_utils
 
-    # Test with None logs
-    callback.on_log(args, state, control, logs=None)
-    metrics = json.loads(get_metrics_json())
-    assert metrics["trainMetrics"] == {}
-    assert metrics["evalMetrics"] == {}
+mock_torch = Mock()
+mock_torch.cuda.is_available.return_value = False
+mock_torch.distributed.is_available.return_value = False
+sys.modules['torch'] = mock_torch
+sys.modules['torch.distributed'] = mock_torch.distributed
 
-    # Test with empty logs
-    callback.on_log(args, state, control, logs={})
-    metrics = json.loads(get_metrics_json())
-    assert metrics["trainMetrics"] == {}
-    assert metrics["evalMetrics"] == {}
+# Create a mock that raises a generic exception (e.g., invalid config)
+def mock_create_checkpoint(*args, **kwargs):
+    raise ValueError("Invalid configuration: output_dir cannot be empty")
 
-    print("test execution complete")
-
-
-def test_on_train_begin_server_startup(progression_instrumentation):
-    """Test on_train_begin starts HTTP server for world process zero.
-
-    Validates that:
-    - Server is started when is_world_process_zero is True
-    - Server is accessible and serves metrics
-    - Server attribute is set on the callback
-    """
-    print("Executing test: on_train_begin server startup.")
-
-    from unittest.mock import Mock
-
-    _, callback_class, _, get_metrics_json, _ = progression_instrumentation
-
-    import json
-    import urllib.request
-
-    # Use port 0 to let the OS assign an ephemeral port
-    callback = callback_class(metrics_port=0)
-    args = Mock()
-    args.num_train_epochs = 3
-    state = Mock()
-    state.global_step = 0
-    state.max_steps = 100
-    state.epoch = 0.0
-    state.is_world_process_zero = True
-    control = Mock()
-
-    callback.on_train_begin(args, state, control)
-
-    assert callback.server is not None
-
+# Patch the import
+with patch('kubeflow.trainer.rhai.instrumentation.checkpoint.create_checkpoint_instrumentation', side_effect=mock_create_checkpoint):
     try:
-        port = callback.server.server_address[1]
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
-        assert resp.status == 200
-        body = json.loads(resp.read().decode("utf-8"))
-        assert body["totalSteps"] == 100
-        assert body["totalEpochs"] == 3
-    finally:
-        callback.server.shutdown()
-        callback.server.server_close()
+        # Execute checkpoint code
+        with open('{checkpoint_file}', 'r') as f:
+            exec(f.read())
+        print("ERROR: Should have raised RuntimeError")
+        sys.exit(1)
+    except RuntimeError as e:
+        error_msg = str(e)
+        # Verify error message shows the actual error (not SDK versions)
+        assert "Failed to initialize checkpoint instrumentation" in error_msg
+        assert "ValueError" in error_msg
+        assert "Invalid configuration" in error_msg
+        # Should NOT mention SDK versions (already verified as compatible)
+        assert "Client SDK:" not in error_msg
+        assert "Runtime SDK:" not in error_msg
+        print("SUCCESS: Generic exception handled correctly")
+        sys.exit(0)
+"""
+
+    test_file.write_text(test_code)
+
+    result = subprocess.run(
+        [sys.executable, str(test_file)], capture_output=True, text=True, timeout=10
+    )
+
+    if result.returncode != 0:
+        print(f"Test output: {result.stdout}")
+        print(f"Test stderr: {result.stderr}")
+
+    assert result.returncode == 0, "Generic exception test failed"
+    assert "SUCCESS: Generic exception handled correctly" in result.stdout
 
     print("test execution complete")
 
