@@ -14,7 +14,7 @@ Latest News 🔥
 - [2025/11] The Kubeflow SDK v0.2 is officially released. Check out
   [the announcement blog post](https://blog.kubeflow.org/sdk/intro/).
 
-## Overview
+## Overview of Kubeflow SDK
 
 The Kubeflow SDK is a set of unified Pythonic APIs that let you run any AI workload at any scale –
 without the need to learn Kubernetes. It provides simple and consistent APIs across the Kubeflow
@@ -51,7 +51,7 @@ Additionally, check out these demos to deep dive into Kubeflow SDK capabilities:
 - [LLM Fine-Tuning with BuiltinTrainer](https://youtu.be/pRWTLiW3dKQ)
 - [Local & Remote Backends in Kubeflow SDK](https://youtu.be/hhaebdkJLLQ)
 
-## Get Started
+## Get Started with Kubeflow SDK
 
 ### Install Kubeflow SDK
 
