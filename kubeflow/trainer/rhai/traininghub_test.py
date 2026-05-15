@@ -253,10 +253,12 @@ def test_metrics_port_validation(test_case):
                 ("def _read_osft_metrics", True),
                 ("def _read_sft_metrics", True),
                 ("def _read_lora_sft_metrics", True),
+                ("def _read_lora_grpo_metrics", True),
                 ("def _transform_schema", True),
                 ("def _transform_osft", True),
                 ("def _transform_sft", True),
                 ("def _transform_lora_sft", True),
+                ("def _transform_lora_grpo", True),
                 ("def do_GET", True),
             ],
         ),
@@ -544,8 +546,16 @@ def _install_dummy_training_hub(raises: Exception) -> None:
     def osft(**kwargs):  # type: ignore[unused-argument]
         raise raises
 
+    def lora_sft(**kwargs):  # type: ignore[unused-argument]
+        raise raises
+
+    def lora_grpo(**kwargs):  # type: ignore[unused-argument]
+        raise raises
+
     module.sft = sft  # type: ignore[attr-defined]
     module.osft = osft  # type: ignore[attr-defined]
+    module.lora_sft = lora_sft  # type: ignore[attr-defined]
+    module.lora_grpo = lora_grpo  # type: ignore[attr-defined]
     sys.modules["training_hub"] = module
 
 
@@ -590,7 +600,7 @@ def test_traininghub_wrapper_reraises_failure(test_case: TestCase, capsys):
     # training_hub module that raises, the wrapper should re-raise the same exception.
     # This validates failure propagation (so the container exits non‑zero in real runs).
     with pytest.raises(test_case.expected_error):
-        exec(code, {})  # nosec: B102 - executing generated test-only code
+        exec(code, {"__name__": "__main__"})  # nosec: B102 - executing generated test-only code
 
     # Additionally, verify that the wrapper printed the expected human-readable
     # error message (useful for debugging in container logs).
@@ -1180,6 +1190,218 @@ def test_lora_metrics_transformer_empty_metrics(tmp_path):
     assert result["progressPercentage"] is None
     assert result["currentStep"] is None
     assert result["trainMetrics"] is None
+
+    print("test execution complete")
+
+
+def test_traininghub_lora_grpo_enum_value():
+    """Test that LORA_GRPO enum exists and has correct value."""
+    print("Executing test: LORA_GRPO enum value")
+
+    assert TrainingHubAlgorithms.LORA_GRPO.value == "lora_grpo"
+
+    print("test execution complete")
+
+
+def test_lora_grpo_entrypoint_uses_python():
+    """Test that LORA_GRPO uses python entrypoint, not torchrun."""
+    print("Executing test: LORA_GRPO entrypoint uses python")
+
+    from kubeflow.trainer.rhai.traininghub import get_trainer_cr_from_training_hub_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="torch-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:latest",
+        ),
+    )
+    runtime.trainer.set_command(constants.TORCH_COMMAND)
+
+    trainer = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.LORA_GRPO,
+        func_args={"data_path": "/data/train.jsonl", "ckpt_output_dir": "/tmp/checkpoints"},
+    )
+
+    trainer_crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer)
+    command_str = " ".join(trainer_crd.command)
+
+    assert "python" in command_str, f"LORA_GRPO should use python: {command_str}"
+    assert "torchrun" not in command_str, f"LORA_GRPO should NOT use torchrun: {command_str}"
+
+    print("test execution complete")
+
+
+def test_algorithm_wrapper_main_guard():
+    """Test that generated wrapper includes if __name__ == '__main__' guard."""
+    print("Executing test: Algorithm wrapper __main__ guard")
+
+    from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
+    from kubeflow.trainer.rhai.traininghub import _render_algorithm_wrapper
+
+    algorithm_metadata = get_algorithm_pod_metadata("lora_grpo")
+    wrapper = _render_algorithm_wrapper(algorithm_metadata, {"ckpt_output_dir": "/tmp"})
+
+    assert "if __name__ == '__main__':" in wrapper, (
+        "Wrapper must include __main__ guard for multiprocessing.spawn compatibility"
+    )
+
+    print("test execution complete")
+
+
+def test_main_guard_present_for_all_algorithms():
+    """Test that __main__ guard is present for all algorithms (harmless for non-spawn)."""
+    print("Executing test: __main__ guard present for all algorithms")
+
+    from kubeflow.trainer.algorithms import ALGORITHMS, get_algorithm_pod_metadata
+    from kubeflow.trainer.rhai.traininghub import _render_algorithm_wrapper
+
+    for algorithm_name in ALGORITHMS:
+        algorithm_metadata = get_algorithm_pod_metadata(algorithm_name)
+        wrapper = _render_algorithm_wrapper(algorithm_metadata, {"ckpt_output_dir": "/tmp"})
+
+        assert "if __name__ == '__main__':" in wrapper, (
+            f"Algorithm '{algorithm_name}' wrapper should include __main__ guard"
+        )
+
+    print("test execution complete")
+
+
+@pytest.fixture
+def grpo_handler(tmp_path):
+    """Create a GRPO metrics handler for testing."""
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir()
+
+    algorithm_metadata = get_algorithm_pod_metadata("lora_grpo")
+    apply_fn, handler_class = _create_training_hub_progression_instrumentation(
+        algorithm_metadata=algorithm_metadata,
+        ckpt_output_dir=str(ckpt_dir),
+        metrics_port=0,
+    )
+
+    handler = handler_class.__new__(handler_class)
+    return apply_fn, handler, ckpt_dir
+
+
+def test_grpo_metrics_reader_two_phase(grpo_handler):
+    """Test that GRPO metrics reader merges rollout + train phase lines."""
+    print("Executing test: GRPO metrics reader two-phase merge")
+
+    _apply_fn, handler, ckpt_dir = grpo_handler
+
+    metrics_file = ckpt_dir / "training_metrics.jsonl"
+    metrics_file.write_text(
+        '{"step": 1, "epoch": 1, "phase": "rollout", "mean_reward": 0.42, "full_match_rate": 0.15}\n'
+        '{"step": 1, "epoch": 1, "phase": "train", "loss": 2.5, "grad_norm": 1.2, "learning_rate": 1e-5}\n'
+    )
+
+    metrics = handler._read_latest_metrics()
+
+    assert metrics["step"] == 1
+    assert metrics["phase"] == "train"
+    assert metrics["mean_reward"] == 0.42
+    assert metrics["full_match_rate"] == 0.15
+    assert metrics["loss"] == 2.5
+    assert metrics["grad_norm"] == 1.2
+    assert metrics["learning_rate"] == 1e-5
+
+    print("test execution complete")
+
+
+def test_grpo_metrics_reader_empty_file(grpo_handler):
+    """Test that GRPO metrics reader returns empty dict for missing file."""
+    print("Executing test: GRPO metrics reader empty file")
+
+    _apply_fn, handler, _ckpt_dir = grpo_handler
+
+    metrics = handler._read_latest_metrics()
+    assert metrics == {}
+
+    print("test execution complete")
+
+
+def test_grpo_metrics_transformer(grpo_handler):
+    """Test that GRPO metrics transformer produces correct controller format."""
+    print("Executing test: GRPO metrics transformer")
+
+    _apply_fn, handler, _ckpt_dir = grpo_handler
+
+    metrics = {
+        "step": 5,
+        "epoch": 1,
+        "phase": "train",
+        "loss": 1.2345,
+        "grad_norm": 0.8765,
+        "learning_rate": 0.00001,
+        "mean_reward": 0.65,
+        "full_match_rate": 0.30,
+        "entropy": 0.9512,
+        "max_steps": 10,
+    }
+
+    result = handler._transform_schema(metrics)
+
+    assert result["progressPercentage"] == 50
+    assert result["currentStep"] == 5
+    assert result["totalSteps"] == 10
+    assert result["currentEpoch"] == 1
+    assert result["trainMetrics"]["loss"] == "1.2345"
+    assert result["trainMetrics"]["learning_rate"] == "0.000010"
+    assert result["trainMetrics"]["grad_norm"] == "0.8765"
+    assert result["trainMetrics"]["mean_reward"] == "0.6500"
+    assert result["trainMetrics"]["full_match_rate"] == "0.3000"
+    assert result["trainMetrics"]["entropy"] == "0.9512"
+    assert result["evalMetrics"] == {}
+
+    print("test execution complete")
+
+
+def test_grpo_metrics_transformer_no_max_steps(grpo_handler):
+    """Test that GRPO transformer reports None progress when max_steps absent."""
+    print("Executing test: GRPO transformer without max_steps")
+
+    _apply_fn, handler, _ckpt_dir = grpo_handler
+
+    metrics = {
+        "step": 5,
+        "epoch": 1,
+        "loss": 1.5,
+        "mean_reward": 0.4,
+    }
+
+    result = handler._transform_schema(metrics)
+
+    assert result["progressPercentage"] is None
+    assert result["currentStep"] == 5
+    assert result["totalSteps"] is None
+    assert result["trainMetrics"]["entropy"] is None
+
+    print("test execution complete")
+
+
+def test_grpo_instrumentation_cleans_metrics_on_startup(grpo_handler):
+    """Test that GRPO metrics files are cleaned before training starts."""
+    print("Executing test: GRPO metrics cleanup on startup")
+
+    apply_fn, _handler, ckpt_dir = grpo_handler
+
+    stale_metrics_file = ckpt_dir / "training_metrics.jsonl"
+    stale_metrics_file.write_text(
+        '{"step": 1, "phase": "rollout", "mean_reward": 0.1}\n'
+        '{"step": 1, "phase": "train", "loss": 3.0}\n'
+    )
+
+    with patch.dict(os.environ, {"JOB_COMPLETION_INDEX": "0"}):
+        server = apply_fn()
+
+        try:
+            assert not stale_metrics_file.exists(), "Stale GRPO metrics file should be removed"
+        finally:
+            if server:
+                server.shutdown()
 
     print("test execution complete")
 

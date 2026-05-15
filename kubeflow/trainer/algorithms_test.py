@@ -226,6 +226,12 @@ def test_all_algorithms_have_callable_validate():
             config={"algorithm": "lora_sft"},
             expected_output="lora_sft",
         ),
+        TestCase(
+            name="valid lora_grpo algorithm returns spec",
+            expected_status=SUCCESS,
+            config={"algorithm": "lora_grpo"},
+            expected_output="lora_grpo",
+        ),
     ],
 )
 def test_get_algorithm_spec(test_case):
@@ -283,7 +289,7 @@ def test_algorithms_registry_not_empty():
 
     # Verify known algorithms exist (baseline check)
     # This ensures we don't accidentally break existing algorithms
-    known_algorithms = {"sft", "osft", "lora_sft"}
+    known_algorithms = {"sft", "osft", "lora_sft", "lora_grpo"}
     for algo in known_algorithms:
         assert algo in ALGORITHMS, f"Known algorithm '{algo}' missing from registry"
 
@@ -595,8 +601,17 @@ def test_registry_keys_are_lowercase():
 
 
 def test_registry_no_duplicate_patterns():
-    """Test that algorithms don't share identical metrics patterns."""
+    """Test that algorithms don't share identical metrics patterns unexpectedly.
+
+    Some algorithms intentionally share the same metrics file (e.g. lora_sft
+    and lora_grpo both write training_metrics.jsonl). This test tracks known
+    shared patterns and fails only on *unexpected* duplicates.
+    """
     print("Executing test: registry_no_duplicate_patterns")
+
+    known_shared = {
+        ("training_metrics.jsonl",): {"lora_sft", "lora_grpo"},
+    }
 
     patterns_seen = {}
 
@@ -606,9 +621,11 @@ def test_registry_no_duplicate_patterns():
 
         if patterns in patterns_seen:
             other_algo = patterns_seen[patterns]
-            pytest.fail(
-                f"Algorithm '{algorithm_name}' has same patterns as '{other_algo}': {patterns}"
-            )
+            shared_set = known_shared.get(patterns, set())
+            if not {algorithm_name, other_algo}.issubset(shared_set):
+                pytest.fail(
+                    f"Algorithm '{algorithm_name}' has same patterns as '{other_algo}': {patterns}"
+                )
 
         patterns_seen[patterns] = algorithm_name
 
@@ -785,6 +802,35 @@ def test_algorithm_without_metrics_integration():
         # Restore original registry
         ALGORITHMS.clear()
         ALGORITHMS.update(original_algorithms)
+
+    print("test execution complete")
+
+
+def test_get_algorithm_pod_metadata_lora_grpo():
+    """Test get_algorithm_pod_metadata returns correct metadata for GRPO."""
+    print("Executing test: get_algorithm_pod_metadata_lora_grpo")
+
+    metadata = get_algorithm_pod_metadata("lora_grpo")
+
+    assert metadata["name"] == "lora_grpo"
+    assert metadata["metrics_file_pattern"] == "training_metrics.jsonl"
+    assert metadata["metrics_file_rank0"] == "training_metrics.jsonl"
+
+    print("test execution complete")
+
+
+def test_lora_grpo_uses_python_entrypoint():
+    """Test that lora_grpo uses DEFAULT_COMMAND (python), not torchrun.
+
+    ART manages its own subprocess via mp.spawn; torchrun env vars leak
+    into vLLM's EngineCore and cause NCCL timeouts.
+    """
+    print("Executing test: lora_grpo uses python entrypoint")
+
+    spec = get_algorithm_spec("lora_grpo")
+    assert spec.entrypoint == constants.DEFAULT_COMMAND, (
+        f"lora_grpo should use DEFAULT_COMMAND, got {spec.entrypoint}"
+    )
 
     print("test execution complete")
 
