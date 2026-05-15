@@ -147,6 +147,15 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
         # LoRA expects to run inside a torchrun process
         entrypoint=constants.TORCH_COMMAND,
     ),
+    "lora_grpo": AlgorithmSpec(
+        name="lora_grpo",
+        metrics_file_patterns=("training_metrics.jsonl",),
+        validate=_no_op_validate,
+        # ART does not use torchrun — it is single-GPU and manages its own vLLM
+        # subprocess. torchrun env vars (MASTER_ADDR, WORLD_SIZE) leak into that
+        # subprocess and cause an NCCL timeout.
+        entrypoint=constants.DEFAULT_COMMAND,
+    ),
 }
 
 
