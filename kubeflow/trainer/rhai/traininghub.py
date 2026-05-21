@@ -18,6 +18,7 @@ class TrainingHubAlgorithms(Enum):
     SFT = "sft"
     OSFT = "osft"
     LORA_SFT = "lora_sft"
+    LORA_GRPO = "lora_grpo"
 
 
 @dataclass
@@ -222,8 +223,9 @@ def _create_training_hub_progression_instrumentation(
                 return self._read_osft_metrics()
             elif algorithm == "lora_sft":
                 return self._read_lora_sft_metrics()
+            elif algorithm == "lora_grpo":
+                return self._read_lora_grpo_metrics()
             else:
-                # Algorithm not yet supported for metrics reading
                 return {}
 
         def _read_osft_metrics(self):
@@ -392,6 +394,8 @@ def _create_training_hub_progression_instrumentation(
                 return self._transform_osft(metrics)
             elif algorithm == "lora_sft":
                 return self._transform_lora_sft(metrics)
+            elif algorithm == "lora_grpo":
+                return self._transform_lora_grpo(metrics)
             else:
                 return {}
 
@@ -569,6 +573,100 @@ def _create_training_hub_progression_instrumentation(
                     "loss": f"{loss_val:.4f}" if loss_val is not None else None,
                     "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
                     "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
+                },
+                "evalMetrics": {},
+            }
+
+        def _read_lora_grpo_metrics(self):
+            """Read GRPO metrics from training_metrics.jsonl.
+
+            GRPO writes two lines per iteration (rollout + train phase).
+            Read the last 2 lines and merge them into a single dict.
+            """
+            metrics_file = f"{ckpt_output_dir}/{metrics_file_rank0}"
+
+            try:
+                if not os.path.exists(metrics_file):
+                    return {}
+
+                try:
+                    result = subprocess.run(
+                        ["tail", "-n", "2", metrics_file],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    lines = result.stdout.strip().split("\n")
+                except subprocess.CalledProcessError:
+                    return {}
+
+                merged = {}
+                for line in lines:
+                    line = line.strip()
+                    if line:
+                        try:
+                            merged.update(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+
+                return merged
+
+            except Exception:
+                print("[Kubeflow] Error reading GRPO metrics", flush=True)
+                return {}
+
+        def _transform_lora_grpo(self, metrics):
+            """Transform GRPO schema to controller-compatible format.
+
+            GRPO metrics (merged from rollout + train phase lines):
+                Rollout fields: step, epoch, phase, mean_reward, full_match_rate, ...
+                Train fields: step, epoch, phase, loss, grad_norm, learning_rate, entropy, ...
+            """
+            step = metrics.get("step", 0)
+            epoch = metrics.get("epoch", 0)
+            max_steps = metrics.get("max_steps")
+
+            if max_steps and max_steps > 0:
+                progress = step / max_steps * 100
+                percent_int = int(round(progress))
+                percent_int = min(99, percent_int) if step < max_steps else min(100, percent_int)
+            else:
+                percent_int = None
+
+            loss_val = metrics.get("loss")
+            lr_val = metrics.get("learning_rate")
+            grad_norm_val = metrics.get("grad_norm")
+            mean_reward_val = metrics.get("mean_reward")
+            full_match_rate_val = metrics.get("full_match_rate")
+            entropy_val = metrics.get("entropy")
+            wall_time_s = metrics.get("wall_time_s")
+
+            estimated_remaining_sec = None
+            if max_steps and step > 0 and wall_time_s and wall_time_s > 0:
+                remaining_steps = max_steps - step
+                if remaining_steps > 0:
+                    estimated_remaining_sec = int((wall_time_s / step) * remaining_steps)
+                else:
+                    estimated_remaining_sec = 0
+
+            return {
+                "progressPercentage": percent_int,
+                "estimatedRemainingSeconds": estimated_remaining_sec,
+                "currentStep": step,
+                "totalSteps": max_steps if max_steps else None,
+                "currentEpoch": max(1, math.ceil(epoch)),
+                "totalEpochs": 1,
+                "trainMetrics": {
+                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
+                    "grad_norm": (f"{grad_norm_val:.4f}" if grad_norm_val is not None else None),
+                    "mean_reward": (
+                        f"{mean_reward_val:.4f}" if mean_reward_val is not None else None
+                    ),
+                    "full_match_rate": (
+                        f"{full_match_rate_val:.4f}" if full_match_rate_val is not None else None
+                    ),
+                    "entropy": f"{entropy_val:.4f}" if entropy_val is not None else None,
                 },
                 "evalMetrics": {},
             }
@@ -818,16 +916,19 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) 
         metrics_file_rank0=metrics_file_rank0,
     )
 
+    # Wrap the call in if __name__ == '__main__' to prevent re-execution
+    # when algorithms use multiprocessing.spawn (e.g. ART's lora_grpo).
+    # Harmless for algorithms that don't use spawn (SFT, OSFT, LoRA SFT).
     if func_args is None:
-        call_line = "training_func({})\n"
+        call_line = "if __name__ == '__main__':\n    training_func({})\n"
     elif isinstance(func_args, dict):
-        params_lines: list[str] = ["training_func({\n"]
+        params_lines: list[str] = ["if __name__ == '__main__':\n    training_func({\n"]
         for key, value in func_args.items():
-            params_lines.append(f"    {repr(key)}: {repr(value)},\n")
-        params_lines.append("})\n")
+            params_lines.append(f"        {repr(key)}: {repr(value)},\n")
+        params_lines.append("    })\n")
         call_line = "".join(params_lines)
     else:
-        call_line = f"training_func({func_args})\n"
+        call_line = f"if __name__ == '__main__':\n    training_func({func_args})\n"
 
     return base_script + call_line
 
