@@ -639,21 +639,30 @@ def _create_training_hub_progression_instrumentation(
             mean_reward_val = metrics.get("mean_reward")
             full_match_rate_val = metrics.get("full_match_rate")
             entropy_val = metrics.get("entropy")
+            wall_time_s = metrics.get("wall_time_s")
+
+            estimated_remaining_sec = None
+            if max_steps and step > 0 and wall_time_s and wall_time_s > 0:
+                remaining_steps = max_steps - step
+                if remaining_steps > 0:
+                    estimated_remaining_sec = int((wall_time_s / step) * remaining_steps)
+                else:
+                    estimated_remaining_sec = 0
 
             return {
                 "progressPercentage": percent_int,
-                "estimatedRemainingSeconds": None,
+                "estimatedRemainingSeconds": estimated_remaining_sec,
                 "currentStep": step,
                 "totalSteps": max_steps if max_steps else None,
                 "currentEpoch": max(1, math.ceil(epoch)),
-                "totalEpochs": None,
+                "totalEpochs": 1,
                 "trainMetrics": {
                     "loss": f"{loss_val:.4f}" if loss_val is not None else None,
                     "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
-                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
-                    "mean_reward": f"{mean_reward_val:.4f}"
-                    if mean_reward_val is not None
-                    else None,
+                    "grad_norm": (f"{grad_norm_val:.4f}" if grad_norm_val is not None else None),
+                    "mean_reward": (
+                        f"{mean_reward_val:.4f}" if mean_reward_val is not None else None
+                    ),
                     "full_match_rate": (
                         f"{full_match_rate_val:.4f}" if full_match_rate_val is not None else None
                     ),

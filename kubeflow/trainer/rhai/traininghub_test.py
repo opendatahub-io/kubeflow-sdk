@@ -1340,14 +1340,17 @@ def test_grpo_metrics_transformer(grpo_handler):
         "full_match_rate": 0.30,
         "entropy": 0.9512,
         "max_steps": 10,
+        "wall_time_s": 500.0,
     }
 
     result = handler._transform_schema(metrics)
 
     assert result["progressPercentage"] == 50
+    assert result["estimatedRemainingSeconds"] == 500
     assert result["currentStep"] == 5
     assert result["totalSteps"] == 10
     assert result["currentEpoch"] == 1
+    assert result["totalEpochs"] == 1
     assert result["trainMetrics"]["loss"] == "1.2345"
     assert result["trainMetrics"]["learning_rate"] == "0.000010"
     assert result["trainMetrics"]["grad_norm"] == "0.8765"
@@ -1375,8 +1378,10 @@ def test_grpo_metrics_transformer_no_max_steps(grpo_handler):
     result = handler._transform_schema(metrics)
 
     assert result["progressPercentage"] is None
+    assert result["estimatedRemainingSeconds"] is None
     assert result["currentStep"] == 5
     assert result["totalSteps"] is None
+    assert result["totalEpochs"] == 1
     assert result["trainMetrics"]["entropy"] is None
 
     print("test execution complete")
