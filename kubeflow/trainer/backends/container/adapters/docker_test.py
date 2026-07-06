@@ -81,15 +81,14 @@ def test_init(test_case):
 
     if test_case.expected_error:
         with patch.dict(sys.modules, {"docker": None}), pytest.raises(ImportError):
-            from importlib import reload
+            from kubeflow.trainer.backends.container.adapters.docker import (
+                DockerClientAdapter,
+            )
 
-            import kubeflow.trainer.backends.container.adapters.docker as mod
-
-            reload(mod)
-            mod.DockerClientAdapter()
+            DockerClientAdapter()
     else:
         host = test_case.config["host"]
-        adapter, mock_docker = _create_adapter(host=host)
+        _, mock_docker = _create_adapter(host=host)
         if host:
             mock_docker.DockerClient.assert_called_once_with(base_url=host)
         else:

@@ -122,13 +122,10 @@ class PartialAdapter(BaseContainerClientAdapter):
 def test_container_adapter_instantiation(test_case):
     """Test BaseContainerClientAdapter instantiation rules for abstract base class."""
     print("Executing test:", test_case.name)
-    try:
+    if test_case.expected_status == FAILED:
+        with pytest.raises(test_case.expected_error):
+            test_case.config["cls"]()
+    else:
         instance = test_case.config["cls"]()
-
-        assert test_case.expected_status == SUCCESS
         assert isinstance(instance, test_case.expected_output)
-
-    except Exception as e:
-        assert test_case.expected_status == FAILED
-        assert type(e) is test_case.expected_error
     print("test execution complete")

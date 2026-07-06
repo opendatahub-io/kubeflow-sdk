@@ -206,7 +206,6 @@ def test_get_install_packages(test_case: TestCase):
             expected_status=SUCCESS,
             config={
                 "runtime_name": constants.DEFAULT_TRAINING_RUNTIME,
-                "venv_dir": "/tmp/venv",
                 "framework": local_exec_constants.TORCH_FRAMEWORK_TYPE,
             },
         ),
@@ -215,7 +214,6 @@ def test_get_install_packages(test_case: TestCase):
             expected_status=FAILED,
             config={
                 "runtime_name": "nonexistent-runtime",
-                "venv_dir": "/tmp/venv",
                 "framework": "torch",
             },
             expected_error=ValueError,
@@ -225,24 +223,32 @@ def test_get_install_packages(test_case: TestCase):
             expected_status=SUCCESS,
             config={
                 "runtime_name": constants.DEFAULT_TRAINING_RUNTIME,
-                "venv_dir": "/tmp/venv",
                 "framework": local_exec_constants.TORCH_FRAMEWORK_TYPE,
             },
         ),
     ],
 )
-def test_get_local_runtime_trainer(test_case: TestCase):
+def test_get_local_runtime_trainer(test_case: TestCase, tmp_path: Path):
     """Test get_local_runtime_trainer runtime lookup and command setting."""
     print(f"Executing test: {test_case.name}")
+    venv_dir = str(tmp_path / "venv")
     if test_case.expected_status == FAILED:
         with pytest.raises(test_case.expected_error):
-            get_local_runtime_trainer(**test_case.config)
+            get_local_runtime_trainer(
+                runtime_name=test_case.config["runtime_name"],
+                venv_dir=venv_dir,
+                framework=test_case.config["framework"],
+            )
     else:
-        result = get_local_runtime_trainer(**test_case.config)
+        result = get_local_runtime_trainer(
+            runtime_name=test_case.config["runtime_name"],
+            venv_dir=venv_dir,
+            framework=test_case.config["framework"],
+        )
         assert isinstance(result, LocalRuntimeTrainer)
         assert result.image == local_exec_constants.LOCAL_RUNTIME_IMAGE
 
-        venv_bin = str(Path(test_case.config["venv_dir"]) / "bin")
+        venv_bin = str(Path(venv_dir) / "bin")
         if test_case.config["framework"] == local_exec_constants.TORCH_FRAMEWORK_TYPE:
             expected_cmd = str(Path(venv_bin) / local_exec_constants.TORCH_COMMAND)
             assert result.command == (expected_cmd,)
@@ -288,7 +294,11 @@ def test_get_dependencies_command(test_case: TestCase):
     assert "pip install" in result
     assert "--index-url" in result
 
+    for pkg in test_case.config["runtime_packages"]:
+        assert pkg in result, f"Expected package '{pkg}' in command output"
+
     pip_urls = test_case.config["pip_index_urls"]
+    assert pip_urls[0] in result
     if len(pip_urls) > 1:
         assert "--extra-index-url" in result
         assert pip_urls[1] in result
@@ -406,24 +416,27 @@ def test_get_command_using_train_func(test_case: TestCase, tmp_path: Path):
         TestCase(
             name="cleanup_venv true returns script with venv path",
             expected_status=SUCCESS,
-            config={"venv_dir": "/tmp/venv", "cleanup_venv": True},
+            config={"cleanup_venv": True},
         ),
         TestCase(
             name="cleanup_venv false returns newline",
             expected_status=SUCCESS,
-            config={"venv_dir": "/tmp/venv", "cleanup_venv": False},
+            config={"cleanup_venv": False},
             expected_output="\n",
         ),
     ],
 )
-def test_get_cleanup_venv_script(test_case: TestCase):
+def test_get_cleanup_venv_script(test_case: TestCase, tmp_path: Path):
     """Test get_cleanup_venv_script conditional cleanup logic."""
     print(f"Executing test: {test_case.name}")
-    result = get_cleanup_venv_script(**test_case.config)
+    venv_dir = str(tmp_path / "venv")
+    result = get_cleanup_venv_script(
+        venv_dir=venv_dir, cleanup_venv=test_case.config["cleanup_venv"]
+    )
     if not test_case.config["cleanup_venv"]:
         assert result == test_case.expected_output
     else:
-        assert test_case.config["venv_dir"] in result
+        assert venv_dir in result
         assert "rm -rf" in result
     print("test execution complete")
 
