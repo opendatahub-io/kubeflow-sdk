@@ -118,13 +118,13 @@ def test_ping() -> None:
         TestCase(
             name="network already exists",
             expected_status=SUCCESS,
-            config={"name": "existing-net", "labels": {"app": "test"}},
+            config={"name": "existing-net", "labels": {"app": "test"}, "existing": True},
             expected_output="existing-net",
         ),
         TestCase(
             name="new network created",
             expected_status=SUCCESS,
-            config={"name": "new-net", "labels": {"app": "train"}},
+            config={"name": "new-net", "labels": {"app": "train"}, "existing": False},
             expected_output="new-net",
         ),
     ],
@@ -136,7 +136,7 @@ def test_create_network(test_case: TestCase) -> None:
     name = test_case.config["name"]
     labels = test_case.config["labels"]
 
-    if test_case.name == "network already exists":
+    if test_case.config["existing"]:
         adapter.client.networks.get.return_value = Mock()
     else:
         adapter.client.networks.get.side_effect = Exception("not found")
@@ -144,7 +144,7 @@ def test_create_network(test_case: TestCase) -> None:
     result = adapter.create_network(name, labels)
     assert result == test_case.expected_output
 
-    if test_case.name == "new network created":
+    if not test_case.config["existing"]:
         adapter.client.networks.create.assert_called_once_with(
             name=name,
             driver="bridge",
@@ -166,12 +166,12 @@ def test_create_network(test_case: TestCase) -> None:
         TestCase(
             name="delete existing network",
             expected_status=SUCCESS,
-            config={"network_id": "net-123"},
+            config={"network_id": "net-123", "missing": False},
         ),
         TestCase(
             name="delete missing network silently",
             expected_status=SUCCESS,
-            config={"network_id": "missing"},
+            config={"network_id": "missing", "missing": True},
         ),
     ],
 )
@@ -181,12 +181,12 @@ def test_delete_network(test_case: TestCase) -> None:
     adapter = _create_adapter()
     net_id = test_case.config["network_id"]
 
-    if test_case.name == "delete missing network silently":
+    if test_case.config["missing"]:
         adapter.client.networks.get.side_effect = Exception("gone")
 
     adapter.delete_network(net_id)
 
-    if test_case.name == "delete existing network":
+    if not test_case.config["missing"]:
         mock_net = adapter.client.networks.get.return_value
         mock_net.remove.assert_called_once()
 
@@ -460,13 +460,13 @@ def test_container_status(test_case: TestCase) -> None:
         TestCase(
             name="ip found by exact network",
             expected_status=SUCCESS,
-            config={"network_id": "my-net", "ip": "10.0.0.5"},
+            config={"network_id": "my-net", "ip": "10.0.0.5", "fallback": False},
             expected_output="10.0.0.5",
         ),
         TestCase(
             name="ip fallback to first network",
             expected_status=SUCCESS,
-            config={"network_id": "unknown-net", "ip": "10.0.0.9"},
+            config={"network_id": "unknown-net", "ip": "10.0.0.9", "fallback": True},
             expected_output="10.0.0.9",
         ),
         TestCase(
@@ -488,7 +488,7 @@ def test_get_container_ip(test_case: TestCase) -> None:
         net_id = test_case.config["network_id"]
         ip = test_case.config["ip"]
         mock_container = Mock()
-        if test_case.name == "ip fallback to first network":
+        if test_case.config["fallback"]:
             mock_container.attrs = {
                 "NetworkSettings": {
                     "Networks": {
