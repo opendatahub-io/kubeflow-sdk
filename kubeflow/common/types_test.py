@@ -18,8 +18,8 @@ from kubernetes import client
 from pydantic import ValidationError
 import pytest
 
+from kubeflow.common.test.common import FAILED, SUCCESS, TestCase
 from kubeflow.common.types import KubernetesBackendConfig
-from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 
 
 @pytest.mark.parametrize(
@@ -68,12 +68,33 @@ from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
                 "context": "prod-cluster",
             },
         ),
-        TestCase(
-            name="client configuration with arbitrary type",
-            expected_status=SUCCESS,
-            config={"use_client_config": True},
-            expected_output={"has_client_config": True},
-        ),
+    ],
+)
+def test_kubernetes_backend_config(test_case: TestCase):
+    """Test KubernetesBackendConfig instantiation and field values."""
+    print("Executing test:", test_case.name)
+    cfg = KubernetesBackendConfig(**test_case.config)
+
+    assert test_case.expected_status == SUCCESS
+    for key, expected_val in test_case.expected_output.items():
+        assert getattr(cfg, key) == expected_val
+    print("test execution complete")
+
+
+def test_kubernetes_backend_config_client_configuration():
+    """Test KubernetesBackendConfig accepts arbitrary client.Configuration type."""
+    print("Executing test: client configuration with arbitrary type")
+    k8s_config = client.Configuration()
+    cfg = KubernetesBackendConfig(client_configuration=k8s_config)
+
+    assert isinstance(cfg.client_configuration, client.Configuration)
+    assert cfg.client_configuration is k8s_config
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
         TestCase(
             name="invalid client configuration type raises validation error",
             expected_status=FAILED,
@@ -82,28 +103,9 @@ from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
         ),
     ],
 )
-def test_kubernetes_backend_config(test_case: TestCase):
-    """Test KubernetesBackendConfig instantiation and field values."""
+def test_kubernetes_backend_config_failure(test_case: TestCase):
+    """Test KubernetesBackendConfig rejects invalid input."""
     print("Executing test:", test_case.name)
-    try:
-        config_kwargs = {k: v for k, v in test_case.config.items() if k != "use_client_config"}
-        if test_case.config.get("use_client_config"):
-            config_kwargs["client_configuration"] = client.Configuration()
-
-        cfg = KubernetesBackendConfig(**config_kwargs)
-
-        assert test_case.expected_status == SUCCESS, (
-            f"Expected exception but none was raised for {test_case.name}"
-        )
-
-        for key, expected_val in test_case.expected_output.items():
-            if key == "has_client_config":
-                assert isinstance(cfg.client_configuration, client.Configuration)
-            else:
-                assert getattr(cfg, key) == expected_val
-
-    except Exception as e:
-        assert test_case.expected_status == FAILED, f"Unexpected exception in {test_case.name}: {e}"
-        if test_case.expected_error:
-            assert type(e) is test_case.expected_error
+    with pytest.raises(test_case.expected_error):
+        KubernetesBackendConfig(**test_case.config)
     print("test execution complete")

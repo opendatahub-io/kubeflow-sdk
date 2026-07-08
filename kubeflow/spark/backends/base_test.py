@@ -233,7 +233,7 @@ def test_super_raises_not_implemented(test_case: TestCase):
     method_name = test_case.config["method"]
     name_arg = test_case.config.get("name")
 
-    try:
+    with pytest.raises(test_case.expected_error):
         if method_name == "connect":
             backend.connect()
         elif method_name == "get_session":
@@ -247,9 +247,4 @@ def test_super_raises_not_implemented(test_case: TestCase):
         elif method_name == "get_session_logs":
             backend.get_session_logs(name_arg)
 
-        assert test_case.expected_status == SUCCESS, (
-            f"Expected exception but none was raised for {test_case.name}"
-        )
-    except Exception as e:
-        assert type(e) is test_case.expected_error
     print("test execution complete")

@@ -19,8 +19,8 @@ from unittest.mock import mock_open, patch
 import pytest
 
 from kubeflow.common import constants
+from kubeflow.common.test.common import SUCCESS, TestCase
 from kubeflow.common.utils import get_default_target_namespace, is_running_in_k8s
-from kubeflow.trainer.test.common import SUCCESS, TestCase
 
 # --------------------------
 # is_running_in_k8s tests
@@ -52,6 +52,7 @@ def test_is_running_in_k8s(test_case: TestCase):
         return_value=test_case.config["isdir_return"],
     ):
         result = is_running_in_k8s()
+    assert test_case.expected_status == SUCCESS
     assert result is test_case.expected_output
     print("test execution complete")
 
@@ -117,9 +118,9 @@ def test_is_running_in_k8s(test_case: TestCase):
             expected_status=SUCCESS,
             config={
                 "in_k8s": True,
-                "sa_namespace": "kube-system",
+                "sa_namespace": "kube-system\n",
             },
-            expected_output="kube-system",
+            expected_output="kube-system\n",
         ),
     ],
 )
@@ -151,5 +152,6 @@ def test_get_default_target_namespace(test_case: TestCase):
             ):
                 result = get_default_target_namespace(test_case.config["context"])
 
+    assert test_case.expected_status == SUCCESS
     assert result == test_case.expected_output
     print("test execution complete")
