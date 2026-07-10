@@ -590,5 +590,110 @@ def test_setup_rhai_trainer_storage_no_output_dir():
     print("test execution complete")
 
 
+def test_speculator_same_pvc_deduplicates_mount():
+    """Test SpeculativeDecodingTrainer with same PVC for output_dir and hidden_states_path mounts once."""
+    print("Executing test: speculator_same_pvc_deduplicates_mount")
+
+    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer
+
+    mock_core_api = MagicMock()
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        hidden_states_path="pvc://shared/hidden-states",
+        output_dir="pvc://shared/output",
+    )
+
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = []
+
+    resolved_dir, result_cr, result_overrides = setup_rhai_trainer_storage(
+        trainer, mock_trainer_cr, None, mock_core_api, "default"
+    )
+
+    all_volumes = []
+    for override in result_overrides:
+        for vol in override.get("spec", {}).get("volumes", []):
+            all_volumes.append(vol.get("name"))
+
+    expected = {
+        "resolved_dir": None,
+        "volume_count": 1,
+        "volume_name": CHECKPOINT_VOLUME_NAME,
+    }
+    actual = {
+        "resolved_dir": resolved_dir,
+        "volume_count": all_volumes.count(CHECKPOINT_VOLUME_NAME),
+        "volume_name": all_volumes[0] if all_volumes else None,
+    }
+    assert actual == expected
+
+    print("test execution complete")
+
+
+def test_speculator_different_pvcs_raises_error():
+    """Test SpeculativeDecodingTrainer with different PVCs raises NotImplementedError."""
+    print("Executing test: speculator_different_pvcs_raises_error")
+
+    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer
+
+    mock_core_api = MagicMock()
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        hidden_states_path="pvc://pvc-a/hidden-states",
+        output_dir="pvc://pvc-b/output",
+    )
+
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = []
+
+    with pytest.raises(NotImplementedError, match="Multiple different PVCs"):
+        setup_rhai_trainer_storage(trainer, mock_trainer_cr, None, mock_core_api, "default")
+
+    print("test execution complete")
+
+
+def test_speculator_pvc_and_direct_path_no_conflict():
+    """Test SpeculativeDecodingTrainer with one PVC URI and one direct path mounts once."""
+    print("Executing test: speculator_pvc_and_direct_path_no_conflict")
+
+    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer
+
+    mock_core_api = MagicMock()
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        hidden_states_path="/data/hidden-states",
+        output_dir="pvc://shared/output",
+    )
+
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = []
+
+    resolved_dir, result_cr, result_overrides = setup_rhai_trainer_storage(
+        trainer, mock_trainer_cr, None, mock_core_api, "default"
+    )
+
+    all_volumes = []
+    for override in result_overrides:
+        for vol in override.get("spec", {}).get("volumes", []):
+            all_volumes.append(vol.get("name"))
+
+    expected = {
+        "resolved_dir": None,
+        "volume_count": 1,
+        "volume_name": CHECKPOINT_VOLUME_NAME,
+    }
+    actual = {
+        "resolved_dir": resolved_dir,
+        "volume_count": all_volumes.count(CHECKPOINT_VOLUME_NAME),
+        "volume_name": all_volumes[0] if all_volumes else None,
+    }
+    assert actual == expected
+
+    print("test execution complete")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
