@@ -367,7 +367,6 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 def _create_speculator_progression_instrumentation(
     metrics_port: int,
     num_epochs: int,
-    save_path: str,
 ) -> tuple:
     """Instrumentation code injected into training pods (extracted via inspect.getsource).
 
@@ -377,7 +376,6 @@ def _create_speculator_progression_instrumentation(
     Args:
         metrics_port: Port for HTTP metrics server.
         num_epochs: Total training epochs for progress calculation.
-        save_path: Directory for checkpoint output (unused, kept for API compat).
 
     Returns:
         Tuple of (apply_fn, handler_class) for testing purposes.
@@ -562,20 +560,18 @@ def _create_speculator_progression_instrumentation(
 
         return set_steps_per_epoch
 
-    return (apply_progression_tracking, SpeculatorMetricsHTTPHandler, set_steps_per_epoch)
+    return (apply_progression_tracking, SpeculatorMetricsHTTPHandler)
 
 
 def get_speculator_instrumentation_wrapper(
     metrics_port: int,
     num_epochs: int,
-    save_path: str,
 ) -> str:
     """Generate self-contained instrumentation wrapper via inspect.getsource.
 
     Args:
         metrics_port: Port for HTTP metrics server.
         num_epochs: Total training epochs.
-        save_path: Directory for checkpoint output (passed through for API compat).
 
     Returns:
         Python code as string with {{user_training_code}} placeholder.
@@ -601,11 +597,9 @@ print("[Kubeflow] Initializing speculator progression tracking", flush=True)
 (
     apply_progression_tracking,
     _,
-    _,
 ) = _create_speculator_progression_instrumentation(
     metrics_port={metrics_port},
     num_epochs={num_epochs},
-    save_path={save_path!r},
 )
 _set_steps_per_epoch = apply_progression_tracking()
 print("[Kubeflow] Speculator progression tracking enabled", flush=True)
@@ -694,13 +688,9 @@ def get_trainer_cr_from_speculator_trainer(
     func_file = "speculator_train.py"
 
     if trainer.enable_progression_tracking:
-        from kubeflow.trainer.rhai.utils import parse_output_dir_uri
-
-        resolved_path, _ = parse_output_dir_uri(trainer.output_dir)
         wrapper_code = get_speculator_instrumentation_wrapper(
             metrics_port=trainer.metrics_port,
             num_epochs=trainer.epochs,
-            save_path=resolved_path,
         )
         func_code = wrapper_code.replace("{{user_training_code}}", func_code)
 

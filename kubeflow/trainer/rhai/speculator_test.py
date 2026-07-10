@@ -796,17 +796,13 @@ def test_progression_instrumentation_returns_callable():
     """Test that _create_speculator_progression_instrumentation returns valid tuple."""
     print("Executing test: Progression instrumentation returns callable")
 
-    import tempfile
+    apply_fn, handler_class = _create_speculator_progression_instrumentation(
+        metrics_port=28080,
+        num_epochs=3,
+    )
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        apply_fn, handler_class, _ = _create_speculator_progression_instrumentation(
-            metrics_port=28080,
-            num_epochs=3,
-            save_path=tmpdir,
-        )
-
-        assert callable(apply_fn)
-        assert handler_class is not None
+    assert callable(apply_fn)
+    assert handler_class is not None
 
     print("test execution complete")
 
@@ -815,25 +811,19 @@ def test_progression_instrumentation_schema_transform():
     """Test that the HTTP handler transforms speculators metrics to controller schema."""
     print("Executing test: Progression instrumentation schema transform")
 
-    import tempfile
+    _, handler_class = _create_speculator_progression_instrumentation(
+        metrics_port=28080,
+        num_epochs=3,
+    )
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        _, handler_class, _ = _create_speculator_progression_instrumentation(
-            metrics_port=28080,
-            num_epochs=3,
-            save_path=tmpdir,
-        )
+    handler = handler_class.__new__(handler_class)
+    result = handler._transform({"train": {"loss": 2.5}, "epoch": 0, "lr": 1e-4, "global_step": 5})
 
-        handler = handler_class.__new__(handler_class)
-        result = handler._transform(
-            {"train": {"loss": 2.5}, "epoch": 0, "lr": 1e-4, "global_step": 5}
-        )
-
-        assert result["currentEpoch"] == 1
-        assert result["totalEpochs"] == 3
-        assert result["currentStep"] == 5
-        assert result["trainMetrics"]["loss"] == "2.5000"
-        assert result["trainMetrics"]["learning_rate"] == "0.000100"
+    assert result["currentEpoch"] == 1
+    assert result["totalEpochs"] == 3
+    assert result["currentStep"] == 5
+    assert result["trainMetrics"]["loss"] == "2.5000"
+    assert result["trainMetrics"]["learning_rate"] == "0.000100"
 
     print("test execution complete")
 
