@@ -34,8 +34,8 @@ from kubeflow.trainer.types.types import (
 
 
 @pytest.fixture
-def mock_backend():
-    """Provide an OptimizerClient whose backend is fully mocked."""
+def _kubernetes_patches():
+    """Patch kubernetes APIs and verify_backend to avoid real cluster interactions."""
     with (
         patch("kubernetes.config.load_kube_config", return_value=None),
         patch("kubernetes.client.CustomObjectsApi", return_value=Mock()),
@@ -45,9 +45,15 @@ def mock_backend():
             return_value=None,
         ),
     ):
-        client = OptimizerClient()
-        client.backend = Mock()
-        yield client
+        yield
+
+
+@pytest.fixture
+def mock_backend(_kubernetes_patches):
+    """Provide an OptimizerClient whose backend is fully mocked."""
+    client = OptimizerClient()
+    client.backend = Mock()
+    yield client
 
 
 # --- __init__ tests ---
@@ -78,25 +84,15 @@ def mock_backend():
         ),
     ],
 )
-def test_init(test_case: TestCase):
+def test_init(test_case: TestCase, _kubernetes_patches):
     """Test OptimizerClient initialization with various backend configs."""
     print("Executing test:", test_case.name)
-    try:
-        with (
-            patch("kubernetes.config.load_kube_config", return_value=None),
-            patch("kubernetes.client.CustomObjectsApi", return_value=Mock()),
-            patch("kubernetes.client.CoreV1Api", return_value=Mock()),
-            patch(
-                "kubeflow.trainer.backends.kubernetes.backend.KubernetesBackend.verify_backend",
-                return_value=None,
-            ),
-        ):
-            client = OptimizerClient(**test_case.config) if test_case.config else OptimizerClient()
-            assert test_case.expected_status == SUCCESS
-            assert client.backend is not None
-    except Exception as e:
-        assert test_case.expected_status == FAILED
-        assert isinstance(e, test_case.expected_error)
+    if test_case.expected_status == FAILED:
+        with pytest.raises(test_case.expected_error):
+            OptimizerClient(**test_case.config) if test_case.config else OptimizerClient()
+    else:
+        client = OptimizerClient(**test_case.config) if test_case.config else OptimizerClient()
+        assert client.backend is not None
     print("test execution complete")
 
 

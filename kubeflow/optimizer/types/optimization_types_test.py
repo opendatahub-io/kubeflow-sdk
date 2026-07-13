@@ -98,14 +98,13 @@ def test_direction_enum_invalid_value():
 def test_objective(test_case: TestCase):
     """Test Objective dataclass construction and direction coercion."""
     print("Executing test:", test_case.name)
-    try:
+    if test_case.expected_status == FAILED:
+        with pytest.raises(test_case.expected_error):
+            Objective(**test_case.config) if test_case.config else Objective()
+    else:
         obj = Objective(**test_case.config) if test_case.config else Objective()
-        assert test_case.expected_status == SUCCESS
         assert obj.metric == test_case.expected_output["metric"]
         assert obj.direction == test_case.expected_output["direction"]
-    except Exception as e:
-        assert test_case.expected_status == FAILED
-        assert isinstance(e, test_case.expected_error)
     print("test execution complete")
 
 
