@@ -498,7 +498,12 @@ def setup_rhai_trainer_storage(
     resolved_output_dir = None
 
     if isinstance(trainer, speculator.SpeculativeDecodingTrainer):
-        all_paths = [trainer.output_dir, trainer.hidden_states_path]
+        all_paths = [
+            trainer.output_dir,
+            trainer.hidden_states_path,
+            trainer.dataset_name,
+            trainer.verifier_model,
+        ]
         pvc_paths = [p for p in all_paths if p and p.startswith(PVC_URI_SCHEME)]
         pvc_names = {p[len(PVC_URI_SCHEME) :].split("/", 1)[0] for p in pvc_paths}
 
@@ -516,6 +521,11 @@ def setup_rhai_trainer_storage(
             )
         else:
             pod_template_overrides = pod_template_overrides or []
+
+        if trainer.mode == speculator.SpeculatorMode.DATA_ONLY:
+            pod_template_overrides = speculator.apply_speculator_sidecar_overrides(
+                trainer, pod_template_overrides
+            )
 
     elif hasattr(trainer, "output_dir") and trainer.output_dir:
         resolved_output_dir, pod_template_overrides = apply_output_dir_uri_to_pod_overrides(

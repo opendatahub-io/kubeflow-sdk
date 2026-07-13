@@ -21,6 +21,7 @@ This module provides RHAI trainer types and utilities:
 
 from kubeflow.trainer.rhai.speculator import (
     SpeculativeDecodingTrainer,
+    SpeculatorConfig,
     SpeculatorMode,
     SpeculatorType,
 )
@@ -29,8 +30,9 @@ from kubeflow.trainer.rhai.transformers import TransformersTrainer
 
 __all__ = (
     "RHAITrainer",
-    "SpeculatorMode",
     "SpeculativeDecodingTrainer",
+    "SpeculatorConfig",
+    "SpeculatorMode",
     "SpeculatorType",
     "TrainingHubAlgorithms",
     "TrainingHubTrainer",

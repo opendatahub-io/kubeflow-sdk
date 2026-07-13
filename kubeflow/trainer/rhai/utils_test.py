@@ -594,12 +594,13 @@ def test_speculator_same_pvc_deduplicates_mount():
     """Test SpeculativeDecodingTrainer with same PVC for output_dir and hidden_states_path mounts once."""
     print("Executing test: speculator_same_pvc_deduplicates_mount")
 
-    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer
+    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
 
     mock_core_api = MagicMock()
 
     trainer = SpeculativeDecodingTrainer(
-        verifier_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        verifier_model="meta-llama/Llama-3.1-8B-Instruct",
+        mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="pvc://shared/hidden-states",
         output_dir="pvc://shared/output",
     )
@@ -635,13 +636,38 @@ def test_speculator_different_pvcs_raises_error():
     """Test SpeculativeDecodingTrainer with different PVCs raises NotImplementedError."""
     print("Executing test: speculator_different_pvcs_raises_error")
 
-    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer
+    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
 
     mock_core_api = MagicMock()
 
     trainer = SpeculativeDecodingTrainer(
-        verifier_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        verifier_model="meta-llama/Llama-3.1-8B-Instruct",
+        mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="pvc://pvc-a/hidden-states",
+        output_dir="pvc://pvc-b/output",
+    )
+
+    mock_trainer_cr = MagicMock()
+    mock_trainer_cr.env = []
+
+    with pytest.raises(NotImplementedError, match="Multiple different PVCs"):
+        setup_rhai_trainer_storage(trainer, mock_trainer_cr, None, mock_core_api, "default")
+
+    print("test execution complete")
+
+
+def test_speculator_different_pvcs_raises_error_data_only():
+    """Test SpeculativeDecodingTrainer DATA_ONLY with different PVCs raises NotImplementedError."""
+    print("Executing test: speculator_different_pvcs_raises_error_data_only")
+
+    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
+
+    mock_core_api = MagicMock()
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="pvc://pvc-a/model",
+        mode=SpeculatorMode.DATA_ONLY,
+        dataset_name="sharegpt",
         output_dir="pvc://pvc-b/output",
     )
 
@@ -658,12 +684,13 @@ def test_speculator_pvc_and_direct_path_no_conflict():
     """Test SpeculativeDecodingTrainer with one PVC URI and one direct path mounts once."""
     print("Executing test: speculator_pvc_and_direct_path_no_conflict")
 
-    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer
+    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
 
     mock_core_api = MagicMock()
 
     trainer = SpeculativeDecodingTrainer(
-        verifier_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+        verifier_model="meta-llama/Llama-3.1-8B-Instruct",
+        mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="/data/hidden-states",
         output_dir="pvc://shared/output",
     )
