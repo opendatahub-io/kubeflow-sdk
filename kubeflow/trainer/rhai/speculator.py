@@ -1102,9 +1102,26 @@ def _create_speculator_progression_instrumentation(
         _train_start_time = time.time()
 
     def _set_phase(phase: str, floor_pct: int = 0):
-        nonlocal _current_phase, _phase_floor_pct
+        nonlocal _current_phase, _phase_floor_pct, _termination_message_written
         _current_phase = phase
         _phase_floor_pct = floor_pct
+        if floor_pct >= 100 and not _termination_message_written:
+            metrics = {
+                "progressPercentage": 100,
+                "estimatedRemainingSeconds": 0,
+                "currentPhase": phase,
+            }
+            try:
+                with open("/dev/termination-log", "w") as f:
+                    f.write(json.dumps(metrics))
+                _termination_message_written = True
+                print("[Kubeflow] Complete. Final metrics saved.", flush=True)
+            except (OSError, ValueError, TypeError) as e:
+                print(
+                    f"[Kubeflow] Warning: Failed to write termination message: {e}. "
+                    f"Controller will fall back to HTTP polling.",
+                    flush=True,
+                )
 
     def apply_progression_tracking():
         if mode == "train_only":
