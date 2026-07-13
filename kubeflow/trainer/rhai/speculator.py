@@ -140,7 +140,6 @@ class SpeculativeDecodingTrainer:
         vllm_gpu_count: Number of GPUs for vLLM sidecar (default: 1).
         vllm_gpu_memory_utilization: Fraction of GPU memory for vLLM (default: 0.9).
         config: Advanced training configuration. See ``SpeculatorConfig``.
-        num_nodes: Number of nodes for distributed training.
         packages_to_install: Python packages to install before training.
         pip_index_urls: PyPI index URLs for package installation.
         env: Environment variables to set in training pods.
@@ -169,7 +168,6 @@ class SpeculativeDecodingTrainer:
     vllm_gpu_count: int = 1
     vllm_gpu_memory_utilization: float = 0.9
     config: SpeculatorConfig | None = None
-    num_nodes: int | None = None
     packages_to_install: list[str] | None = None
     pip_index_urls: list[str] = field(
         default_factory=lambda: list(constants.DEFAULT_PIP_INDEX_URLS)
@@ -1350,9 +1348,6 @@ def get_trainer_cr_from_speculator_trainer(
         runtime.trainer.set_command(constants.TORCH_COMMAND)
 
     trainer_crd = models.TrainerV1alpha1Trainer()
-
-    if trainer.num_nodes is not None:
-        trainer_crd.num_nodes = trainer.num_nodes
 
     if trainer.mode == SpeculatorMode.TRAIN_ONLY:
         trainer_crd.resources_per_node = k8s_utils.get_resources_per_node(

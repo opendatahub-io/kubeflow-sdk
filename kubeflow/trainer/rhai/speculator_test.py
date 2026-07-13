@@ -53,7 +53,6 @@ def test_speculator_trainer_initialization():
     assert trainer.vllm_gpu_count == 1
     assert trainer.vllm_gpu_memory_utilization == 0.9
     assert trainer.config is None
-    assert trainer.num_nodes is None
     assert trainer.packages_to_install is None
     assert trainer.pip_index_urls == list(constants.DEFAULT_PIP_INDEX_URLS)
     assert trainer.env is None
@@ -79,7 +78,6 @@ def test_speculator_trainer_with_custom_config():
         lr=5e-5,
         total_seq_len=4096,
         training_gpu_count=2,
-        num_nodes=2,
         packages_to_install=["speculators"],
         pip_index_urls=["https://custom.pypi.org/simple"],
         env={"WANDB_DISABLED": "true"},
@@ -101,7 +99,6 @@ def test_speculator_trainer_with_custom_config():
     assert trainer.lr == 5e-5
     assert trainer.total_seq_len == 4096
     assert trainer.training_gpu_count == 2
-    assert trainer.num_nodes == 2
     assert trainer.packages_to_install == ["speculators"]
     assert trainer.pip_index_urls == ["https://custom.pypi.org/simple"]
     assert trainer.env == {"WANDB_DISABLED": "true"}
@@ -542,12 +539,10 @@ def test_crd_conversion_train_only():
         mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="/data/hidden_states",
         output_dir="pvc://test-pvc/output",
-        num_nodes=2,
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
 
-    assert trainer_crd.num_nodes == 2
     assert trainer_crd.command is not None
 
     script = " ".join(trainer_crd.command) if trainer_crd.command else ""
