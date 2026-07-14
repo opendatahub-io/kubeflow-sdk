@@ -120,7 +120,7 @@ def test_is_running_in_k8s(test_case: TestCase):
                 "in_k8s": True,
                 "sa_namespace": "kube-system\n",
             },
-            expected_output="kube-system\n",
+            expected_output="kube-system",
         ),
     ],
 )
