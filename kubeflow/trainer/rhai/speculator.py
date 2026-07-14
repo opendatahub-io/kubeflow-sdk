@@ -844,7 +844,11 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         datagen_script_path = Path(__file__).parent / "scripts" / "data_generation_offline.py"
         datagen_b64 = base64.b64encode(datagen_script_path.read_bytes()).decode("ascii")
 
+        regen_script_path = Path(__file__).parent / "scripts" / "response_regeneration.py"
+        regen_b64 = base64.b64encode(regen_script_path.read_bytes()).decode("ascii")
+
         script += f'_DATAGEN_SCRIPT_B64 = "{datagen_b64}"\n\n'
+        script += f'_REGEN_SCRIPT_B64 = "{regen_b64}"\n\n'
         script += textwrap.dedent(inspect.getsource(_speculator_data_only))
 
     if needs_train:
