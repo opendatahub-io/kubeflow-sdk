@@ -379,7 +379,7 @@ class SpeculativeDecodingTrainer:
                         from transformers import AutoConfig
 
                         model_config = AutoConfig.from_pretrained(
-                            self.verifier_model, trust_remote_code=True
+                            self.verifier_model, trust_remote_code=False
                         )
                     except Exception as e:
                         raise ValueError(
