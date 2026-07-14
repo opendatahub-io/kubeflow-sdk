@@ -376,12 +376,24 @@ class SpeculativeDecodingTrainer:
             else:
                 if cfg.target_layer_ids is None:
                     try:
+                        import os
+
                         from transformers import AutoConfig
 
+                        token = (self.env or {}).get("HF_TOKEN") or os.environ.get("HF_TOKEN")
                         model_config = AutoConfig.from_pretrained(
-                            self.verifier_model, trust_remote_code=False
+                            self.verifier_model,
+                            trust_remote_code=False,
+                            token=token,
                         )
                     except Exception as e:
+                        if "gated repo" in str(e).lower():
+                            raise ValueError(
+                                f"verifier_model {self.verifier_model!r} is a gated "
+                                f"HuggingFace model. Set HF_TOKEN in your environment "
+                                f"or pass env={{'HF_TOKEN': '<your-token>'}} to "
+                                f"authenticate."
+                            ) from e
                         raise ValueError(
                             f"verifier_model {self.verifier_model!r} is not a valid "
                             f"HuggingFace model ID. For DATA_ONLY mode, verifier_model "
