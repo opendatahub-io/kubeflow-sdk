@@ -602,6 +602,7 @@ def test_speculator_same_pvc_deduplicates_mount():
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="pvc://shared/hidden-states",
+        data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
     )
 
@@ -644,6 +645,7 @@ def test_speculator_different_pvcs_raises_error():
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="pvc://pvc-a/hidden-states",
+        data_path="pvc://pvc-a/arrow_dataset",
         output_dir="pvc://pvc-b/output",
     )
 
@@ -692,6 +694,7 @@ def test_speculator_pvc_and_direct_path_no_conflict():
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="/data/hidden-states",
+        data_path="/data/arrow_dataset",
         output_dir="pvc://shared/output",
     )
 

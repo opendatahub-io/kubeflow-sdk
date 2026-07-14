@@ -204,6 +204,12 @@ class SpeculativeDecodingTrainer:
                 "Provide the path to pre-extracted hidden states on PVC."
             )
 
+        if self.mode == SpeculatorMode.TRAIN_ONLY and not self.data_path:
+            raise ValueError(
+                "data_path is required for TRAIN_ONLY mode. "
+                "Provide the path to the preprocessed Arrow dataset on PVC."
+            )
+
         if not self.output_dir:
             raise ValueError(
                 f"output_dir is required for {self.mode.name} mode. "
@@ -572,6 +578,7 @@ def _speculator_train_only(
     log_freq: int = 1,
     resume_from_checkpoint: bool = False,
     from_pretrained: str | None = None,
+    target_layer_ids: list[int] | None = None,
 ) -> None:
     """Training function injected into pods via inspect.getsource().
 
@@ -651,6 +658,8 @@ def _speculator_train_only(
     }
     if from_pretrained is not None:
         from_training_kwargs["from_pretrained"] = from_pretrained
+    if target_layer_ids is not None:
+        from_training_kwargs["target_layer_ids"] = target_layer_ids
     model = Eagle3DraftModel.from_training_args(verifier_config, **from_training_kwargs)
 
     max_len = total_seq_len
@@ -782,18 +791,15 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
     else:
         resolved_dataset_name = trainer.dataset_name
 
-    if trainer.hidden_states_path:
+    if trainer.hidden_states_path and trainer.hidden_states_path.startswith(PVC_URI_SCHEME):
         resolved_hidden_states, _ = parse_output_dir_uri(trainer.hidden_states_path)
     else:
-        resolved_hidden_states = resolved_output_dir
+        resolved_hidden_states = trainer.hidden_states_path
 
-    if trainer.mode == SpeculatorMode.TRAIN_ONLY:
-        if trainer.data_path and trainer.data_path.startswith(PVC_URI_SCHEME):
-            resolved_data_path, _ = parse_output_dir_uri(trainer.data_path)
-        else:
-            resolved_data_path = trainer.data_path
+    if trainer.data_path and trainer.data_path.startswith(PVC_URI_SCHEME):
+        resolved_data_path, _ = parse_output_dir_uri(trainer.data_path)
     else:
-        resolved_data_path = resolved_output_dir
+        resolved_data_path = trainer.data_path
 
     from kubeflow.trainer.rhai.constants import VLLM_SIDECAR_ENDPOINT
 
@@ -835,6 +841,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    log_freq={cfg.log_freq!r},\n"
         f"    resume_from_checkpoint={cfg.resume_from_checkpoint!r},\n"
         f"    from_pretrained={cfg.from_pretrained!r},\n"
+        f"    target_layer_ids={cfg.target_layer_ids!r},\n"
         f")\n"
     )
 
@@ -1062,21 +1069,22 @@ def _create_speculator_progression_instrumentation(
 
         def _maybe_write_termination_message(self, metrics):
             nonlocal _termination_message_written
-            if _termination_message_written:
-                return
             progress = metrics.get("progressPercentage")
             if progress is not None and progress >= 100:
-                try:
-                    with open("/dev/termination-log", "w") as f:
-                        f.write(json.dumps(metrics))
-                    _termination_message_written = True
-                    print("[Kubeflow] Complete. Final metrics saved.", flush=True)
-                except (OSError, ValueError, TypeError) as e:
-                    print(
-                        f"[Kubeflow] Warning: Failed to write termination message: {e}. "
-                        f"Controller will fall back to HTTP polling.",
-                        flush=True,
-                    )
+                with _metrics_lock:
+                    if _termination_message_written:
+                        return
+                    try:
+                        with open("/dev/termination-log", "w") as f:
+                            f.write(json.dumps(metrics))
+                        _termination_message_written = True
+                        print("[Kubeflow] Complete. Final metrics saved.", flush=True)
+                    except (OSError, ValueError, TypeError) as e:
+                        print(
+                            f"[Kubeflow] Warning: Failed to write termination message: {e}. "
+                            f"Controller will fall back to HTTP polling.",
+                            flush=True,
+                        )
 
         def log_message(self, format, *args):
             pass
@@ -1105,23 +1113,25 @@ def _create_speculator_progression_instrumentation(
         nonlocal _current_phase, _phase_floor_pct, _termination_message_written
         _current_phase = phase
         _phase_floor_pct = floor_pct
-        if floor_pct >= 100 and not _termination_message_written:
-            metrics = {
-                "progressPercentage": 100,
-                "estimatedRemainingSeconds": 0,
-                "currentPhase": phase,
-            }
-            try:
-                with open("/dev/termination-log", "w") as f:
-                    f.write(json.dumps(metrics))
-                _termination_message_written = True
-                print("[Kubeflow] Complete. Final metrics saved.", flush=True)
-            except (OSError, ValueError, TypeError) as e:
-                print(
-                    f"[Kubeflow] Warning: Failed to write termination message: {e}. "
-                    f"Controller will fall back to HTTP polling.",
-                    flush=True,
-                )
+        if floor_pct >= 100:
+            with _metrics_lock:
+                if not _termination_message_written:
+                    metrics = {
+                        "progressPercentage": 100,
+                        "estimatedRemainingSeconds": 0,
+                        "currentPhase": phase,
+                    }
+                    try:
+                        with open("/dev/termination-log", "w") as f:
+                            f.write(json.dumps(metrics))
+                        _termination_message_written = True
+                        print("[Kubeflow] Complete. Final metrics saved.", flush=True)
+                    except (OSError, ValueError, TypeError) as e:
+                        print(
+                            f"[Kubeflow] Warning: Failed to write termination message: {e}. "
+                            f"Controller will fall back to HTTP polling.",
+                            flush=True,
+                        )
 
     def apply_progression_tracking():
         if mode == "train_only":
@@ -1284,7 +1294,10 @@ def apply_speculator_sidecar_overrides(
     )
     from kubeflow.trainer.rhai.utils import parse_output_dir_uri
 
-    resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
+    if trainer.output_dir.startswith(PVC_URI_SCHEME):
+        resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
+    else:
+        resolved_output_dir = trainer.output_dir
     hs_path = f"{resolved_output_dir}/hidden_states"
 
     node_override = None
@@ -1328,17 +1341,18 @@ def apply_speculator_sidecar_overrides(
     sidecar_override = {
         "name": VLLM_SIDECAR_CONTAINER_NAME,
         "env": sidecar_env,
-        "volumeMounts": [
+        "resources": {
+            "limits": {"nvidia.com/gpu": str(trainer.vllm_gpu_count)},
+        },
+    }
+    if trainer.output_dir.startswith(PVC_URI_SCHEME):
+        sidecar_override["volumeMounts"] = [
             {
                 "name": CHECKPOINT_VOLUME_NAME,
                 "mountPath": CHECKPOINT_MOUNT_PATH,
                 "readOnly": False,
             }
-        ],
-        "resources": {
-            "limits": {"nvidia.com/gpu": str(trainer.vllm_gpu_count)},
-        },
-    }
+        ]
     spec_dict["initContainers"].append(sidecar_override)
 
     return pod_template_overrides

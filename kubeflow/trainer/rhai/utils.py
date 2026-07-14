@@ -501,6 +501,7 @@ def setup_rhai_trainer_storage(
         all_paths = [
             trainer.output_dir,
             trainer.hidden_states_path,
+            trainer.data_path,
             trainer.dataset_name,
             trainer.verifier_model,
         ]

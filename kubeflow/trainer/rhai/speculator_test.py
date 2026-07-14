@@ -38,14 +38,15 @@ def test_speculator_trainer_initialization():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
     assert trainer.verifier_model == "Qwen/Qwen3-8B"
     assert trainer.speculator_type == SpeculatorType.EAGLE3
     assert trainer.mode == SpeculatorMode.TRAIN_ONLY
-    assert trainer.hidden_states_path == "/data/hidden_states"
+    assert trainer.hidden_states_path == "pvc://test-pvc/hidden_states"
     assert trainer.epochs == 3
     assert trainer.lr == 1e-4
     assert trainer.total_seq_len == 8192
@@ -72,7 +73,8 @@ def test_speculator_trainer_with_custom_config():
         verifier_model="meta-llama/Llama-3.1-70B",
         mode=SpeculatorMode.TRAIN_ONLY,
         speculator_type=SpeculatorType.EAGLE3,
-        hidden_states_path="/mnt/pvc/hidden_states",
+        hidden_states_path="pvc://shared/hidden_states",
+        data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/checkpoints/eagle3",
         epochs=5,
         lr=5e-5,
@@ -93,7 +95,7 @@ def test_speculator_trainer_with_custom_config():
 
     assert trainer.verifier_model == "meta-llama/Llama-3.1-70B"
     assert trainer.speculator_type == SpeculatorType.EAGLE3
-    assert trainer.hidden_states_path == "/mnt/pvc/hidden_states"
+    assert trainer.hidden_states_path == "pvc://shared/hidden_states"
     assert trainer.output_dir == "pvc://shared/checkpoints/eagle3"
     assert trainer.epochs == 5
     assert trainer.lr == 5e-5
@@ -118,6 +120,21 @@ def test_speculator_mode_train_only_requires_hidden_states():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+        )
+
+    print("test execution complete")
+
+
+def test_speculator_mode_train_only_requires_data_path():
+    """Test that TRAIN_ONLY mode requires data_path."""
+    print("Executing test: TRAIN_ONLY mode requires data_path")
+
+    with pytest.raises(ValueError, match="data_path is required for TRAIN_ONLY mode"):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.TRAIN_ONLY,
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            output_dir="pvc://test-pvc/output",
         )
 
     print("test execution complete")
@@ -175,7 +192,8 @@ def test_metrics_port_validation(test_case):
         trainer = SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
-            hidden_states_path="/data/hidden_states",
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             metrics_port=test_case.config["metrics_port"],
         )
@@ -227,7 +245,8 @@ def test_metrics_poll_interval_validation(test_case):
         trainer = SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
-            hidden_states_path="/data/hidden_states",
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             metrics_poll_interval_seconds=test_case.config["metrics_poll_interval_seconds"],
         )
@@ -251,6 +270,7 @@ def test_non_pvc_output_dir_not_supported():
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
             hidden_states_path="/data/hidden_states",
+            data_path="/data/arrow_dataset",
             output_dir="s3://my-bucket/checkpoints",
         )
 
@@ -259,6 +279,7 @@ def test_non_pvc_output_dir_not_supported():
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
             hidden_states_path="/data/hidden_states",
+            data_path="/data/arrow_dataset",
             output_dir="gcs://my-bucket/checkpoints",
         )
 
@@ -272,7 +293,8 @@ def test_pvc_output_dir_normalized():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://my-pvc/hidden_states",
+        data_path="pvc://my-pvc/arrow_dataset",
         output_dir="pvc://my-pvc/checkpoints/",
     )
 
@@ -288,7 +310,8 @@ def test_training_script_content():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         epochs=5,
         lr=1e-5,
@@ -298,7 +321,7 @@ def test_training_script_content():
 
     assert "_speculator_train_only" in script
     assert "verifier_model='Qwen/Qwen3-8B'" in script
-    assert "hidden_states_path='/data/hidden_states'" in script
+    assert "hidden_states_path='/mnt/kubeflow-checkpoints/hidden_states'" in script
     assert "save_path='/mnt/kubeflow-checkpoints/output'" in script
     assert "epochs=5" in script
     assert "lr=1e-05" in script
@@ -315,7 +338,8 @@ def test_training_script_trainer_config_fields():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(
             scheduler_type="cosine",
@@ -350,7 +374,8 @@ def test_training_script_trainer_config_defaults():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
@@ -375,7 +400,8 @@ def test_training_script_with_pvc_output_dir():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://shared/hidden_states",
+        data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/speculator_output",
     )
 
@@ -395,6 +421,7 @@ def test_train_only_requires_output_dir():
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
             hidden_states_path="/data/hidden_states",
+            data_path="/data/arrow_dataset",
         )
 
     print("test execution complete")
@@ -407,7 +434,8 @@ def test_training_script_custom_total_seq_len():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         total_seq_len=2048,
     )
@@ -427,7 +455,8 @@ def test_training_script_custom_hidden_states_dtype():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(hidden_states_dtype="float16"),
     )
@@ -448,7 +477,8 @@ def test_hidden_states_dtype_validation():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
-            hidden_states_path="/data/hidden_states",
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             config=SpeculatorConfig(hidden_states_dtype="float64"),
         )
@@ -463,7 +493,8 @@ def test_training_script_distributed_batch_sampler():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
@@ -507,7 +538,8 @@ def test_numeric_field_validation(test_case):
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
-            hidden_states_path="/data/hidden_states",
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             **test_case.config,
         )
@@ -537,7 +569,8 @@ def test_crd_conversion_train_only():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
@@ -568,7 +601,8 @@ def test_crd_conversion_with_env_vars():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         env={"WANDB_DISABLED": "true", "NCCL_DEBUG": "INFO"},
     )
@@ -602,7 +636,8 @@ def test_crd_conversion_no_env_vars():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
@@ -629,7 +664,8 @@ def test_crd_conversion_with_training_gpu_count():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         training_gpu_count=2,
     )
@@ -657,7 +693,8 @@ def test_crd_uses_torchrun_entrypoint_for_train_only():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
@@ -734,7 +771,8 @@ def test_speculator_trainer_configurations(test_case):
         trainer = SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
-            hidden_states_path="/data/hidden_states",
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             **test_case.config,
         )
@@ -785,7 +823,8 @@ def test_progression_tracking_injected_when_enabled():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=True,
     )
@@ -817,7 +856,8 @@ def test_progression_tracking_not_injected_when_disabled():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=False,
     )
@@ -874,6 +914,7 @@ def test_hidden_states_path_normalization():
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="pvc://shared//hidden_states/",
+        data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
     )
 
@@ -891,6 +932,7 @@ def test_hidden_states_path_unsupported_scheme():
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
             hidden_states_path="s3://bucket/hidden_states",
+            data_path="pvc://shared/arrow_dataset",
             output_dir="pvc://shared/output",
         )
 
@@ -905,7 +947,8 @@ def test_hidden_states_path_direct_path_allowed():
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
         hidden_states_path="/mnt/data/hidden_states",
-        output_dir="pvc://shared/output",
+        data_path="/mnt/data/arrow_dataset",
+        output_dir="/mnt/data/output",
     )
 
     assert trainer.hidden_states_path == "/mnt/data/hidden_states"
@@ -1222,7 +1265,8 @@ def test_train_only_script_contains_training_function():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
@@ -1479,25 +1523,6 @@ def test_sidecar_overrides_passes_target_layer_ids():
     print("test execution complete")
 
 
-def test_train_only_script_passes_data_path():
-    """Test that TRAIN_ONLY script passes user-provided data_path."""
-    print("Executing test: TRAIN_ONLY script passes data_path")
-
-    trainer = SpeculativeDecodingTrainer(
-        verifier_model="Qwen/Qwen3-8B",
-        mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
-        data_path="/data/arrow_dataset",
-        output_dir="pvc://test-pvc/output",
-    )
-
-    script = _render_speculator_training_script(trainer)
-
-    assert "data_path='/data/arrow_dataset'" in script
-
-    print("test execution complete")
-
-
 def test_train_only_script_resolves_pvc_data_path():
     """Test that TRAIN_ONLY script resolves pvc:// data_path to local mount."""
     print("Executing test: TRAIN_ONLY resolves pvc:// data_path")
@@ -1505,7 +1530,7 @@ def test_train_only_script_resolves_pvc_data_path():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://shared/hidden_states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
     )
@@ -1524,8 +1549,8 @@ def test_train_only_script_passes_draft_vocab_size():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
-        data_path="/data/arrow_dataset",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         draft_vocab_size=8192,
     )
@@ -1544,7 +1569,8 @@ def test_train_only_script_draft_vocab_size_none_by_default():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
@@ -1562,7 +1588,8 @@ def test_train_only_script_contains_vocab_mapping_logic():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden_states",
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
     )
 
