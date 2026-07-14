@@ -662,7 +662,11 @@ def test_speculator_different_pvcs_raises_error_data_only():
     """Test SpeculativeDecodingTrainer DATA_ONLY with different PVCs raises NotImplementedError."""
     print("Executing test: speculator_different_pvcs_raises_error_data_only")
 
-    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
+    from kubeflow.trainer.rhai.speculator import (
+        SpeculativeDecodingTrainer,
+        SpeculatorConfig,
+        SpeculatorMode,
+    )
 
     mock_core_api = MagicMock()
 
@@ -671,6 +675,7 @@ def test_speculator_different_pvcs_raises_error_data_only():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://pvc-b/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     mock_trainer_cr = MagicMock()
@@ -683,7 +688,7 @@ def test_speculator_different_pvcs_raises_error_data_only():
 
 
 def test_speculator_pvc_and_direct_path_no_conflict():
-    """Test SpeculativeDecodingTrainer with one PVC URI and one direct path mounts once."""
+    """Test SpeculativeDecodingTrainer with all PVC URIs on same PVC mounts once."""
     print("Executing test: speculator_pvc_and_direct_path_no_conflict")
 
     from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
@@ -693,8 +698,8 @@ def test_speculator_pvc_and_direct_path_no_conflict():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/data/hidden-states",
-        data_path="/data/arrow_dataset",
+        hidden_states_path="pvc://shared/hidden-states",
+        data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
     )
 

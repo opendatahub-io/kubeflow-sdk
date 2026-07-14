@@ -120,11 +120,14 @@ class SpeculativeDecodingTrainer:
     """RHAI trainer for custom draft model training via the speculators library.
 
     Args:
-        verifier_model: HuggingFace model ID or path to the verifier model.
+        verifier_model: HuggingFace model ID (e.g. ``"meta-llama/Llama-3.1-8B-Instruct"``)
+            or PVC URI (``pvc://<name>/<path>``) pointing to a pre-downloaded model.
         mode: Training mode (TRAIN_ONLY or DATA_ONLY).
         speculator_type: Draft model architecture (default: EAGLE3).
-        hidden_states_path: Pre-extracted hidden states on PVC (required for TRAIN_ONLY).
-        data_path: Path to preprocessed Arrow dataset (optional for TRAIN_ONLY).
+        hidden_states_path: PVC URI (``pvc://<name>/<path>``) to pre-extracted hidden states
+            (required for TRAIN_ONLY).
+        data_path: PVC URI (``pvc://<name>/<path>``) to preprocessed Arrow dataset
+            (required for TRAIN_ONLY).
         dataset_name: Dataset for hidden state extraction (required for DATA_ONLY).
             Built-in names (``"sharegpt"``, ``"ultrachat"``, ``"gsm8k"``), a HuggingFace
             dataset ID, or a local ``.json``/``.jsonl`` file path.
@@ -201,19 +204,41 @@ class SpeculativeDecodingTrainer:
         if self.mode == SpeculatorMode.TRAIN_ONLY and not self.hidden_states_path:
             raise ValueError(
                 "hidden_states_path is required for TRAIN_ONLY mode. "
-                "Provide the path to pre-extracted hidden states on PVC."
+                "Provide a PVC URI (pvc://<name>/<path>) to the pre-extracted hidden states."
+            )
+
+        if (
+            self.mode == SpeculatorMode.TRAIN_ONLY
+            and self.hidden_states_path
+            and not self.hidden_states_path.startswith(PVC_URI_SCHEME)
+        ):
+            raise ValueError(
+                f"hidden_states_path must use a PVC URI (pvc://<name>/<path>), "
+                f"got {self.hidden_states_path!r}."
             )
 
         if self.mode == SpeculatorMode.TRAIN_ONLY and not self.data_path:
             raise ValueError(
                 "data_path is required for TRAIN_ONLY mode. "
-                "Provide the path to the preprocessed Arrow dataset on PVC."
+                "Provide a PVC URI (pvc://<name>/<path>) to the preprocessed Arrow dataset."
+            )
+
+        if self.data_path and not self.data_path.startswith(PVC_URI_SCHEME):
+            raise ValueError(
+                f"data_path must use a PVC URI (pvc://<name>/<path>), got {self.data_path!r}."
             )
 
         if not self.output_dir:
             raise ValueError(
                 f"output_dir is required for {self.mode.name} mode. "
                 "Provide a PVC URI (pvc://<name>/<path>)."
+            )
+
+        if not self.output_dir.startswith(PVC_URI_SCHEME):
+            raise ValueError(
+                f"output_dir must use a PVC URI (pvc://<name>/<path>), got {self.output_dir!r}. "
+                "Shared PVC storage is required for the vLLM sidecar and main container "
+                "to exchange hidden states."
             )
 
         if self.mode == SpeculatorMode.DATA_ONLY and not self.dataset_name:
@@ -337,6 +362,38 @@ class SpeculativeDecodingTrainer:
                 f"for SpeculativeDecodingTrainer. Currently only PVC URIs (pvc://<name>/<path>), "
                 f"direct paths, or HuggingFace dataset names are supported."
             )
+
+        if self.mode == SpeculatorMode.DATA_ONLY:
+            cfg = self.config or SpeculatorConfig()
+            if self.verifier_model.startswith(PVC_URI_SCHEME):
+                if cfg.target_layer_ids is None:
+                    raise ValueError(
+                        "config.target_layer_ids is required when verifier_model is a "
+                        "PVC URI. The SDK cannot read the model config from the PVC to "
+                        "auto-detect layers. Provide target_layer_ids explicitly via "
+                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3])."
+                    )
+            else:
+                if cfg.target_layer_ids is None:
+                    try:
+                        from transformers import AutoConfig
+
+                        model_config = AutoConfig.from_pretrained(
+                            self.verifier_model, trust_remote_code=True
+                        )
+                    except Exception as e:
+                        raise ValueError(
+                            f"verifier_model {self.verifier_model!r} is not a valid "
+                            f"HuggingFace model ID. For DATA_ONLY mode, verifier_model "
+                            f"must be either a HuggingFace model ID "
+                            f"(e.g. 'meta-llama/Llama-3.1-8B-Instruct') or a PVC URI "
+                            f"(pvc://<name>/<path>)."
+                        ) from e
+                    if hasattr(model_config, "text_config"):
+                        model_config = model_config.text_config
+                    n = model_config.num_hidden_layers
+                    cfg.target_layer_ids = [2, n // 2, n - 3]
+                    self.config = cfg
 
 
 def _speculator_data_only(
@@ -1325,6 +1382,8 @@ def apply_speculator_sidecar_overrides(
 
     cfg = trainer.config or SpeculatorConfig()
 
+    layer_ids_str = ",".join(str(lid) for lid in cfg.target_layer_ids)
+
     sidecar_env = [
         {"name": "SPECULATOR_VERIFIER_MODEL", "value": resolved_verifier},
         {"name": "SPECULATOR_HS_PATH", "value": hs_path},
@@ -1333,10 +1392,11 @@ def apply_speculator_sidecar_overrides(
             "value": str(trainer.vllm_gpu_memory_utilization),
         },
         {"name": "SPECULATOR_VLLM_GPU_COUNT", "value": str(trainer.vllm_gpu_count)},
+        {"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str},
     ]
-    if cfg.target_layer_ids is not None:
-        layer_ids_str = ",".join(str(lid) for lid in cfg.target_layer_ids)
-        sidecar_env.append({"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str})
+
+    if trainer.env and "HF_TOKEN" in trainer.env:
+        sidecar_env.append({"name": "HF_TOKEN", "value": trainer.env["HF_TOKEN"]})
 
     sidecar_override = {
         "name": VLLM_SIDECAR_CONTAINER_NAME,

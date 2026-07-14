@@ -262,24 +262,24 @@ def test_metrics_poll_interval_validation(test_case):
 
 
 def test_non_pvc_output_dir_not_supported():
-    """Test that non-PVC output_dir raises NotImplementedError."""
+    """Test that non-PVC output_dir raises ValueError."""
     print("Executing test: non-PVC output_dir not supported")
 
-    with pytest.raises(NotImplementedError, match="is not yet supported"):
+    with pytest.raises(ValueError, match="output_dir must use a PVC URI"):
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
-            hidden_states_path="/data/hidden_states",
-            data_path="/data/arrow_dataset",
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
             output_dir="s3://my-bucket/checkpoints",
         )
 
-    with pytest.raises(ValueError, match="Unsupported storage URI scheme"):
+    with pytest.raises(ValueError, match="output_dir must use a PVC URI"):
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
-            hidden_states_path="/data/hidden_states",
-            data_path="/data/arrow_dataset",
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
             output_dir="gcs://my-bucket/checkpoints",
         )
 
@@ -420,8 +420,8 @@ def test_train_only_requires_output_dir():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
-            hidden_states_path="/data/hidden_states",
-            data_path="/data/arrow_dataset",
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
         )
 
     print("test execution complete")
@@ -723,6 +723,7 @@ def test_crd_uses_python_entrypoint_for_data_only():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -927,7 +928,7 @@ def test_hidden_states_path_unsupported_scheme():
     """Test that non-PVC URI schemes for hidden_states_path raise NotImplementedError."""
     print("Executing test: hidden_states_path unsupported scheme")
 
-    with pytest.raises(NotImplementedError, match="hidden_states_path scheme"):
+    with pytest.raises(ValueError, match="hidden_states_path must use a PVC URI"):
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
@@ -939,19 +940,18 @@ def test_hidden_states_path_unsupported_scheme():
     print("test execution complete")
 
 
-def test_hidden_states_path_direct_path_allowed():
-    """Test that direct filesystem paths for hidden_states_path are allowed."""
-    print("Executing test: hidden_states_path direct path allowed")
+def test_hidden_states_path_bare_path_rejected():
+    """Test that bare paths for hidden_states_path are rejected."""
+    print("Executing test: hidden_states_path bare path rejected")
 
-    trainer = SpeculativeDecodingTrainer(
-        verifier_model="Qwen/Qwen3-8B",
-        mode=SpeculatorMode.TRAIN_ONLY,
-        hidden_states_path="/mnt/data/hidden_states",
-        data_path="/mnt/data/arrow_dataset",
-        output_dir="/mnt/data/output",
-    )
-
-    assert trainer.hidden_states_path == "/mnt/data/hidden_states"
+    with pytest.raises(ValueError, match="hidden_states_path must use a PVC URI"):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.TRAIN_ONLY,
+            hidden_states_path="/mnt/data/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
+            output_dir="pvc://test-pvc/output",
+        )
 
     print("test execution complete")
 
@@ -993,6 +993,7 @@ def test_data_only_valid():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     assert trainer.mode == SpeculatorMode.DATA_ONLY
@@ -1012,6 +1013,7 @@ def test_data_only_renders_correct_script():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1035,6 +1037,7 @@ def test_data_only_script_passes_world_size_and_rank():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1056,6 +1059,7 @@ def test_data_only_script_embeds_datagen_script():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1199,6 +1203,7 @@ def test_data_only_script_contains_progress_server_call():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1217,6 +1222,7 @@ def test_data_only_progression_tracking_injected():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=True,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     runtime = types.Runtime(
@@ -1247,6 +1253,7 @@ def test_data_only_script_contains_marker_logic():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1287,6 +1294,7 @@ def test_data_only_script_contains_vllm_health_check():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1307,6 +1315,7 @@ def test_data_only_script_skips_completed_extraction():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1322,7 +1331,7 @@ def test_apply_speculator_sidecar_overrides():
     print("Executing test: apply_speculator_sidecar_overrides")
 
     trainer = SpeculativeDecodingTrainer(
-        verifier_model="/mnt/kubeflow-checkpoints/models/Qwen3-8B",
+        verifier_model="pvc://shared/models/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://shared/speculator/run1",
@@ -1345,8 +1354,8 @@ def test_apply_speculator_sidecar_overrides():
 
     env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
     assert env_dict["SPECULATOR_VERIFIER_MODEL"] == "/mnt/kubeflow-checkpoints/models/Qwen3-8B"
-    assert (
-        env_dict["SPECULATOR_HS_PATH"] == "/mnt/kubeflow-checkpoints/speculator/run1/hidden_states"
+    assert env_dict["SPECULATOR_HS_PATH"] == (
+        "/mnt/kubeflow-checkpoints/speculator/run1/hidden_states"
     )
     assert env_dict["SPECULATOR_GPU_MEM_UTIL"] == "0.85"
     assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "2"
@@ -1412,6 +1421,7 @@ def test_data_only_script_uses_sidecar_endpoint():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1432,6 +1442,7 @@ def test_data_only_script_resolves_pvc_verifier_model():
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1445,38 +1456,70 @@ def test_data_only_script_resolves_pvc_verifier_model():
     print("test execution complete")
 
 
-def test_verifier_model_hf_id_unchanged_in_script():
-    """Test that HuggingFace model ID passes through unchanged in rendered script."""
-    print("Executing test: HF verifier_model unchanged in script")
+def test_verifier_model_hf_id_auto_detects_target_layer_ids():
+    """Test that HF model ID triggers AutoConfig to compute target_layer_ids."""
+    print("Executing test: HF verifier_model auto-detects target_layer_ids")
 
-    trainer = SpeculativeDecodingTrainer(
-        verifier_model="meta-llama/Llama-3.1-8B-Instruct",
-        mode=SpeculatorMode.DATA_ONLY,
-        dataset_name="sharegpt",
-        output_dir="pvc://shared/datagen_output",
-    )
+    import sys
+    from unittest.mock import MagicMock
+
+    mock_model_config = MagicMock()
+    mock_model_config.num_hidden_layers = 36
+    mock_model_config.text_config = mock_model_config
+    del mock_model_config.text_config
+
+    mock_auto_config = MagicMock()
+    mock_auto_config.from_pretrained.return_value = mock_model_config
+
+    mock_transformers = MagicMock()
+    mock_transformers.AutoConfig = mock_auto_config
+
+    sys.modules["transformers"] = mock_transformers
+    try:
+        trainer = SpeculativeDecodingTrainer(
+            verifier_model="meta-llama/Llama-3.1-8B-Instruct",
+            mode=SpeculatorMode.DATA_ONLY,
+            dataset_name="sharegpt",
+            output_dir="pvc://shared/datagen_output",
+        )
+    finally:
+        del sys.modules["transformers"]
+
+    assert trainer.config is not None
+    assert trainer.config.target_layer_ids == [2, 18, 33]
 
     script = _render_speculator_training_script(trainer)
-
     assert "verifier_model='meta-llama/Llama-3.1-8B-Instruct'" in script
 
     print("test execution complete")
 
 
-def test_verifier_model_local_path_unchanged_in_script():
-    """Test that local path verifier_model passes through unchanged in rendered script."""
-    print("Executing test: local path verifier_model unchanged in script")
+def test_verifier_model_invalid_id_fails_autoconfig():
+    """Test that invalid verifier_model raises ValueError with clear message."""
+    print("Executing test: invalid verifier_model fails AutoConfig")
 
-    trainer = SpeculativeDecodingTrainer(
-        verifier_model="/mnt/models/Llama-3.1-8B-Instruct",
-        mode=SpeculatorMode.DATA_ONLY,
-        dataset_name="sharegpt",
-        output_dir="pvc://shared/datagen_output",
+    import sys
+    from unittest.mock import MagicMock
+
+    mock_auto_config = MagicMock()
+    mock_auto_config.from_pretrained.side_effect = OSError(
+        "not-a-real-model is not a local folder and is not a valid model identifier"
     )
 
-    script = _render_speculator_training_script(trainer)
+    mock_transformers = MagicMock()
+    mock_transformers.AutoConfig = mock_auto_config
 
-    assert "verifier_model='/mnt/models/Llama-3.1-8B-Instruct'" in script
+    sys.modules["transformers"] = mock_transformers
+    try:
+        with pytest.raises(ValueError, match="is not a valid HuggingFace model ID"):
+            SpeculativeDecodingTrainer(
+                verifier_model="not-a-real-model",
+                mode=SpeculatorMode.DATA_ONLY,
+                dataset_name="sharegpt",
+                output_dir="pvc://shared/datagen_output",
+            )
+    finally:
+        del sys.modules["transformers"]
 
     print("test execution complete")
 
@@ -1507,7 +1550,7 @@ def test_sidecar_overrides_passes_target_layer_ids():
     print("Executing test: sidecar passes target_layer_ids")
 
     trainer = SpeculativeDecodingTrainer(
-        verifier_model="/mnt/models/Qwen3-8B",
+        verifier_model="pvc://shared/models/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
