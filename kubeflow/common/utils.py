@@ -36,4 +36,4 @@ def get_default_target_namespace(context: str | None = None) -> str:
         except Exception:
             return constants.DEFAULT_NAMESPACE
     with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
-        return f.readline()
+        return f.readline().strip()
