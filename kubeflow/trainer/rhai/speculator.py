@@ -150,7 +150,9 @@ class SpeculativeDecodingTrainer:
             (pvc://<name>/<path>). The SDK auto-mounts the volume and resolves the path.
         regenerate_responses: When True, send dataset prompts to the verifier model
             and use its responses instead of the original dataset responses before
-            preprocessing. Only supported in DATA_ONLY mode (default: False).
+            preprocessing. Only supported in DATA_ONLY and OFFLINE modes (default: False).
+        vllm_endpoint: URL of user-managed vLLM endpoint for hidden state extraction.
+            Required for OFFLINE mode. Example: ``"http://vllm-verifier-svc:8000/v1"``.
         enable_progression_tracking: Enable progression tracking (default: True).
         metrics_port: HTTP server port for metrics endpoint (default: 28080).
         metrics_poll_interval_seconds: How often controller polls metrics (default: 30).
@@ -178,6 +180,7 @@ class SpeculativeDecodingTrainer:
     env: dict[str, str] | None = None
     output_dir: str | None = None
     regenerate_responses: bool = False
+    vllm_endpoint: str | None = None
 
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
@@ -188,6 +191,7 @@ class SpeculativeDecodingTrainer:
         supported_modes = {
             SpeculatorMode.TRAIN_ONLY,
             SpeculatorMode.DATA_ONLY,
+            SpeculatorMode.OFFLINE,
         }
         if self.mode not in supported_modes:
             raise NotImplementedError(
@@ -241,22 +245,39 @@ class SpeculativeDecodingTrainer:
                 "to exchange hidden states."
             )
 
-        if self.mode == SpeculatorMode.DATA_ONLY and not self.dataset_name:
+        if (
+            self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.OFFLINE)
+            and not self.dataset_name
+        ):
             raise ValueError(
-                "dataset_name is required for DATA_ONLY mode. "
+                f"dataset_name is required for {self.mode.name} mode. "
                 "Provide a HuggingFace dataset ID or name (e.g. 'sharegpt')."
             )
 
+        if self.mode == SpeculatorMode.OFFLINE and not self.vllm_endpoint:
+            raise ValueError(
+                "vllm_endpoint is required for OFFLINE mode. "
+                "Provide the URL of your vLLM endpoint (e.g. 'http://vllm-svc:8000/v1')."
+            )
+
+        if self.vllm_endpoint is not None and self.mode != SpeculatorMode.OFFLINE:
+            raise ValueError("vllm_endpoint is only supported in OFFLINE mode.")
+
         if self.max_samples is not None:
-            if self.mode != SpeculatorMode.DATA_ONLY:
-                raise ValueError("max_samples is only supported in DATA_ONLY mode.")
+            if self.mode not in (SpeculatorMode.DATA_ONLY, SpeculatorMode.OFFLINE):
+                raise ValueError("max_samples is only supported in DATA_ONLY and OFFLINE modes.")
             if not isinstance(self.max_samples, int) or self.max_samples < 1:
                 raise ValueError(
                     f"max_samples must be a positive integer, got {self.max_samples!r}."
                 )
 
-        if self.regenerate_responses and self.mode != SpeculatorMode.DATA_ONLY:
-            raise ValueError("regenerate_responses is only supported in DATA_ONLY mode.")
+        if self.regenerate_responses and self.mode not in (
+            SpeculatorMode.DATA_ONLY,
+            SpeculatorMode.OFFLINE,
+        ):
+            raise ValueError(
+                "regenerate_responses is only supported in DATA_ONLY and OFFLINE modes."
+            )
 
         if not isinstance(self.epochs, int) or self.epochs < 1:
             raise ValueError(f"epochs must be a positive integer, got {self.epochs!r}.")
@@ -363,7 +384,7 @@ class SpeculativeDecodingTrainer:
                 f"direct paths, or HuggingFace dataset names are supported."
             )
 
-        if self.mode == SpeculatorMode.DATA_ONLY:
+        if self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.OFFLINE):
             cfg = self.config or SpeculatorConfig()
             if self.verifier_model.startswith(PVC_URI_SCHEME):
                 if cfg.target_layer_ids is None:
@@ -814,6 +835,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
     Builds the script by composing shared pieces based on what each mode needs:
     - DATA_ONLY: data extraction only
     - TRAIN_ONLY: training only
+    - OFFLINE: data extraction then training (both calls sequentially)
 
     Args:
         trainer: SpeculativeDecodingTrainer configuration.
@@ -828,8 +850,8 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
 
-    needs_data = trainer.mode == SpeculatorMode.DATA_ONLY
-    needs_train = trainer.mode == SpeculatorMode.TRAIN_ONLY
+    needs_data = trainer.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.OFFLINE)
+    needs_train = trainer.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
 
     cfg = trainer.config or SpeculatorConfig()
 
@@ -866,15 +888,24 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     if trainer.hidden_states_path and trainer.hidden_states_path.startswith(PVC_URI_SCHEME):
         resolved_hidden_states, _ = parse_output_dir_uri(trainer.hidden_states_path)
-    else:
+    elif trainer.hidden_states_path:
         resolved_hidden_states = trainer.hidden_states_path
+    else:
+        resolved_hidden_states = resolved_output_dir
 
     if trainer.data_path and trainer.data_path.startswith(PVC_URI_SCHEME):
         resolved_data_path, _ = parse_output_dir_uri(trainer.data_path)
-    else:
+    elif trainer.data_path:
         resolved_data_path = trainer.data_path
+    else:
+        resolved_data_path = resolved_output_dir
 
     from kubeflow.trainer.rhai.constants import VLLM_SIDECAR_ENDPOINT
+
+    if trainer.mode == SpeculatorMode.OFFLINE:
+        data_vllm_endpoint = trainer.vllm_endpoint
+    else:
+        data_vllm_endpoint = VLLM_SIDECAR_ENDPOINT
 
     data_call = (
         f"_speculator_data_only(\n"
@@ -883,7 +914,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    save_path={resolved_output_dir!r},\n"
         f"    total_seq_len={trainer.total_seq_len!r},\n"
         f"    max_samples={trainer.max_samples!r},\n"
-        f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
+        f"    vllm_endpoint={data_vllm_endpoint!r},\n"
         f"    concurrency={cfg.datagen_concurrency!r},\n"
         f"    regenerate_responses={trainer.regenerate_responses!r},\n"
         f")\n"
@@ -922,6 +953,10 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         script += f"\n{data_call}"
 
     elif trainer.mode == SpeculatorMode.TRAIN_ONLY:
+        script += f"\n{train_call}"
+
+    elif trainer.mode == SpeculatorMode.OFFLINE:
+        script += f"\n{data_call}"
         script += f"\n{train_call}"
 
     return script
@@ -1027,12 +1062,17 @@ def _create_speculator_progression_instrumentation(
 
         def _get_progress(self):
             if mode == "data_only":
-                return self._data_progress()
+                return self._data_progress(scale=100, offset=0)
             elif mode == "train_only":
-                return self._training_progress()
+                return self._training_progress(scale=100, offset=0)
+            elif mode == "offline":
+                if not _training_started:
+                    return self._data_progress(scale=50, offset=0)
+                else:
+                    return self._training_progress(scale=50, offset=50)
             return self._empty_response()
 
-        def _data_progress(self):
+        def _data_progress(self, scale, offset):
             if _hidden_states_dir is None or _total_samples <= 0:
                 return self._empty_response()
 
@@ -1047,7 +1087,9 @@ def _create_speculator_progression_instrumentation(
             except FileNotFoundError:
                 count = 0
 
-            progress_pct = max(int(count / _total_samples * 100), _phase_floor_pct)
+            raw_pct = count / _total_samples * 100
+            progress_pct = min(offset + scale, offset + int(raw_pct * scale / 100))
+            progress_pct = max(progress_pct, _phase_floor_pct)
 
             estimated_remaining = None
             if _data_start_time and count > 0:
@@ -1071,13 +1113,13 @@ def _create_speculator_progression_instrumentation(
                 "evalMetrics": None,
             }
 
-        def _training_progress(self):
+        def _training_progress(self, scale, offset):
             with _metrics_lock:
                 metrics_snapshot = dict(_latest_metrics)
 
             if not metrics_snapshot:
                 response = self._empty_response()
-                response["progressPercentage"] = _phase_floor_pct
+                response["progressPercentage"] = max(offset, _phase_floor_pct)
                 return response
 
             global_step = metrics_snapshot.get("global_step", _last_global_step)
@@ -1086,14 +1128,16 @@ def _create_speculator_progression_instrumentation(
             val_metrics = metrics_snapshot.get("val", {})
 
             total_steps = None
-            progress_pct = 0
+            progress_pct = offset
             estimated_remaining = None
 
             if _steps_per_epoch and _steps_per_epoch > 0:
                 total_steps = _steps_per_epoch * num_epochs
                 if total_steps > 0:
                     completed_steps = global_step + 1
-                    progress_pct = max(int(completed_steps / total_steps * 100), _phase_floor_pct)
+                    raw_pct = completed_steps / total_steps * 100
+                    progress_pct = min(offset + scale, offset + int(raw_pct * scale / 100))
+                    progress_pct = max(progress_pct, _phase_floor_pct)
 
                     if _train_start_time and completed_steps > 0:
                         elapsed = time.time() - _train_start_time
@@ -1456,7 +1500,7 @@ def get_trainer_cr_from_speculator_trainer(
 
     trainer_crd = models.TrainerV1alpha1Trainer()
 
-    if trainer.mode == SpeculatorMode.TRAIN_ONLY:
+    if trainer.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE):
         trainer_crd.resources_per_node = k8s_utils.get_resources_per_node(
             {"nvidia.com/gpu": trainer.training_gpu_count}
         )

@@ -900,7 +900,7 @@ def test_progression_instrumentation_schema_transform():
     )
 
     handler = handler_class.__new__(handler_class)
-    result = handler._training_progress()
+    result = handler._training_progress(scale=100, offset=0)
 
     assert result["trainMetrics"] is None
 
@@ -1112,7 +1112,7 @@ def test_data_progression_handler_counts_files(tmp_path):
     start_fn(str(hs_dir), 10)
 
     handler = handler_class.__new__(handler_class)
-    result = handler._data_progress()
+    result = handler._data_progress(scale=100, offset=0)
 
     assert result["currentStep"] == 3
     assert result["totalSteps"] == 10
@@ -1139,7 +1139,7 @@ def test_data_progression_handler_empty_dir(tmp_path):
     start_fn(str(hs_dir), 50)
 
     handler = handler_class.__new__(handler_class)
-    result = handler._data_progress()
+    result = handler._data_progress(scale=100, offset=0)
 
     assert result["currentStep"] == 0
     assert result["totalSteps"] == 50
@@ -1166,7 +1166,7 @@ def test_data_progression_handler_complete(tmp_path):
     start_fn(str(hs_dir), 5)
 
     handler = handler_class.__new__(handler_class)
-    result = handler._data_progress()
+    result = handler._data_progress(scale=100, offset=0)
 
     assert result["currentStep"] == 5
     assert result["totalSteps"] == 5
@@ -1185,7 +1185,7 @@ def test_data_progression_handler_not_started():
     )
 
     handler = handler_class.__new__(handler_class)
-    result = handler._data_progress()
+    result = handler._data_progress(scale=100, offset=0)
 
     assert result["progressPercentage"] is None
     assert result["currentStep"] is None
