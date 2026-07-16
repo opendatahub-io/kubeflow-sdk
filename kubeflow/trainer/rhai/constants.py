@@ -26,7 +26,6 @@ PVC_URI_SCHEME = "pvc://"
 CHECKPOINT_MOUNT_PATH = "/mnt/kubeflow-checkpoints"
 CHECKPOINT_VOLUME_NAME = "checkpoint-storage"
 CHECKPOINT_INCOMPLETE_MARKER = "checkpoint-is-incomplete.txt"
-EXTRACTION_INCOMPLETE_MARKER = "extraction-is-incomplete.txt"
 CHECKPOINT_STAGING_DIR = "cloud-upload-staging"
 
 # Ephemeral volume for cloud storage checkpoint staging (for S3)
@@ -34,8 +33,3 @@ CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
 
 # Cloud storage URI schemes
 S3_URI_SCHEME = "s3://"
-
-# vLLM sidecar constants (for speculator DATA_ONLY mode)
-VLLM_SIDECAR_CONTAINER_NAME = "vllm-sidecar"
-VLLM_SIDECAR_PORT = 8234
-VLLM_SIDECAR_ENDPOINT = f"http://localhost:{VLLM_SIDECAR_PORT}/v1"
