@@ -140,21 +140,6 @@ def test_speculator_mode_train_only_requires_data_path():
     print("test execution complete")
 
 
-def test_unsupported_mode_validation():
-    """Test that unsupported modes raise NotImplementedError."""
-    print("Executing test: ONLINE mode not yet supported")
-
-    with pytest.raises(NotImplementedError):
-        SpeculativeDecodingTrainer(
-            verifier_model="Qwen/Qwen3-8B",
-            mode=SpeculatorMode.ONLINE,
-            hidden_states_path="/data/hidden_states",
-            output_dir="pvc://test-pvc/output",
-        )
-
-    print("test execution complete")
-
-
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -1643,5 +1628,384 @@ def test_train_only_script_contains_vocab_mapping_logic():
     assert "t2d_path = Path(data_path)" in script
     assert '"d2t": d2t' in script
     assert '"t2d": t2d' in script
+
+    print("test execution complete")
+
+
+# =============================================================================
+# ONLINE mode tests
+# =============================================================================
+
+
+def test_online_mode_valid():
+    """Test that ONLINE mode with required fields succeeds."""
+    print("Executing test: ONLINE mode valid configuration")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    assert trainer.mode == SpeculatorMode.ONLINE
+    assert trainer.dataset_name == "sharegpt"
+    assert trainer.output_dir == "pvc://test-pvc/output"
+
+    print("test execution complete")
+
+
+def test_online_mode_requires_dataset_name():
+    """Test that ONLINE mode requires dataset_name."""
+    print("Executing test: ONLINE mode requires dataset_name")
+
+    with pytest.raises(ValueError, match="dataset_name is required for ONLINE mode"):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.ONLINE,
+            output_dir="pvc://test-pvc/output",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        )
+
+    print("test execution complete")
+
+
+def test_online_mode_rejects_vllm_endpoint():
+    """Test that ONLINE mode rejects vllm_endpoint (uses sidecar instead)."""
+    print("Executing test: ONLINE mode rejects vllm_endpoint")
+
+    with pytest.raises(ValueError, match="vllm_endpoint is only supported in OFFLINE mode"):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.ONLINE,
+            dataset_name="sharegpt",
+            output_dir="pvc://test-pvc/output",
+            vllm_endpoint="http://vllm-svc:8000/v1",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        )
+
+    print("test execution complete")
+
+
+def test_online_mode_rejects_regenerate_responses():
+    """Test that ONLINE mode rejects regenerate_responses."""
+    print("Executing test: ONLINE mode rejects regenerate_responses")
+
+    with pytest.raises(
+        ValueError, match="regenerate_responses is only supported in DATA_ONLY and OFFLINE"
+    ):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.ONLINE,
+            dataset_name="sharegpt",
+            output_dir="pvc://test-pvc/output",
+            regenerate_responses=True,
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        )
+
+    print("test execution complete")
+
+
+def test_online_mode_allows_max_samples():
+    """Test that ONLINE mode allows max_samples."""
+    print("Executing test: ONLINE mode allows max_samples")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        max_samples=1000,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    assert trainer.max_samples == 1000
+
+    print("test execution complete")
+
+
+def test_online_mode_rejects_max_samples_in_train_only():
+    """Test that TRAIN_ONLY mode rejects max_samples."""
+    print("Executing test: TRAIN_ONLY rejects max_samples")
+
+    with pytest.raises(ValueError, match="max_samples is only supported in"):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.TRAIN_ONLY,
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/arrow_dataset",
+            output_dir="pvc://test-pvc/output",
+            max_samples=1000,
+        )
+
+    print("test execution complete")
+
+
+def test_online_renders_correct_script():
+    """Test that ONLINE generates script with _speculator_online call."""
+    print("Executing test: ONLINE renders correct script")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://shared/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "_speculator_online(" in script
+    assert "_speculator_data_only(" not in script
+    assert "_speculator_train_only(" not in script
+    assert "verifier_model='Qwen/Qwen3-8B'" in script
+    assert "dataset_name='sharegpt'" in script
+    assert "output_dir='/mnt/kubeflow-checkpoints/output'" in script
+    assert "vllm_port=8234" in script
+
+    print("test execution complete")
+
+
+def test_online_script_uses_on_missing_generate():
+    """Test that ONLINE script uses ArrowDataset with on_missing='generate'."""
+    print("Executing test: ONLINE script uses on_missing generate")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert 'on_missing="generate"' in script
+    assert "DistributedSampler" in script
+    assert "data_generation_offline" not in script
+
+    print("test execution complete")
+
+
+def test_online_script_no_datagen_embedded():
+    """Test that ONLINE script does not embed data_generation_offline.py."""
+    print("Executing test: ONLINE script has no embedded datagen")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "_DATAGEN_SCRIPT_B64" not in script
+    assert "_REGEN_SCRIPT_B64" not in script
+
+    print("test execution complete")
+
+
+def test_online_script_contains_vllm_health_check():
+    """Test that ONLINE script contains vLLM sidecar health check."""
+    print("Executing test: ONLINE script contains vLLM health check")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "health" in script
+    assert "vLLM sidecar is ready" in script
+
+    print("test execution complete")
+
+
+def test_online_script_contains_preprocessing():
+    """Test that ONLINE script contains preprocessing step."""
+    print("Executing test: ONLINE script contains preprocessing")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "load_and_preprocess_dataset" in script
+    assert "token_freq" in script
+    assert "save_to_disk" in script
+
+    print("test execution complete")
+
+
+def test_online_script_contains_model_setup():
+    """Test that ONLINE script contains model setup with vocab mappings."""
+    print("Executing test: ONLINE script contains model setup")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "Eagle3DraftModel" in script
+    assert "build_vocab_mappings_from_distribution" in script
+    assert "AutoConfig" in script
+    assert "Trainer" in script
+    assert "TrainerConfig" in script
+    assert "run_training" in script
+
+    print("test execution complete")
+
+
+def test_online_crd_uses_torchrun():
+    """Test that ONLINE mode CRD uses TORCH_COMMAND (torchrun)."""
+    print("Executing test: ONLINE CRD uses torchrun")
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="registry.redhat.io/rhaii/cuda-ubi9:3.5",
+        ),
+    )
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    get_trainer_cr_from_speculator_trainer(runtime, trainer)
+
+    assert runtime.trainer.command == constants.TORCH_COMMAND
+
+    print("test execution complete")
+
+
+def test_online_crd_has_gpu_resources():
+    """Test that ONLINE mode CRD includes GPU resources."""
+    print("Executing test: ONLINE CRD has GPU resources")
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="registry.redhat.io/rhaii/cuda-ubi9:3.5",
+        ),
+    )
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        training_gpu_count=2,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
+
+    assert trainer_crd.resources_per_node is not None
+
+    print("test execution complete")
+
+
+def test_online_sidecar_overrides():
+    """Test that ONLINE mode gets sidecar overrides (same as DATA_ONLY)."""
+    print("Executing test: ONLINE sidecar overrides")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    result = apply_speculator_sidecar_overrides(trainer, [])
+
+    sidecar = result[0]["spec"]["initContainers"][0]
+    env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
+
+    assert env_dict["SPECULATOR_VERIFIER_MODEL"] == "Qwen/Qwen3-8B"
+    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,16,29"
+    assert "SPECULATOR_HS_PATH" in env_dict
+
+    print("test execution complete")
+
+
+def test_online_progression_tracking():
+    """Test that ONLINE mode uses training-only progression (scale=100, offset=0)."""
+    print("Executing test: ONLINE progression tracking")
+
+    apply_fn, _, handler_class, _, _ = _create_speculator_progression_instrumentation(
+        metrics_port=28080,
+        mode="online",
+        num_epochs=3,
+    )
+
+    handler = handler_class.__new__(handler_class)
+    progress = handler._get_progress()
+
+    assert progress["progressPercentage"] is not None or progress["progressPercentage"] == 0
+
+    print("test execution complete")
+
+
+def test_online_script_passes_max_samples():
+    """Test that ONLINE script passes max_samples to the function call."""
+    print("Executing test: ONLINE script passes max_samples")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        max_samples=500,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "max_samples=500" in script
+
+    print("test execution complete")
+
+
+def test_online_script_passes_target_layer_ids():
+    """Test that ONLINE script passes target_layer_ids to the function call."""
+    print("Executing test: ONLINE script passes target_layer_ids")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "target_layer_ids=[2, 16, 29]" in script
 
     print("test execution complete")

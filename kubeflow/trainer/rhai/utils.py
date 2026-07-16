@@ -523,7 +523,10 @@ def setup_rhai_trainer_storage(
         else:
             pod_template_overrides = pod_template_overrides or []
 
-        if trainer.mode == speculator.SpeculatorMode.DATA_ONLY:
+        if trainer.mode in (
+            speculator.SpeculatorMode.DATA_ONLY,
+            speculator.SpeculatorMode.ONLINE,
+        ):
             pod_template_overrides = speculator.apply_speculator_sidecar_overrides(
                 trainer, pod_template_overrides
             )
