@@ -399,11 +399,15 @@ class SpeculativeDecodingTrainer:
             cfg = self.config or SpeculatorConfig()
             if self.verifier_model.startswith(PVC_URI_SCHEME):
                 if cfg.target_layer_ids is None:
+                    if self.mode == SpeculatorMode.ONLINE:
+                        example = "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n])"
+                    else:
+                        example = "SpeculatorConfig(target_layer_ids=[2, n//2, n-3])"
                     raise ValueError(
                         "config.target_layer_ids is required when verifier_model is a "
                         "PVC URI. The SDK cannot read the model config from the PVC to "
-                        "auto-detect layers. Provide target_layer_ids explicitly via "
-                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3])."
+                        f"auto-detect layers. Provide target_layer_ids explicitly via "
+                        f"{example}."
                     )
             else:
                 if cfg.target_layer_ids is None:
@@ -436,7 +440,10 @@ class SpeculativeDecodingTrainer:
                     if hasattr(model_config, "text_config"):
                         model_config = model_config.text_config
                     n = model_config.num_hidden_layers
-                    cfg.target_layer_ids = [2, n // 2, n - 3]
+                    if self.mode == SpeculatorMode.ONLINE:
+                        cfg.target_layer_ids = [2, n // 2, n - 3, n]
+                    else:
+                        cfg.target_layer_ids = [2, n // 2, n - 3]
                     self.config = cfg
 
 
