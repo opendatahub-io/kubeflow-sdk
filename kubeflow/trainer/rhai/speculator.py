@@ -255,6 +255,25 @@ class SpeculativeDecodingTrainer:
                 "Provide a HuggingFace dataset ID or name (e.g. 'sharegpt')."
             )
 
+        if (
+            self.mode == SpeculatorMode.OFFLINE
+            and not self.verifier_model.startswith(PVC_URI_SCHEME)
+        ):
+            raise ValueError(
+                "verifier_model must be a PVC URI (pvc://<name>/<path>) for OFFLINE mode. "
+                "The user-managed vLLM instance already has the model on shared storage, "
+                "so the training pod reads it from the same PVC."
+            )
+
+        if self.mode == SpeculatorMode.OFFLINE:
+            cfg = self.config or SpeculatorConfig()
+            if cfg.target_layer_ids is None:
+                raise ValueError(
+                    "config.target_layer_ids is required for OFFLINE mode. "
+                    "Provide the layer IDs matching your vLLM configuration via "
+                    "SpeculatorConfig(target_layer_ids=[2, n//2, n-3])."
+                )
+
         if self.mode == SpeculatorMode.OFFLINE and not self.vllm_endpoint:
             raise ValueError(
                 "vllm_endpoint is required for OFFLINE mode. "
@@ -393,7 +412,6 @@ class SpeculativeDecodingTrainer:
 
         if self.mode in (
             SpeculatorMode.DATA_ONLY,
-            SpeculatorMode.OFFLINE,
             SpeculatorMode.ONLINE,
         ):
             cfg = self.config or SpeculatorConfig()
