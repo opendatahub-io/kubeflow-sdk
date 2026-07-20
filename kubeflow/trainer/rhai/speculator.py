@@ -706,20 +706,19 @@ def _speculator_train_only(
     d2t_path = Path(data_path) / "d2t.npy"
     t2d_path = Path(data_path) / "t2d.npy"
 
-    if not (d2t_path.exists() and t2d_path.exists()):
-        if rank == 0:
-            resolved_draft_vocab = draft_vocab_size or min(8192, target_vocab_size)
-            token_freq_path = Path(data_path) / "token_freq.pt"
-            token_freq_dict = torch.load(str(token_freq_path), weights_only=True)
-            d2t, t2d = build_vocab_mappings_from_distribution(
-                token_freq_dict=token_freq_dict,
-                draft_vocab_size=resolved_draft_vocab,
-                target_vocab_size=target_vocab_size,
-            )
-            np.save(str(d2t_path), d2t.cpu().numpy())
-            np.save(str(t2d_path), t2d.cpu().numpy())
-        if is_distributed:
-            torch.distributed.barrier()
+    if not (d2t_path.exists() and t2d_path.exists()) and rank == 0:
+        resolved_draft_vocab = draft_vocab_size or min(8192, target_vocab_size)
+        token_freq_path = Path(data_path) / "token_freq.pt"
+        token_freq_dict = torch.load(str(token_freq_path), weights_only=True)
+        d2t, t2d = build_vocab_mappings_from_distribution(
+            token_freq_dict=token_freq_dict,
+            draft_vocab_size=resolved_draft_vocab,
+            target_vocab_size=target_vocab_size,
+        )
+        np.save(str(d2t_path), d2t.cpu().numpy())
+        np.save(str(t2d_path), t2d.cpu().numpy())
+    if is_distributed:
+        torch.distributed.barrier()
 
     d2t = torch.from_numpy(np.load(str(d2t_path)))
     t2d = torch.from_numpy(np.load(str(t2d_path)))
