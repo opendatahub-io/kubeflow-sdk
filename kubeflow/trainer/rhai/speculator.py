@@ -806,6 +806,17 @@ def _speculator_train_only(
         log_freq=log_freq,
     )
 
+    if resume_from_checkpoint:
+        interrupted_path = Path(save_path) / "interrupted"
+        if interrupted_path.exists():
+            import shutil
+
+            shutil.rmtree(str(interrupted_path))
+            print(
+                f"[Kubeflow] Removed interrupted checkpoint at {interrupted_path}",
+                flush=True,
+            )
+
     if "_set_phase" in globals():
         _set_phase("training", 15)  # noqa: F821
 
