@@ -1100,7 +1100,8 @@ def _create_speculator_progression_instrumentation(
             if _steps_per_epoch and _steps_per_epoch > 0:
                 total_steps = _steps_per_epoch * num_epochs
                 if total_steps > 0:
-                    completed_steps = epoch * _steps_per_epoch + global_step + 1
+                    step_in_epoch = global_step % _steps_per_epoch
+                    completed_steps = min(epoch * _steps_per_epoch + step_in_epoch + 1, total_steps)
                     progress_pct = max(int(completed_steps / total_steps * 100), _phase_floor_pct)
 
                     if _train_start_time and completed_steps > 0:
