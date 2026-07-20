@@ -116,7 +116,7 @@ def test_speculator_mode_train_only_requires_hidden_states():
     """Test that TRAIN_ONLY mode requires hidden_states_path."""
     print("Executing test: TRAIN_ONLY mode requires hidden_states_path")
 
-    with pytest.raises(ValueError, match="hidden_states_path is required for TRAIN_ONLY mode"):
+    with pytest.raises(ValueError, match="hidden_states_path is required for TRAIN_ONLY"):
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
@@ -2007,5 +2007,65 @@ def test_online_script_passes_target_layer_ids():
     script = _render_speculator_training_script(trainer)
 
     assert "target_layer_ids=[2, 16, 29]" in script
+
+    print("test execution complete")
+
+
+def test_offline_script_with_hidden_states_path():
+    """Test that OFFLINE script passes hidden_states_path when set."""
+    print("Executing test: OFFLINE script with hidden_states_path")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="pvc://shared/speculator/models/Qwen3-8B",
+        mode=SpeculatorMode.OFFLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://shared/speculator/output",
+        vllm_endpoint="http://vllm-svc:8000/v1",
+        hidden_states_path="pvc://shared/offline_output/hidden_states",
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "hidden_states_path='/mnt/kubeflow-checkpoints/offline_output/hidden_states'" in script
+
+    print("test execution complete")
+
+
+def test_offline_requires_hidden_states_path():
+    """Test that OFFLINE mode requires hidden_states_path."""
+    print("Executing test: OFFLINE mode requires hidden_states_path")
+
+    with pytest.raises(ValueError, match="hidden_states_path is required for OFFLINE"):
+        SpeculativeDecodingTrainer(
+            verifier_model="pvc://shared/speculator/models/Qwen3-8B",
+            mode=SpeculatorMode.OFFLINE,
+            dataset_name="sharegpt",
+            output_dir="pvc://shared/speculator/output",
+            vllm_endpoint="http://vllm-svc:8000/v1",
+            config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        )
+
+    print("test execution complete")
+
+
+def test_offline_script_skips_model_arg_with_hidden_states_path():
+    """Test that OFFLINE script skips --model when hidden_states_path is set."""
+    print("Executing test: OFFLINE script skips --model with hidden_states_path")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="pvc://shared/speculator/models/Qwen3-8B",
+        mode=SpeculatorMode.OFFLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://shared/speculator/output",
+        vllm_endpoint="http://vllm-svc:8000/v1",
+        hidden_states_path="pvc://shared/offline_output/hidden_states",
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+
+    assert "if not hidden_states_path:" in script
+    assert '"--hidden-states-dir"' in script
 
     print("test execution complete")

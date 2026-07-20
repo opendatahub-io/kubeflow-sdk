@@ -188,6 +188,16 @@ def parse_args():
             " Defaults to 0"
         ),
     )
+    parser.add_argument(
+        "--hidden-states-dir",
+        type=str,
+        default=None,
+        help=(
+            "Local path where vLLM's hidden states files are accessible on this pod. "
+            "When set, the worker resolves files by filename from this directory "
+            "instead of using the absolute path returned by vLLM."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -223,6 +233,7 @@ async def worker(  # noqa: C901
     skipped_indices: list[int],
     cancel_event: asyncio.Event,
     failure_tracker: _FailureTracker | None,
+    hidden_states_dir: str | None = None,
 ):
     """Worker that pulls items from queue and sends them to the vLLM endpoint."""
     while True:
@@ -249,6 +260,9 @@ async def worker(  # noqa: C901
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
+            if hidden_states_dir:
+                filename = os.path.basename(hidden_states_path)
+                hidden_states_path = os.path.join(hidden_states_dir, filename)
             lock_path = hidden_states_path + ".lock"
             if Path(lock_path).exists():  # noqa: ASYNC240
                 await wait_for_lock_async(lock_path)
@@ -392,6 +406,7 @@ async def generate_and_save_hidden_states(args, dataset):
                         skipped_indices,
                         cancel_event,
                         failure_tracker,
+                        hidden_states_dir=args.hidden_states_dir,
                     )
                 )
                 for _ in range(args.concurrency * 2)

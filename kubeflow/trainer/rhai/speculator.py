@@ -206,10 +206,13 @@ class SpeculativeDecodingTrainer:
                 f"Currently only '{SpeculatorType.EAGLE3.value}' is supported."
             )
 
-        if self.mode == SpeculatorMode.TRAIN_ONLY and not self.hidden_states_path:
+        if (
+            self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
+            and not self.hidden_states_path
+        ):
             raise ValueError(
-                "hidden_states_path is required for TRAIN_ONLY mode. "
-                "Provide a PVC URI (pvc://<name>/<path>) to the pre-extracted hidden states."
+                f"hidden_states_path is required for {self.mode.name} mode. "
+                "Provide a PVC URI (pvc://<name>/<path>)."
             )
 
         if (
@@ -255,9 +258,8 @@ class SpeculativeDecodingTrainer:
                 "Provide a HuggingFace dataset ID or name (e.g. 'sharegpt')."
             )
 
-        if (
-            self.mode == SpeculatorMode.OFFLINE
-            and not self.verifier_model.startswith(PVC_URI_SCHEME)
+        if self.mode == SpeculatorMode.OFFLINE and not self.verifier_model.startswith(
+            PVC_URI_SCHEME
         ):
             raise ValueError(
                 "verifier_model must be a PVC URI (pvc://<name>/<path>) for OFFLINE mode. "
@@ -613,6 +615,7 @@ def _speculator_data_only(
     vllm_endpoint: str = "http://localhost:8234/v1",
     concurrency: int = 4,
     regenerate_responses: bool = False,
+    hidden_states_path: str | None = None,
 ) -> None:
     """Data extraction function injected into pods via inspect.getsource().
 
@@ -744,8 +747,6 @@ def _speculator_data_only(
     datagen_cmd = [
         sys.executable,
         script_path,
-        "--model",
-        verifier_model,
         "--preprocessed-data",
         save_path,
         "--endpoint",
@@ -759,6 +760,10 @@ def _speculator_data_only(
         "--rank",
         str(rank),
     ]
+    if not hidden_states_path:
+        datagen_cmd.extend(["--model", verifier_model])
+    if hidden_states_path:
+        datagen_cmd.extend(["--hidden-states-dir", hidden_states_path])
     if max_samples is not None:
         datagen_cmd.extend(["--max-samples", str(max_samples)])
     print(
@@ -1172,6 +1177,8 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
     else:
         data_vllm_endpoint = VLLM_SIDECAR_ENDPOINT
 
+    offline_hs_path = resolved_hidden_states if trainer.mode == SpeculatorMode.OFFLINE else None
+
     data_call = (
         f"_speculator_data_only(\n"
         f"    verifier_model={resolved_verifier_model!r},\n"
@@ -1182,6 +1189,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    vllm_endpoint={data_vllm_endpoint!r},\n"
         f"    concurrency={cfg.datagen_concurrency!r},\n"
         f"    regenerate_responses={trainer.regenerate_responses!r},\n"
+        f"    hidden_states_path={offline_hs_path!r},\n"
         f")\n"
     )
 
