@@ -1407,7 +1407,7 @@ def apply_speculator_sidecar_overrides(
 
     cfg = trainer.config or SpeculatorConfig()
 
-    layer_ids_str = str(cfg.target_layer_ids)
+    layer_ids_str = ",".join(str(lid) for lid in cfg.target_layer_ids)
 
     sidecar_env = [
         {"name": "SPECULATOR_VERIFIER_MODEL", "value": resolved_verifier},

@@ -1359,7 +1359,7 @@ def test_apply_speculator_sidecar_overrides():
     )
     assert env_dict["SPECULATOR_GPU_MEM_UTIL"] == "0.85"
     assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "2"
-    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "[2, 18, 33]"
+    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33"
 
     assert sidecar["volumeMounts"][0]["name"] == "checkpoint-storage"
     assert sidecar["volumeMounts"][0]["mountPath"] == "/mnt/kubeflow-checkpoints"
@@ -1561,7 +1561,7 @@ def test_sidecar_overrides_passes_target_layer_ids():
 
     sidecar = result[0]["spec"]["initContainers"][0]
     env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
-    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "[2, 18, 33]"
+    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33"
 
     print("test execution complete")
 
