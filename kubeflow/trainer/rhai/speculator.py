@@ -167,7 +167,7 @@ class SpeculativeDecodingTrainer:
     max_samples: int | None = None
     epochs: int = 3
     lr: float = 1e-4
-    total_seq_len: int = 8192
+    total_seq_len: int = 2048
     draft_vocab_size: int | None = None
     training_gpu_count: int = 1
     vllm_gpu_count: int = 1
@@ -273,7 +273,7 @@ class SpeculativeDecodingTrainer:
                 raise ValueError(
                     "config.target_layer_ids is required for OFFLINE mode. "
                     "Provide the layer IDs matching your vLLM configuration via "
-                    "SpeculatorConfig(target_layer_ids=[2, n//2, n-3])."
+                    "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n])."
                 )
 
         if self.mode == SpeculatorMode.OFFLINE and not self.vllm_endpoint:
@@ -342,6 +342,13 @@ class SpeculativeDecodingTrainer:
             raise ValueError(
                 f"config.hidden_states_dtype must be one of {_SUPPORTED_DTYPES}, "
                 f"got '{self.config.hidden_states_dtype}'."
+            )
+
+        if self.config is not None and self.config.from_pretrained is not None:
+            raise NotImplementedError(
+                "config.from_pretrained is not yet supported. "
+                "Eagle3DraftModel.from_training_args() does not implement checkpoint "
+                "resumption from a pretrained draft model."
             )
 
         if not isinstance(self.metrics_port, int):
@@ -419,15 +426,11 @@ class SpeculativeDecodingTrainer:
             cfg = self.config or SpeculatorConfig()
             if self.verifier_model.startswith(PVC_URI_SCHEME):
                 if cfg.target_layer_ids is None:
-                    if self.mode == SpeculatorMode.ONLINE:
-                        example = "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n])"
-                    else:
-                        example = "SpeculatorConfig(target_layer_ids=[2, n//2, n-3])"
                     raise ValueError(
                         "config.target_layer_ids is required when verifier_model is a "
                         "PVC URI. The SDK cannot read the model config from the PVC to "
-                        f"auto-detect layers. Provide target_layer_ids explicitly via "
-                        f"{example}."
+                        "auto-detect layers. Provide target_layer_ids explicitly via "
+                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n])."
                     )
             else:
                 if cfg.target_layer_ids is None:
@@ -460,10 +463,7 @@ class SpeculativeDecodingTrainer:
                     if hasattr(model_config, "text_config"):
                         model_config = model_config.text_config
                     n = model_config.num_hidden_layers
-                    if self.mode == SpeculatorMode.ONLINE:
-                        cfg.target_layer_ids = [2, n // 2, n - 3, n]
-                    else:
-                        cfg.target_layer_ids = [2, n // 2, n - 3]
+                    cfg.target_layer_ids = [2, n // 2, n - 3, n]
                     self.config = cfg
 
 
@@ -545,8 +545,9 @@ def _setup_eagle3_model(
     norm_before_residual: bool = True,
     norm_before_fc: bool = False,
     embed_requires_grad: bool = False,
-    from_pretrained: str | None = None,
     target_layer_ids: list[int] | None = None,
+    is_distributed: bool = False,
+    rank: int = 0,
 ):
     """Build Eagle3 draft model with vocab mappings. Shared helper injected via inspect.getsource().
 
@@ -565,16 +566,14 @@ def _setup_eagle3_model(
     from transformers import AutoConfig
 
     verifier_config = AutoConfig.from_pretrained(verifier_model)
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
     target_vocab_size = verifier_config.vocab_size
 
     d2t_path = Path(data_path) / "d2t.npy"
     t2d_path = Path(data_path) / "t2d.npy"
 
-    if d2t_path.exists() and t2d_path.exists():
-        d2t = torch.from_numpy(np.load(str(d2t_path)))
-        t2d = torch.from_numpy(np.load(str(t2d_path)))
-        resolved_draft_vocab = len(d2t)
-    else:
+    if not (d2t_path.exists() and t2d_path.exists()) and rank == 0:
         resolved_draft_vocab = draft_vocab_size or min(8192, target_vocab_size)
         token_freq_path = Path(data_path) / "token_freq.pt"
         token_freq_dict = torch.load(str(token_freq_path), weights_only=True)
@@ -585,6 +584,12 @@ def _setup_eagle3_model(
         )
         np.save(str(d2t_path), d2t.cpu().numpy())
         np.save(str(t2d_path), t2d.cpu().numpy())
+    if is_distributed:
+        torch.distributed.barrier()
+
+    d2t = torch.from_numpy(np.load(str(d2t_path)))
+    t2d = torch.from_numpy(np.load(str(t2d_path)))
+    resolved_draft_vocab = len(d2t)
 
     from_training_kwargs = {
         "draft_vocab_size": resolved_draft_vocab,
@@ -597,8 +602,6 @@ def _setup_eagle3_model(
         "d2t": d2t,
         "t2d": t2d,
     }
-    if from_pretrained is not None:
-        from_training_kwargs["from_pretrained"] = from_pretrained
     if target_layer_ids is not None:
         from_training_kwargs["target_layer_ids"] = target_layer_ids
     model = Eagle3DraftModel.from_training_args(verifier_config, **from_training_kwargs)
@@ -666,7 +669,7 @@ def _speculator_data_only(
     endpoint = vllm_endpoint
     print(f"[Kubeflow] Using vLLM endpoint: {endpoint}", flush=True)
     health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
-    _wait_for_vllm(health)
+    _wait_for_vllm(health, timeout_secs=1200)
 
     if regenerate_responses:
         from pathlib import Path
@@ -841,8 +844,7 @@ def _speculator_train_only(
 
     rank = int(os.environ.get("RANK", "0"))
     marker_name = f"{EXTRACTION_INCOMPLETE_MARKER}.rank-{rank}"  # noqa: F821
-    hs_dir = os.path.join(hidden_states_path, "hidden_states")
-    own_marker = os.path.join(hs_dir, marker_name)
+    own_marker = os.path.join(hidden_states_path, marker_name)
     if os.path.exists(own_marker):
         raise RuntimeError(
             f"Incomplete data extraction detected at '{hidden_states_path}' "
@@ -865,18 +867,19 @@ def _speculator_train_only(
         norm_before_residual=norm_before_residual,
         norm_before_fc=norm_before_fc,
         embed_requires_grad=embed_requires_grad,
-        from_pretrained=from_pretrained,
         target_layer_ids=target_layer_ids,
+        is_distributed=is_distributed,
+        rank=rank,
     )
 
     max_len = total_seq_len
-    collate_fn = create_collate_fn(max_len, verifier_config.hidden_size)
     hs_dtype = getattr(torch, hidden_states_dtype)
+    collate_fn = create_collate_fn(max_len, verifier_config.hidden_size, dtype=hs_dtype)
 
     train_dataset = ArrowDataset(
         max_len=max_len,
         datapath=data_path,
-        hidden_states_path=hs_dir,
+        hidden_states_path=hidden_states_path,
         split_ratio=0.9,
         on_missing="skip",
         transform=AddUniformNoise(),
@@ -885,7 +888,7 @@ def _speculator_train_only(
     val_dataset = ArrowDataset(
         max_len=max_len,
         datapath=data_path,
-        hidden_states_path=hs_dir,
+        hidden_states_path=hidden_states_path,
         split_ratio=-0.1,
         on_missing="skip",
         hidden_states_dtype=hs_dtype,
@@ -1011,6 +1014,7 @@ def _speculator_online(
         torch.distributed.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
 
+    rank = int(os.environ.get("RANK", 0))
     model, verifier_config = _setup_eagle3_model(
         verifier_model=verifier_model,
         data_path=data_dir,
@@ -1020,8 +1024,9 @@ def _speculator_online(
         norm_before_residual=norm_before_residual,
         norm_before_fc=norm_before_fc,
         embed_requires_grad=embed_requires_grad,
-        from_pretrained=from_pretrained,
         target_layer_ids=target_layer_ids,
+        is_distributed=is_distributed,
+        rank=rank,
     )
 
     max_len = total_seq_len
@@ -1442,7 +1447,8 @@ def _create_speculator_progression_instrumentation(
             if _steps_per_epoch and _steps_per_epoch > 0:
                 total_steps = _steps_per_epoch * num_epochs
                 if total_steps > 0:
-                    completed_steps = global_step + 1
+                    step_in_epoch = global_step % _steps_per_epoch
+                    completed_steps = min(epoch * _steps_per_epoch + step_in_epoch + 1, total_steps)
                     raw_pct = completed_steps / total_steps * 100
                     progress_pct = min(offset + scale, offset + int(raw_pct * scale / 100))
                     progress_pct = max(progress_pct, _phase_floor_pct)

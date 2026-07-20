@@ -49,7 +49,7 @@ def test_speculator_trainer_initialization():
     assert trainer.hidden_states_path == "pvc://test-pvc/hidden_states"
     assert trainer.epochs == 3
     assert trainer.lr == 1e-4
-    assert trainer.total_seq_len == 8192
+    assert trainer.total_seq_len == 2048
     assert trainer.training_gpu_count == 1
     assert trainer.vllm_gpu_count == 1
     assert trainer.vllm_gpu_memory_utilization == 0.9
@@ -310,7 +310,7 @@ def test_training_script_content():
     assert "save_path='/mnt/kubeflow-checkpoints/output'" in script
     assert "epochs=5" in script
     assert "lr=1e-05" in script
-    assert "total_seq_len=8192" in script
+    assert "total_seq_len=2048" in script
     assert "hidden_states_dtype='bfloat16'" in script
 
     print("test execution complete")
@@ -1471,7 +1471,7 @@ def test_verifier_model_hf_id_auto_detects_target_layer_ids():
         del sys.modules["transformers"]
 
     assert trainer.config is not None
-    assert trainer.config.target_layer_ids == [2, 18, 33]
+    assert trainer.config.target_layer_ids == [2, 18, 33, 36]
 
     script = _render_speculator_training_script(trainer)
     assert "verifier_model='meta-llama/Llama-3.1-8B-Instruct'" in script
