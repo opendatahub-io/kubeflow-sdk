@@ -165,7 +165,7 @@ class SpeculativeDecodingTrainer:
     max_samples: int | None = None
     epochs: int = 3
     lr: float = 1e-4
-    total_seq_len: int = 8192
+    total_seq_len: int = 2048
     draft_vocab_size: int | None = None
     training_gpu_count: int = 1
     vllm_gpu_count: int = 1
@@ -295,6 +295,13 @@ class SpeculativeDecodingTrainer:
                 f"got '{self.config.hidden_states_dtype}'."
             )
 
+        if self.config is not None and self.config.from_pretrained is not None:
+            raise NotImplementedError(
+                "config.from_pretrained is not yet supported. "
+                "Eagle3DraftModel.from_training_args() does not implement checkpoint "
+                "resumption from a pretrained draft model."
+            )
+
         if not isinstance(self.metrics_port, int):
             raise ValueError(
                 f"metrics_port must be an integer, got {type(self.metrics_port).__name__}"
@@ -371,7 +378,7 @@ class SpeculativeDecodingTrainer:
                         "config.target_layer_ids is required when verifier_model is a "
                         "PVC URI. The SDK cannot read the model config from the PVC to "
                         "auto-detect layers. Provide target_layer_ids explicitly via "
-                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3])."
+                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n])."
                     )
             else:
                 if cfg.target_layer_ids is None:
@@ -404,7 +411,7 @@ class SpeculativeDecodingTrainer:
                     if hasattr(model_config, "text_config"):
                         model_config = model_config.text_config
                     n = model_config.num_hidden_layers
-                    cfg.target_layer_ids = [2, n // 2, n - 3]
+                    cfg.target_layer_ids = [2, n // 2, n - 3, n]
                     self.config = cfg
 
 
@@ -472,7 +479,7 @@ def _speculator_data_only(
     endpoint = vllm_endpoint
     print(f"[Kubeflow] Using vLLM endpoint: {endpoint}", flush=True)
     health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
-    timeout_secs = 600
+    timeout_secs = 1200
     start = time.time()
     print(f"[Kubeflow] Waiting for vLLM sidecar at {health} (timeout={timeout_secs}s)", flush=True)
     while time.time() - start < timeout_secs:
@@ -677,8 +684,7 @@ def _speculator_train_only(
 
     rank = int(os.environ.get("RANK", "0"))
     marker_name = f"{EXTRACTION_INCOMPLETE_MARKER}.rank-{rank}"  # noqa: F821
-    hs_dir = os.path.join(hidden_states_path, "hidden_states")
-    own_marker = os.path.join(hs_dir, marker_name)
+    own_marker = os.path.join(hidden_states_path, marker_name)
     if os.path.exists(own_marker):
         raise RuntimeError(
             f"Incomplete data extraction detected at '{hidden_states_path}' "
@@ -693,26 +699,31 @@ def _speculator_train_only(
         torch.cuda.set_device(local_rank)
 
     verifier_config = AutoConfig.from_pretrained(verifier_model)
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
     target_vocab_size = verifier_config.vocab_size
 
     d2t_path = Path(data_path) / "d2t.npy"
     t2d_path = Path(data_path) / "t2d.npy"
 
-    if d2t_path.exists() and t2d_path.exists():
-        d2t = torch.from_numpy(np.load(str(d2t_path)))
-        t2d = torch.from_numpy(np.load(str(t2d_path)))
-        resolved_draft_vocab = len(d2t)
-    else:
-        resolved_draft_vocab = draft_vocab_size or min(8192, target_vocab_size)
-        token_freq_path = Path(data_path) / "token_freq.pt"
-        token_freq_dict = torch.load(str(token_freq_path), weights_only=True)
-        d2t, t2d = build_vocab_mappings_from_distribution(
-            token_freq_dict=token_freq_dict,
-            draft_vocab_size=resolved_draft_vocab,
-            target_vocab_size=target_vocab_size,
-        )
-        np.save(str(d2t_path), d2t.cpu().numpy())
-        np.save(str(t2d_path), t2d.cpu().numpy())
+    if not (d2t_path.exists() and t2d_path.exists()):
+        if rank == 0:
+            resolved_draft_vocab = draft_vocab_size or min(8192, target_vocab_size)
+            token_freq_path = Path(data_path) / "token_freq.pt"
+            token_freq_dict = torch.load(str(token_freq_path), weights_only=True)
+            d2t, t2d = build_vocab_mappings_from_distribution(
+                token_freq_dict=token_freq_dict,
+                draft_vocab_size=resolved_draft_vocab,
+                target_vocab_size=target_vocab_size,
+            )
+            np.save(str(d2t_path), d2t.cpu().numpy())
+            np.save(str(t2d_path), t2d.cpu().numpy())
+        if is_distributed:
+            torch.distributed.barrier()
+
+    d2t = torch.from_numpy(np.load(str(d2t_path)))
+    t2d = torch.from_numpy(np.load(str(t2d_path)))
+    resolved_draft_vocab = len(d2t)
 
     from_training_kwargs = {
         "draft_vocab_size": resolved_draft_vocab,
@@ -725,20 +736,18 @@ def _speculator_train_only(
         "d2t": d2t,
         "t2d": t2d,
     }
-    if from_pretrained is not None:
-        from_training_kwargs["from_pretrained"] = from_pretrained
     if target_layer_ids is not None:
         from_training_kwargs["target_layer_ids"] = target_layer_ids
     model = Eagle3DraftModel.from_training_args(verifier_config, **from_training_kwargs)
 
     max_len = total_seq_len
-    collate_fn = create_collate_fn(max_len, verifier_config.hidden_size)
     hs_dtype = getattr(torch, hidden_states_dtype)
+    collate_fn = create_collate_fn(max_len, verifier_config.hidden_size, dtype=hs_dtype)
 
     train_dataset = ArrowDataset(
         max_len=max_len,
         datapath=data_path,
-        hidden_states_path=hs_dir,
+        hidden_states_path=hidden_states_path,
         split_ratio=0.9,
         on_missing="skip",
         transform=AddUniformNoise(),
@@ -747,7 +756,7 @@ def _speculator_train_only(
     val_dataset = ArrowDataset(
         max_len=max_len,
         datapath=data_path,
-        hidden_states_path=hs_dir,
+        hidden_states_path=hidden_states_path,
         split_ratio=-0.1,
         on_missing="skip",
         hidden_states_dtype=hs_dtype,
@@ -1398,7 +1407,7 @@ def apply_speculator_sidecar_overrides(
 
     cfg = trainer.config or SpeculatorConfig()
 
-    layer_ids_str = ",".join(str(lid) for lid in cfg.target_layer_ids)
+    layer_ids_str = str(cfg.target_layer_ids)
 
     sidecar_env = [
         {"name": "SPECULATOR_VERIFIER_MODEL", "value": resolved_verifier},
