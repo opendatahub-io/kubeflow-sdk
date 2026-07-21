@@ -806,7 +806,7 @@ def _speculator_train_only(
         log_freq=log_freq,
     )
 
-    if resume_from_checkpoint:
+    if resume_from_checkpoint and rank == 0:
         interrupted_path = Path(save_path) / "interrupted"
         if interrupted_path.exists():
             import shutil
@@ -816,6 +816,8 @@ def _speculator_train_only(
                 f"[Kubeflow] Removed interrupted checkpoint at {interrupted_path}",
                 flush=True,
             )
+    if resume_from_checkpoint and is_distributed:
+        torch.distributed.barrier()
 
     if "_set_phase" in globals():
         _set_phase("training", 15)  # noqa: F821
