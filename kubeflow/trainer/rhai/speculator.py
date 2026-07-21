@@ -153,6 +153,7 @@ class SpeculativeDecodingTrainer:
             preprocessing. Only supported in DATA_ONLY and OFFLINE modes (default: False).
         vllm_endpoint: URL of user-managed vLLM endpoint for hidden state extraction.
             Required for OFFLINE mode. Example: ``"http://vllm-verifier-svc:8000/v1"``.
+        num_nodes: Number of nodes (pods) for distributed training (default: 1).
         enable_progression_tracking: Enable progression tracking (default: True).
         metrics_port: HTTP server port for metrics endpoint (default: 28080).
         metrics_poll_interval_seconds: How often controller polls metrics (default: 30).
@@ -181,6 +182,7 @@ class SpeculativeDecodingTrainer:
     output_dir: str | None = None
     regenerate_responses: bool = False
     vllm_endpoint: str | None = None
+    num_nodes: int = 1
 
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
@@ -940,6 +942,8 @@ def _speculator_train_only(
     )
 
     if resume_from_checkpoint and rank == 0:
+        from pathlib import Path
+
         interrupted_path = Path(save_path) / "interrupted"
         if interrupted_path.exists():
             import shutil
@@ -1826,6 +1830,9 @@ def get_trainer_cr_from_speculator_trainer(
         runtime.trainer.set_command(constants.TORCH_COMMAND)
 
     trainer_crd = models.TrainerV1alpha1Trainer()
+
+    if trainer.num_nodes > 1:
+        trainer_crd.num_nodes = trainer.num_nodes
 
     if trainer.mode in (
         SpeculatorMode.TRAIN_ONLY,
