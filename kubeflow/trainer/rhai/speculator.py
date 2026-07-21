@@ -1580,7 +1580,7 @@ def _create_speculator_progression_instrumentation(
                         )
 
     def apply_progression_tracking():
-        if mode in ("train_only", "online"):
+        if mode in ("train_only", "offline", "online"):
             handler = MetricsHandler()
             metrics_logger = logging.getLogger("speculators.metrics")
             metrics_logger.setLevel(logging.INFO)
