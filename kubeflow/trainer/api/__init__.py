@@ -1,3 +1,3 @@
 # ruff: noqa
 
-# import apis into api package
+"""TrainerClient implementation for creating and managing training jobs."""

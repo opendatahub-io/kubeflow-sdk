@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Kubeflow Optimizer — hyperparameter optimization with pluggable search algorithms.
+
+Provides OptimizerClient, search algorithms (GridSearch, RandomSearch), and
+optimization job types for automated hyperparameter tuning.
+"""
+
 # Import common types.
 from kubeflow.common.types import KubernetesBackendConfig
 

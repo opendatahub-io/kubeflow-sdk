@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""SparkClient implementation for managing Spark Connect sessions."""
+
 from kubeflow.spark.api.spark_client import SparkClient
 
 __all__ = ["SparkClient"]

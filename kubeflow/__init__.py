@@ -12,4 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Kubeflow SDK — unified Python client for ML training, optimization, and model registry.
+
+Subsystems: kubeflow.trainer, kubeflow.optimizer, kubeflow.hub, kubeflow.spark.
+"""
+
 __version__ = "v0.3.0+rhai0"

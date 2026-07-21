@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Kubeflow Trainer — SDK for submitting and managing ML training jobs.
+
+Supports multiple execution backends (Kubernetes, container, local process)
+and built-in trainers (HuggingFace Transformers, TorchTune).
+"""
 
 # Import common types.
 from kubeflow.common.types import KubernetesBackendConfig

@@ -12,4 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Execution backends for the Kubeflow Spark client.
+
+Provides the RuntimeBackend base class and backend implementations (Kubernetes).
+"""
+
 from kubeflow.spark.backends.base import RuntimeBackend as RuntimeBackend

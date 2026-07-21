@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Execution backends for the Kubeflow Optimizer.
+"""Container runtime adapters (Docker and Podman) for the container backend.
 
-Currently provides a Kubernetes backend for running optimization jobs on-cluster.
+Each adapter implements the base container interface for a specific runtime.
 """

@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Execution backends for the Kubeflow Optimizer.
+"""Container backend for the Kubeflow Trainer.
 
-Currently provides a Kubernetes backend for running optimization jobs on-cluster.
+Runs training jobs in Docker or Podman containers locally, with support for
+runtime image loading and volume-based model/dataset initialization.
 """

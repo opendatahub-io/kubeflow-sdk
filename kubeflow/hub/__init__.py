@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Kubeflow Hub — model registry client for versioning and sharing ML models.
+
+Entry point: ModelRegistryClient for registering, listing, and fetching models.
+"""
+
 from kubeflow.hub.api.model_registry_client import ModelRegistryClient
 
 __all__ = ["ModelRegistryClient"]
