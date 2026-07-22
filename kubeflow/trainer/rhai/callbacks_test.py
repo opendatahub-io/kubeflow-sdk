@@ -350,3 +350,153 @@ class TestAdaptHubCallbacks:
         print("Executing test: adapt_hub_callbacks empty list")
         assert adapt_hub_callbacks([]) == []
         print("test execution complete")
+
+
+# =============================================================================
+# E2E: _build_callback_injection_code
+# =============================================================================
+
+
+class TestBuildCallbackInjectionCode:
+    """Tests for the code generation that injects callbacks into HF Trainer pods."""
+
+    def test_single_callback_generates_valid_code(self):
+        """Generated code imports SDK, defines user class, and patches Trainer."""
+        print("Executing test: single callback injection code generation")
+        from kubeflow.trainer.rhai.test_fixtures.sample_callbacks import LoggingCallback
+        from kubeflow.trainer.rhai.transformers import _build_callback_injection_code
+
+        code = _build_callback_injection_code([LoggingCallback])
+
+        # Should import SDK classes from installed package
+        assert "from kubeflow.trainer.rhai.callbacks import" in code
+        assert "from kubeflow.trainer.rhai.adapters.unsloth import" in code
+        # Should contain the user's class definition
+        assert "class LoggingCallback" in code
+        # Should monkey-patch Trainer.__init__
+        assert "_cb_transformers.Trainer.__init__" in code
+        # Should instantiate the callback
+        assert "LoggingCallback()" in code
+        print("test execution complete")
+
+    def test_multiple_callbacks(self):
+        """Multiple callbacks are all serialized and instantiated."""
+        print("Executing test: multiple callbacks injection code generation")
+        from kubeflow.trainer.rhai.test_fixtures.sample_callbacks import (
+            EarlyStopCallback,
+            LoggingCallback,
+        )
+        from kubeflow.trainer.rhai.transformers import _build_callback_injection_code
+
+        code = _build_callback_injection_code([LoggingCallback, EarlyStopCallback])
+
+        assert "class LoggingCallback" in code
+        assert "class EarlyStopCallback" in code
+        assert "LoggingCallback(), EarlyStopCallback()" in code
+        print("test execution complete")
+
+    def test_generated_code_is_syntactically_valid(self):
+        """Generated code can be compiled without syntax errors."""
+        print("Executing test: generated code syntax validation")
+        from kubeflow.trainer.rhai.test_fixtures.sample_callbacks import LoggingCallback
+        from kubeflow.trainer.rhai.transformers import _build_callback_injection_code
+
+        code = _build_callback_injection_code([LoggingCallback])
+        # compile() raises SyntaxError if invalid
+        compile(code, "<generated>", "exec")
+        print("test execution complete")
+
+    def test_instance_passed_uses_class(self):
+        """Passing an instance serializes its class instead."""
+        print("Executing test: instance callback uses class source")
+        from kubeflow.trainer.rhai.test_fixtures.sample_callbacks import LoggingCallback
+        from kubeflow.trainer.rhai.transformers import _build_callback_injection_code
+
+        instance = LoggingCallback()
+        code = _build_callback_injection_code([instance])
+
+        assert "class LoggingCallback" in code
+        assert "LoggingCallback()" in code
+        print("test execution complete")
+
+    def test_transformers_trainer_callbacks_field(self):
+        """TransformersTrainer accepts callbacks field."""
+        print("Executing test: TransformersTrainer callbacks field")
+        from kubeflow.trainer.rhai.test_fixtures.sample_callbacks import LoggingCallback
+        from kubeflow.trainer.rhai.transformers import TransformersTrainer
+
+        def dummy_train():
+            pass
+
+        trainer = TransformersTrainer(func=dummy_train, callbacks=[LoggingCallback])
+        assert trainer.callbacks == [LoggingCallback]
+
+        # Without callbacks defaults to None
+        trainer_no_cb = TransformersTrainer(func=dummy_train)
+        assert trainer_no_cb.callbacks is None
+        print("test execution complete")
+
+    def test_get_trainer_cr_includes_callback_injection(self):
+        """get_trainer_cr_from_transformers_trainer injects callback code into command."""
+        print("Executing test: CRD generation includes callback injection")
+        from unittest.mock import MagicMock
+
+        from kubeflow.trainer.constants import constants
+        from kubeflow.trainer.rhai.test_fixtures.sample_callbacks import LoggingCallback
+        from kubeflow.trainer.rhai.transformers import (
+            TransformersTrainer,
+            get_trainer_cr_from_transformers_trainer,
+        )
+
+        def my_train_func():
+            pass
+
+        trainer = TransformersTrainer(
+            func=my_train_func,
+            callbacks=[LoggingCallback],
+            enable_progression_tracking=False,
+        )
+
+        # Mock the runtime with actual TORCH_COMMAND template
+        runtime = MagicMock()
+        runtime.trainer.command = list(constants.TORCH_COMMAND)
+        runtime.trainer.framework = "pytorch"
+
+        trainer_cr = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+        # The command's bash script should contain callback injection code
+        bash_script = trainer_cr.command[2]  # "bash", "-c", <script>
+        assert "Callback Injection" in bash_script
+        assert "LoggingCallback" in bash_script
+        assert "UnslothCallbackAdapter" in bash_script
+        print("test execution complete")
+
+    def test_get_trainer_cr_no_callbacks_no_injection(self):
+        """Without callbacks, no injection code is added."""
+        print("Executing test: CRD generation without callbacks has no injection")
+        from unittest.mock import MagicMock
+
+        from kubeflow.trainer.constants import constants
+        from kubeflow.trainer.rhai.transformers import (
+            TransformersTrainer,
+            get_trainer_cr_from_transformers_trainer,
+        )
+
+        def my_train_func():
+            pass
+
+        trainer = TransformersTrainer(
+            func=my_train_func,
+            enable_progression_tracking=False,
+        )
+
+        runtime = MagicMock()
+        runtime.trainer.command = list(constants.TORCH_COMMAND)
+        runtime.trainer.framework = "pytorch"
+
+        trainer_cr = get_trainer_cr_from_transformers_trainer(runtime, trainer)
+
+        bash_script = trainer_cr.command[2]
+        assert "Callback Injection" not in bash_script
+        assert "UnslothCallbackAdapter" not in bash_script
+        print("test execution complete")

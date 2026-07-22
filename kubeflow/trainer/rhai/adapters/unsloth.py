@@ -49,6 +49,12 @@ class UnslothCallbackAdapter:
     def __init__(self, hub_callback: TrainingHubCallback) -> None:
         self._hub_callback = hub_callback
 
+    def __getattr__(self, name: str):
+        """Return a no-op for any HF callback hook we don't explicitly handle."""
+        if name.startswith("on_"):
+            return lambda *args, **kwargs: None
+        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+
     def _build_context(
         self,
         args,
