@@ -17,14 +17,19 @@
 This module provides RHAI trainer types and utilities:
 - TransformersTrainer: HuggingFace Transformers/TRL with instrumentation
 - TrainingHubTrainer: RHAI Training Hub integration
+- TrainingHubCallback: Unified callback interface for all backends
+- TrainingHubContext: Normalized training state for callbacks
 """
 
+from kubeflow.trainer.rhai.callbacks import TrainingHubCallback, TrainingHubContext
 from kubeflow.trainer.rhai.traininghub import TrainingHubAlgorithms, TrainingHubTrainer
 from kubeflow.trainer.rhai.transformers import TransformersTrainer
 
 __all__ = (
     "RHAITrainer",
     "TrainingHubAlgorithms",
+    "TrainingHubCallback",
+    "TrainingHubContext",
     "TrainingHubTrainer",
     "TransformersTrainer",
 )
