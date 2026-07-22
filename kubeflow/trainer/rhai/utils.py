@@ -1,4 +1,3 @@
-import logging
 import os
 import re
 from urllib.parse import urlparse
@@ -7,6 +6,7 @@ from kubeflow_trainer_api import models
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
+from kubeflow.common.structured_logging import get_logger
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import (
     RHAITrainer,
@@ -21,7 +21,7 @@ from kubeflow.trainer.rhai.constants import (
 )
 from kubeflow.trainer.types import types
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def is_primary_pod() -> bool:
