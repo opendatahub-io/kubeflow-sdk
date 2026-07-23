@@ -1568,6 +1568,10 @@ six==1.17.0 \
     # via
     #   kubernetes
     #   python-dateutil
+structlog==26.1.0 \
+    --hash=sha256:e081a26d6c373e6d201eca24eede26d8ffab07f88f477822e679183428d3d91e \
+    --hash=sha256:f63a716cbd1b1291cf7661de7794b455acfa4c43c5bcf1630e6ad5ddc1adb3b7
+    # via kubeflow
 tomli==2.4.0 ; python_full_version < '3.11' \
     --hash=sha256:0408e3de5ec77cc7f81960c362543cbbd91ef883e3138e81b729fc3eea5b9729 \
     --hash=sha256:0dc56fef0e2c1c470aeac5b6ca8cc7b640bb93e92d9803ddaf9ea03e198f5b0b \
@@ -1648,6 +1652,7 @@ typing-extensions==4.15.0 \
     #   pydantic
     #   pydantic-core
     #   pygithub
+    #   structlog
     #   typing-inspection
     #   virtualenv
 typing-inspection==0.4.2 \
