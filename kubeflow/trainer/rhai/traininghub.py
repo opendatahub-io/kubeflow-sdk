@@ -36,6 +36,10 @@ class TrainingHubTrainer:
             Example: {"cpu": 4, "memory": "16Gi", "nvidia.com/gpu": 2}
         env: Environment variables to set in training pods.
         algorithm: Training Hub algorithm (SFT or OSFT). Required when func is None.
+        callbacks: Optional list of TrainingHubCallback subclasses or instances.
+            Callbacks fire at training lifecycle events (on_train_begin, on_log, etc.)
+            and receive a normalized TrainingHubContext. Exceptions in callbacks
+            do not crash training.
         enable_progression_tracking: Enable file-based progress tracking with HTTP server.
         metrics_port: HTTP server port for metrics endpoint.
         metrics_poll_interval_seconds: How often controller polls metrics endpoint.
@@ -50,6 +54,9 @@ class TrainingHubTrainer:
     env: dict[str, str] | None = None
     algorithm: TrainingHubAlgorithms | None = None
     resources_per_node: dict | None = None
+
+    # Callbacks
+    callbacks: list | None = None
 
     # Progress tracking parameters
     enable_progression_tracking: bool = True  # Enabled by default
