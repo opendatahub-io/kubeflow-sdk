@@ -38,6 +38,7 @@ def test_speculator_trainer_initialization():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -50,8 +51,8 @@ def test_speculator_trainer_initialization():
     assert trainer.epochs == 3
     assert trainer.lr == 1e-4
     assert trainer.total_seq_len == 2048
-    assert trainer.training_gpu_count == 1
-    assert trainer.vllm_gpu_count == 1
+    assert trainer.training_resources == {"nvidia.com/gpu": 1}
+    assert trainer.vllm_resources is None
     assert trainer.vllm_gpu_memory_utilization == 0.9
     assert trainer.config is None
     assert trainer.packages_to_install is None
@@ -72,6 +73,7 @@ def test_speculator_trainer_with_custom_config():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="meta-llama/Llama-3.1-70B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 2},
         speculator_type=SpeculatorType.EAGLE3,
         hidden_states_path="pvc://shared/hidden_states",
         data_path="pvc://shared/arrow_dataset",
@@ -79,7 +81,6 @@ def test_speculator_trainer_with_custom_config():
         epochs=5,
         lr=5e-5,
         total_seq_len=4096,
-        training_gpu_count=2,
         packages_to_install=["speculators"],
         pip_index_urls=["https://custom.pypi.org/simple"],
         env={"WANDB_DISABLED": "true"},
@@ -100,7 +101,7 @@ def test_speculator_trainer_with_custom_config():
     assert trainer.epochs == 5
     assert trainer.lr == 5e-5
     assert trainer.total_seq_len == 4096
-    assert trainer.training_gpu_count == 2
+    assert trainer.training_resources == {"nvidia.com/gpu": 2}
     assert trainer.packages_to_install == ["speculators"]
     assert trainer.pip_index_urls == ["https://custom.pypi.org/simple"]
     assert trainer.env == {"WANDB_DISABLED": "true"}
@@ -120,6 +121,7 @@ def test_speculator_mode_train_only_requires_hidden_states():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
         )
 
     print("test execution complete")
@@ -133,6 +135,7 @@ def test_speculator_mode_train_only_requires_data_path():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             output_dir="pvc://test-pvc/output",
         )
@@ -148,6 +151,7 @@ def test_unsupported_mode_validation():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.ONLINE,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="/data/hidden_states",
             output_dir="pvc://test-pvc/output",
         )
@@ -192,6 +196,7 @@ def test_metrics_port_validation(test_case):
         trainer = SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
@@ -245,6 +250,7 @@ def test_metrics_poll_interval_validation(test_case):
         trainer = SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
@@ -269,6 +275,7 @@ def test_non_pvc_output_dir_not_supported():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="s3://my-bucket/checkpoints",
@@ -278,6 +285,7 @@ def test_non_pvc_output_dir_not_supported():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="gcs://my-bucket/checkpoints",
@@ -293,6 +301,7 @@ def test_pvc_output_dir_normalized():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://my-pvc/hidden_states",
         data_path="pvc://my-pvc/arrow_dataset",
         output_dir="pvc://my-pvc/checkpoints/",
@@ -310,6 +319,7 @@ def test_training_script_content():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -338,6 +348,7 @@ def test_training_script_trainer_config_fields():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -374,6 +385,7 @@ def test_training_script_trainer_config_defaults():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -400,6 +412,7 @@ def test_training_script_with_pvc_output_dir():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://shared/hidden_states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/speculator_output",
@@ -420,6 +433,7 @@ def test_train_only_requires_output_dir():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
         )
@@ -434,6 +448,7 @@ def test_training_script_custom_total_seq_len():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -455,6 +470,7 @@ def test_training_script_custom_hidden_states_dtype():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -477,6 +493,7 @@ def test_hidden_states_dtype_validation():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
@@ -493,6 +510,7 @@ def test_training_script_distributed_batch_sampler():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -538,6 +556,7 @@ def test_numeric_field_validation(test_case):
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
@@ -569,6 +588,7 @@ def test_crd_conversion_train_only():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -601,6 +621,7 @@ def test_crd_conversion_with_env_vars():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -636,6 +657,7 @@ def test_crd_conversion_no_env_vars():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -648,9 +670,9 @@ def test_crd_conversion_no_env_vars():
     print("test execution complete")
 
 
-def test_crd_conversion_with_training_gpu_count():
-    """Test CRD conversion with training_gpu_count."""
-    print("Executing test: CRD conversion with training_gpu_count")
+def test_crd_conversion_with_training_resources():
+    """Test CRD conversion with training_resources."""
+    print("Executing test: CRD conversion with training_resources")
 
     runtime = types.Runtime(
         name="test-runtime",
@@ -664,10 +686,10 @@ def test_crd_conversion_with_training_gpu_count():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 2},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
-        training_gpu_count=2,
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -693,6 +715,7 @@ def test_crd_uses_torchrun_entrypoint_for_train_only():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -721,6 +744,8 @@ def test_crd_uses_python_entrypoint_for_data_only():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -772,6 +797,7 @@ def test_speculator_trainer_configurations(test_case):
         trainer = SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
@@ -824,6 +850,7 @@ def test_progression_tracking_injected_when_enabled():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -857,6 +884,7 @@ def test_progression_tracking_not_injected_when_disabled():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -914,6 +942,7 @@ def test_hidden_states_path_normalization():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://shared//hidden_states/",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
@@ -932,6 +961,7 @@ def test_hidden_states_path_unsupported_scheme():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="s3://bucket/hidden_states",
             data_path="pvc://shared/arrow_dataset",
             output_dir="pvc://shared/output",
@@ -948,6 +978,7 @@ def test_hidden_states_path_bare_path_rejected():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="/mnt/data/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
@@ -964,6 +995,8 @@ def test_data_only_requires_dataset_name():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.DATA_ONLY,
+            vllm_resources={"nvidia.com/gpu": 1},
+            training_resources={"nvidia.com/gpu": 1},
             output_dir="pvc://test-pvc/output",
         )
 
@@ -978,6 +1011,8 @@ def test_data_only_requires_output_dir():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.DATA_ONLY,
+            vllm_resources={"nvidia.com/gpu": 1},
+            training_resources={"nvidia.com/gpu": 1},
             dataset_name="sharegpt",
         )
 
@@ -991,6 +1026,8 @@ def test_data_only_valid():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1011,6 +1048,8 @@ def test_data_only_renders_correct_script():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1035,6 +1074,8 @@ def test_data_only_script_passes_world_size_and_rank():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1057,6 +1098,8 @@ def test_data_only_script_embeds_datagen_script():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1201,6 +1244,8 @@ def test_data_only_script_contains_progress_server_call():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1219,6 +1264,8 @@ def test_data_only_progression_tracking_injected():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=True,
@@ -1251,6 +1298,8 @@ def test_data_only_script_contains_marker_logic():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1272,6 +1321,7 @@ def test_train_only_script_contains_training_function():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -1292,6 +1342,8 @@ def test_data_only_script_contains_vllm_health_check():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1313,6 +1365,8 @@ def test_data_only_script_skips_completed_extraction():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1333,9 +1387,10 @@ def test_apply_speculator_sidecar_overrides():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="pvc://shared/models/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/speculator/run1",
-        vllm_gpu_count=2,
+        vllm_resources={"nvidia.com/gpu": 1},
         vllm_gpu_memory_utilization=0.85,
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
     )
@@ -1358,13 +1413,13 @@ def test_apply_speculator_sidecar_overrides():
         "/mnt/kubeflow-checkpoints/speculator/run1/hidden_states"
     )
     assert env_dict["SPECULATOR_GPU_MEM_UTIL"] == "0.85"
-    assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "2"
+    assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "1"
     assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33"
 
     assert sidecar["volumeMounts"][0]["name"] == "checkpoint-storage"
     assert sidecar["volumeMounts"][0]["mountPath"] == "/mnt/kubeflow-checkpoints"
 
-    assert sidecar["resources"]["limits"]["nvidia.com/gpu"] == "2"
+    assert sidecar["resources"]["limits"]["nvidia.com/gpu"] == "1"
 
     print("test execution complete")
 
@@ -1376,6 +1431,8 @@ def test_apply_speculator_sidecar_overrides_preserves_existing():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/output",
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
@@ -1419,6 +1476,8 @@ def test_data_only_script_uses_sidecar_endpoint():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1440,6 +1499,8 @@ def test_data_only_script_resolves_pvc_verifier_model():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="pvc://shared/models/meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -1479,6 +1540,8 @@ def test_verifier_model_hf_id_auto_detects_target_layer_ids():
         trainer = SpeculativeDecodingTrainer(
             verifier_model="meta-llama/Llama-3.1-8B-Instruct",
             mode=SpeculatorMode.DATA_ONLY,
+            vllm_resources={"nvidia.com/gpu": 1},
+            training_resources={"nvidia.com/gpu": 1},
             dataset_name="sharegpt",
             output_dir="pvc://shared/datagen_output",
         )
@@ -1515,6 +1578,8 @@ def test_verifier_model_invalid_id_fails_autoconfig():
             SpeculativeDecodingTrainer(
                 verifier_model="not-a-real-model",
                 mode=SpeculatorMode.DATA_ONLY,
+                vllm_resources={"nvidia.com/gpu": 1},
+                training_resources={"nvidia.com/gpu": 1},
                 dataset_name="sharegpt",
                 output_dir="pvc://shared/datagen_output",
             )
@@ -1531,6 +1596,8 @@ def test_sidecar_overrides_resolves_pvc_verifier_model():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="pvc://shared/models/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
@@ -1552,6 +1619,8 @@ def test_sidecar_overrides_passes_target_layer_ids():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="pvc://shared/models/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
@@ -1573,6 +1642,7 @@ def test_train_only_script_resolves_pvc_data_path():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://shared/hidden_states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
@@ -1592,6 +1662,7 @@ def test_train_only_script_passes_draft_vocab_size():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -1612,6 +1683,7 @@ def test_train_only_script_draft_vocab_size_none_by_default():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
@@ -1631,6 +1703,7 @@ def test_train_only_script_contains_vocab_mapping_logic():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
