@@ -158,6 +158,7 @@ class SpeculativeDecodingTrainer:
 
     verifier_model: str
     mode: SpeculatorMode
+    resources_per_node: dict
     speculator_type: SpeculatorType = SpeculatorType.EAGLE3
     hidden_states_path: str | None = None
     data_path: str | None = None
@@ -267,6 +268,12 @@ class SpeculativeDecodingTrainer:
         if not isinstance(self.total_seq_len, int) or self.total_seq_len < 1:
             raise ValueError(
                 f"total_seq_len must be a positive integer, got {self.total_seq_len!r}."
+            )
+
+        if not isinstance(self.resources_per_node, dict) or not self.resources_per_node:
+            raise ValueError(
+                "resources_per_node is required and must be a non-empty dict. "
+                "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '2'}"
             )
 
         if not isinstance(self.training_gpu_count, int) or self.training_gpu_count < 1:
@@ -1478,7 +1485,11 @@ def get_trainer_cr_from_speculator_trainer(
 
     trainer_crd = models.TrainerV1alpha1Trainer()
 
-    if trainer.mode == SpeculatorMode.TRAIN_ONLY:
+    if trainer.resources_per_node:
+        trainer_crd.resources_per_node = k8s_utils.get_resources_per_node(
+            trainer.resources_per_node
+        )
+    elif trainer.mode == SpeculatorMode.TRAIN_ONLY:
         trainer_crd.resources_per_node = k8s_utils.get_resources_per_node(
             {"nvidia.com/gpu": trainer.training_gpu_count}
         )
