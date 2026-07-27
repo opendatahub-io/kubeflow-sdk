@@ -601,6 +601,7 @@ def test_speculator_same_pvc_deduplicates_mount():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://shared/hidden-states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
@@ -644,6 +645,7 @@ def test_speculator_different_pvcs_raises_error():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://pvc-a/hidden-states",
         data_path="pvc://pvc-a/arrow_dataset",
         output_dir="pvc://pvc-b/output",
@@ -673,6 +675,7 @@ def test_speculator_different_pvcs_raises_error_data_only():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="pvc://pvc-a/model",
         mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://pvc-b/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
@@ -698,6 +701,7 @@ def test_speculator_pvc_and_direct_path_no_conflict():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="meta-llama/Llama-3.1-8B-Instruct",
         mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
         hidden_states_path="pvc://shared/hidden-states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
