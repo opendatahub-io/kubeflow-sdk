@@ -139,8 +139,12 @@ class SpeculativeDecodingTrainer:
             vLLM context window, and training (default: 8192).
         draft_vocab_size: Vocabulary size for the draft model. When ``None`` (default),
             auto-computed as ``min(8192, verifier_vocab_size)``.
-        training_gpu_count: Number of GPUs for training (default: 1).
-        vllm_gpu_count: Number of GPUs for vLLM sidecar (default: 1).
+        training_resources: Resources for the training container. Maps to
+            ``resources_per_node`` in the CRD. Example:
+            ``{"nvidia.com/gpu": 2, "memory": "64Gi", "cpu": "4"}``.
+        vllm_resources: Resources for the vLLM sidecar container. When ``None``,
+            defaults to 1 GPU. Example:
+            ``{"nvidia.com/gpu": 2, "memory": "96Gi", "cpu": "4"}``.
         vllm_gpu_memory_utilization: Fraction of GPU memory for vLLM (default: 0.9).
         config: Advanced training configuration. See ``SpeculatorConfig``.
         packages_to_install: Python packages to install before training.
@@ -160,6 +164,7 @@ class SpeculativeDecodingTrainer:
 
     verifier_model: str
     mode: SpeculatorMode
+    training_resources: dict | None = None
     speculator_type: SpeculatorType = SpeculatorType.EAGLE3
     hidden_states_path: str | None = None
     data_path: str | None = None
@@ -169,8 +174,7 @@ class SpeculativeDecodingTrainer:
     lr: float = 1e-4
     total_seq_len: int = 2048
     draft_vocab_size: int | None = None
-    training_gpu_count: int = 1
-    vllm_gpu_count: int = 1
+    vllm_resources: dict | None = None
     vllm_gpu_memory_utilization: float = 0.9
     config: SpeculatorConfig | None = None
     packages_to_install: list[str] | None = None
@@ -318,15 +322,45 @@ class SpeculativeDecodingTrainer:
                 f"total_seq_len must be a positive integer, got {self.total_seq_len!r}."
             )
 
-        if not isinstance(self.training_gpu_count, int) or self.training_gpu_count < 1:
+        if self.mode == SpeculatorMode.TRAIN_ONLY and (
+            not isinstance(self.training_resources, dict) or not self.training_resources
+        ):
             raise ValueError(
-                f"training_gpu_count must be a positive integer, got {self.training_gpu_count!r}."
+                "training_resources is required for TRAIN_ONLY mode. "
+                "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
             )
 
-        if not isinstance(self.vllm_gpu_count, int) or self.vllm_gpu_count < 1:
+        if self.mode == SpeculatorMode.DATA_ONLY and (
+            not isinstance(self.vllm_resources, dict) or not self.vllm_resources
+        ):
             raise ValueError(
-                f"vllm_gpu_count must be a positive integer, got {self.vllm_gpu_count!r}."
+                "vllm_resources is required for DATA_ONLY mode. "
+                "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
             )
+
+        if self.training_resources is not None and (
+            not isinstance(self.training_resources, dict) or not self.training_resources
+        ):
+            raise ValueError(
+                "training_resources must be a non-empty dict when provided. "
+                "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
+            )
+
+        if self.vllm_resources is not None and (
+            not isinstance(self.vllm_resources, dict) or not self.vllm_resources
+        ):
+            raise ValueError(
+                "vllm_resources must be a non-empty dict when provided. "
+                "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
+            )
+
+        if self.vllm_resources is not None:
+            vllm_gpus = int(self.vllm_resources.get("nvidia.com/gpu", 1))
+            if vllm_gpus != 1:
+                raise ValueError(
+                    f"vLLM sidecar currently supports only 1 GPU, got {vllm_gpus}. "
+                    "Multi-GPU vLLM sidecar is not yet supported."
+                )
 
         if (
             not isinstance(self.vllm_gpu_memory_utilization, (int, float))
@@ -1773,6 +1807,8 @@ def apply_speculator_sidecar_overrides(
 
     layer_ids_str = ",".join(str(lid) for lid in cfg.target_layer_ids)
 
+    vllm_gpu_count = int((trainer.vllm_resources or {}).get("nvidia.com/gpu", 1))
+
     sidecar_env = [
         {"name": "SPECULATOR_VERIFIER_MODEL", "value": resolved_verifier},
         {"name": "SPECULATOR_HS_PATH", "value": hs_path},
@@ -1780,7 +1816,7 @@ def apply_speculator_sidecar_overrides(
             "name": "SPECULATOR_GPU_MEM_UTIL",
             "value": str(trainer.vllm_gpu_memory_utilization),
         },
-        {"name": "SPECULATOR_VLLM_GPU_COUNT", "value": str(trainer.vllm_gpu_count)},
+        {"name": "SPECULATOR_VLLM_GPU_COUNT", "value": str(vllm_gpu_count)},
         {"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str},
     ]
 
@@ -1790,10 +1826,13 @@ def apply_speculator_sidecar_overrides(
     sidecar_override = {
         "name": VLLM_SIDECAR_CONTAINER_NAME,
         "env": sidecar_env,
-        "resources": {
-            "limits": {"nvidia.com/gpu": str(trainer.vllm_gpu_count)},
-        },
     }
+    if trainer.vllm_resources:
+        sidecar_resources = {k: str(v) for k, v in trainer.vllm_resources.items()}
+        sidecar_override["resources"] = {
+            "limits": sidecar_resources,
+            "requests": sidecar_resources,
+        }
     if trainer.output_dir.startswith(PVC_URI_SCHEME):
         sidecar_override["volumeMounts"] = [
             {
@@ -1829,13 +1868,9 @@ def get_trainer_cr_from_speculator_trainer(
 
     trainer_crd = models.TrainerV1alpha1Trainer()
 
-    if trainer.mode in (
-        SpeculatorMode.TRAIN_ONLY,
-        SpeculatorMode.OFFLINE,
-        SpeculatorMode.ONLINE,
-    ):
+    if trainer.training_resources:
         trainer_crd.resources_per_node = k8s_utils.get_resources_per_node(
-            {"nvidia.com/gpu": trainer.training_gpu_count}
+            trainer.training_resources
         )
 
     install_snippet = _build_install_snippet(trainer.packages_to_install, trainer.pip_index_urls)
