@@ -328,6 +328,7 @@ def test_training_script_content():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "_speculator_train_only" in script
     assert "verifier_model='Qwen/Qwen3-8B'" in script
@@ -365,6 +366,7 @@ def test_training_script_trainer_config_fields():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "scheduler_type='cosine'" in script
     assert "scheduler_warmup_steps=100" in script
@@ -392,6 +394,7 @@ def test_training_script_trainer_config_defaults():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "scheduler_type='linear'" in script
     assert "scheduler_warmup_steps=None" in script
@@ -419,6 +422,7 @@ def test_training_script_with_pvc_output_dir():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "/mnt/kubeflow-checkpoints/speculator_output" in script
 
@@ -456,6 +460,7 @@ def test_training_script_custom_total_seq_len():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "total_seq_len=2048" in script
     assert "total_seq_len=8192" not in script
@@ -478,6 +483,7 @@ def test_training_script_custom_hidden_states_dtype():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "hidden_states_dtype='float16'" in script
     assert "hidden_states_dtype='bfloat16'" not in script
@@ -517,6 +523,7 @@ def test_training_script_distributed_batch_sampler():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "_speculator_train_only" in script
     assert "MultipackDistributedBatchSamplerV2" in script
@@ -748,7 +755,7 @@ def test_crd_uses_python_entrypoint_for_data_only():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -1030,7 +1037,7 @@ def test_data_only_valid():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.mode == SpeculatorMode.DATA_ONLY
@@ -1052,10 +1059,11 @@ def test_data_only_renders_correct_script():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "_speculator_data_only(" in script
     assert "_speculator_train_only(" not in script
@@ -1078,10 +1086,11 @@ def test_data_only_script_passes_world_size_and_rank():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert '"--world-size"' in script
     assert '"--rank"' in script
@@ -1102,10 +1111,11 @@ def test_data_only_script_embeds_datagen_script():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "_DATAGEN_SCRIPT_B64" in script
     assert "base64.b64decode(_DATAGEN_SCRIPT_B64)" in script
@@ -1248,7 +1258,7 @@ def test_data_only_script_contains_progress_server_call():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1269,7 +1279,7 @@ def test_data_only_progression_tracking_injected():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=True,
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     runtime = types.Runtime(
@@ -1302,10 +1312,11 @@ def test_data_only_script_contains_marker_logic():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "EXTRACTION_INCOMPLETE_MARKER" in script
     assert "Previous data extraction" in script
@@ -1328,6 +1339,7 @@ def test_train_only_script_contains_training_function():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "EXTRACTION_INCOMPLETE_MARKER" in script
     assert "_speculator_train_only" in script
@@ -1346,10 +1358,11 @@ def test_data_only_script_contains_vllm_health_check():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "/health" in script
     assert "vLLM sidecar is ready" in script
@@ -1369,10 +1382,11 @@ def test_data_only_script_skips_completed_extraction():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert ".safetensors" in script
     assert "Data extraction already completed. Skipping." in script
@@ -1392,7 +1406,7 @@ def test_apply_speculator_sidecar_overrides():
         output_dir="pvc://shared/speculator/run1",
         vllm_resources={"nvidia.com/gpu": 1},
         vllm_gpu_memory_utilization=0.85,
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     result = apply_speculator_sidecar_overrides(trainer, [])
@@ -1414,7 +1428,7 @@ def test_apply_speculator_sidecar_overrides():
     )
     assert env_dict["SPECULATOR_GPU_MEM_UTIL"] == "0.85"
     assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "1"
-    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33"
+    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
 
     assert sidecar["volumeMounts"][0]["name"] == "checkpoint-storage"
     assert sidecar["volumeMounts"][0]["mountPath"] == "/mnt/kubeflow-checkpoints"
@@ -1435,7 +1449,7 @@ def test_apply_speculator_sidecar_overrides_preserves_existing():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     existing = [
@@ -1480,10 +1494,11 @@ def test_data_only_script_uses_sidecar_endpoint():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "http://localhost:8234/v1" in script
     assert "gpu_memory_utilization" not in script
@@ -1503,10 +1518,11 @@ def test_data_only_script_resolves_pvc_verifier_model():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert (
         "verifier_model='/mnt/kubeflow-checkpoints/models/meta-llama/Llama-3.1-8B-Instruct'"
@@ -1600,7 +1616,7 @@ def test_sidecar_overrides_resolves_pvc_verifier_model():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     result = apply_speculator_sidecar_overrides(trainer, [])
@@ -1623,14 +1639,14 @@ def test_sidecar_overrides_passes_target_layer_ids():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     result = apply_speculator_sidecar_overrides(trainer, [])
 
     sidecar = result[0]["spec"]["initContainers"][0]
     env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
-    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33"
+    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
 
     print("test execution complete")
 
@@ -1649,6 +1665,7 @@ def test_train_only_script_resolves_pvc_data_path():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "data_path='/mnt/kubeflow-checkpoints/arrow_dataset'" in script
 
@@ -1670,6 +1687,7 @@ def test_train_only_script_passes_draft_vocab_size():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "draft_vocab_size=8192" in script
 
@@ -1690,6 +1708,7 @@ def test_train_only_script_draft_vocab_size_none_by_default():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "draft_vocab_size=None" in script
 
@@ -1710,6 +1729,7 @@ def test_train_only_script_contains_vocab_mapping_logic():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "build_vocab_mappings_from_distribution" in script
     assert "d2t_path = Path(data_path)" in script

@@ -323,6 +323,13 @@ class SpeculativeDecodingTrainer:
                 f"got {self.vllm_gpu_memory_utilization!r}."
             )
 
+        _valid_schedulers = ("linear", "cosine", "none")
+        if self.config is not None and self.config.scheduler_type not in _valid_schedulers:
+            raise ValueError(
+                f"config.scheduler_type must be one of {_valid_schedulers}, "
+                f"got '{self.config.scheduler_type}'."
+            )
+
         if self.config is not None and self.config.hidden_states_dtype not in _SUPPORTED_DTYPES:
             raise ValueError(
                 f"config.hidden_states_dtype must be one of {_SUPPORTED_DTYPES}, "
@@ -448,6 +455,13 @@ class SpeculativeDecodingTrainer:
                     cfg.target_layer_ids = [2, n // 2, n - 3, n]
                     self.config = cfg
 
+            if cfg.target_layer_ids is not None and len(cfg.target_layer_ids) != 4:
+                raise ValueError(
+                    f"config.target_layer_ids must have exactly 4 layers, "
+                    f"got {len(cfg.target_layer_ids)}: {cfg.target_layer_ids}. "
+                    f"Eagle3 training requires 4 layers (3 as input + 1 for target distribution)."
+                )
+
 
 def _speculator_data_only(
     verifier_model: str,
@@ -495,6 +509,8 @@ def _speculator_data_only(
         print("[Kubeflow] Data extraction already completed. Skipping.", flush=True)
         if "_mark_data_complete" in globals():
             _mark_data_complete()  # noqa: F821
+        if "_set_phase" in globals():
+            _set_phase("complete", 100)  # noqa: F821
         return
 
     try:
@@ -732,7 +748,9 @@ def _speculator_train_only(
         torch.distributed.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
 
-    verifier_config = AutoConfig.from_pretrained(verifier_model)
+    verifier_config = AutoConfig.from_pretrained(
+        verifier_model, token=os.environ.get("HF_TOKEN")
+    )
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
     target_vocab_size = verifier_config.vocab_size
@@ -775,7 +793,9 @@ def _speculator_train_only(
 
     max_len = total_seq_len
     hs_dtype = getattr(torch, hidden_states_dtype)
-    collate_fn = create_collate_fn(max_len, verifier_config.hidden_size, dtype=hs_dtype)
+    collate_fn = create_collate_fn(
+        max_len, verifier_config.hidden_size, num_target_layers=len(target_layer_ids), dtype=hs_dtype
+    )
 
     train_dataset = ArrowDataset(
         max_len=max_len,
