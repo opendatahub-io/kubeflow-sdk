@@ -455,7 +455,6 @@ class SpeculativeDecodingTrainer:
                     cfg.target_layer_ids = [2, n // 2, n - 3, n]
                     self.config = cfg
 
-
         cfg = self.config or SpeculatorConfig()
         if cfg.target_layer_ids is not None and len(cfg.target_layer_ids) != 4:
             raise ValueError(
@@ -750,9 +749,7 @@ def _speculator_train_only(
         torch.distributed.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
 
-    verifier_config = AutoConfig.from_pretrained(
-        verifier_model, token=os.environ.get("HF_TOKEN")
-    )
+    verifier_config = AutoConfig.from_pretrained(verifier_model, token=os.environ.get("HF_TOKEN"))
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
     target_vocab_size = verifier_config.vocab_size
@@ -796,7 +793,10 @@ def _speculator_train_only(
     max_len = total_seq_len
     hs_dtype = getattr(torch, hidden_states_dtype)
     collate_fn = create_collate_fn(
-        max_len, verifier_config.hidden_size, num_target_layers=len(target_layer_ids), dtype=hs_dtype
+        max_len,
+        verifier_config.hidden_size,
+        num_target_layers=len(target_layer_ids),
+        dtype=hs_dtype,
     )
 
     train_dataset = ArrowDataset(

@@ -518,7 +518,9 @@ def test_hidden_states_dtype_validation():
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
-            config=SpeculatorConfig(hidden_states_dtype="float64", target_layer_ids=[2, 16, 29, 31]),
+            config=SpeculatorConfig(
+                hidden_states_dtype="float64", target_layer_ids=[2, 16, 29, 31]
+            ),
         )
 
     print("test execution complete")
