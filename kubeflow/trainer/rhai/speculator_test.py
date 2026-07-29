@@ -42,6 +42,7 @@ def test_speculator_trainer_initialization():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.verifier_model == "Qwen/Qwen3-8B"
@@ -54,7 +55,7 @@ def test_speculator_trainer_initialization():
     assert trainer.training_resources == {"nvidia.com/gpu": 1}
     assert trainer.vllm_resources is None
     assert trainer.vllm_gpu_memory_utilization == 0.9
-    assert trainer.config is None
+    assert trainer.config.target_layer_ids == [2, 16, 29, 31]
     assert trainer.packages_to_install is None
     assert trainer.pip_index_urls == list(constants.DEFAULT_PIP_INDEX_URLS)
     assert trainer.env is None
@@ -91,6 +92,7 @@ def test_speculator_trainer_with_custom_config():
             num_layers=1,
             ttt_steps=5,
             hidden_states_dtype="float16",
+            target_layer_ids=[2, 16, 29, 31],
         ),
     )
 
@@ -122,6 +124,7 @@ def test_speculator_mode_train_only_requires_hidden_states():
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
             training_resources={"nvidia.com/gpu": 1},
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -138,6 +141,7 @@ def test_speculator_mode_train_only_requires_data_path():
             training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             output_dir="pvc://test-pvc/output",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -201,6 +205,7 @@ def test_metrics_port_validation(test_case):
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             metrics_port=test_case.config["metrics_port"],
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
         assert test_case.expected_status == SUCCESS
@@ -255,6 +260,7 @@ def test_metrics_poll_interval_validation(test_case):
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             metrics_poll_interval_seconds=test_case.config["metrics_poll_interval_seconds"],
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
         assert test_case.expected_status == SUCCESS
@@ -279,6 +285,7 @@ def test_non_pvc_output_dir_not_supported():
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="s3://my-bucket/checkpoints",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     with pytest.raises(ValueError, match="output_dir must use a PVC URI"):
@@ -289,6 +296,7 @@ def test_non_pvc_output_dir_not_supported():
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="gcs://my-bucket/checkpoints",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -305,6 +313,7 @@ def test_pvc_output_dir_normalized():
         hidden_states_path="pvc://my-pvc/hidden_states",
         data_path="pvc://my-pvc/arrow_dataset",
         output_dir="pvc://my-pvc/checkpoints/",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.output_dir == "pvc://my-pvc/checkpoints"
@@ -325,6 +334,7 @@ def test_training_script_content():
         output_dir="pvc://test-pvc/output",
         epochs=5,
         lr=1e-5,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -354,6 +364,7 @@ def test_training_script_trainer_config_fields():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(
+            target_layer_ids=[2, 16, 29, 31],
             scheduler_type="cosine",
             scheduler_warmup_steps=100,
             scheduler_total_steps=5000,
@@ -391,6 +402,7 @@ def test_training_script_trainer_config_defaults():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -419,6 +431,7 @@ def test_training_script_with_pvc_output_dir():
         hidden_states_path="pvc://shared/hidden_states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/speculator_output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -440,6 +453,7 @@ def test_train_only_requires_output_dir():
             training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -457,6 +471,7 @@ def test_training_script_custom_total_seq_len():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         total_seq_len=2048,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -479,7 +494,7 @@ def test_training_script_custom_hidden_states_dtype():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(hidden_states_dtype="float16"),
+        config=SpeculatorConfig(hidden_states_dtype="float16", target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -503,7 +518,7 @@ def test_hidden_states_dtype_validation():
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
-            config=SpeculatorConfig(hidden_states_dtype="float64"),
+            config=SpeculatorConfig(hidden_states_dtype="float64", target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -520,6 +535,7 @@ def test_training_script_distributed_batch_sampler():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -568,6 +584,7 @@ def test_numeric_field_validation(test_case):
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             **test_case.config,
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
         assert test_case.expected_status == SUCCESS
@@ -599,6 +616,7 @@ def test_crd_conversion_train_only():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -633,6 +651,7 @@ def test_crd_conversion_with_env_vars():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         env={"WANDB_DISABLED": "true", "NCCL_DEBUG": "INFO"},
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -668,6 +687,7 @@ def test_crd_conversion_no_env_vars():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -697,6 +717,7 @@ def test_crd_conversion_with_training_resources():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -726,6 +747,7 @@ def test_crd_uses_torchrun_entrypoint_for_train_only():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -809,6 +831,7 @@ def test_speculator_trainer_configurations(test_case):
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             **test_case.config,
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
         assert test_case.expected_status == SUCCESS
@@ -862,6 +885,7 @@ def test_progression_tracking_injected_when_enabled():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=True,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -896,6 +920,7 @@ def test_progression_tracking_not_injected_when_disabled():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=False,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -953,6 +978,7 @@ def test_hidden_states_path_normalization():
         hidden_states_path="pvc://shared//hidden_states/",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.hidden_states_path == "pvc://shared/hidden_states"
@@ -972,6 +998,7 @@ def test_hidden_states_path_unsupported_scheme():
             hidden_states_path="s3://bucket/hidden_states",
             data_path="pvc://shared/arrow_dataset",
             output_dir="pvc://shared/output",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -989,6 +1016,7 @@ def test_hidden_states_path_bare_path_rejected():
             hidden_states_path="/mnt/data/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -1336,6 +1364,7 @@ def test_train_only_script_contains_training_function():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1662,6 +1691,7 @@ def test_train_only_script_resolves_pvc_data_path():
         hidden_states_path="pvc://shared/hidden_states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1684,6 +1714,7 @@ def test_train_only_script_passes_draft_vocab_size():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         draft_vocab_size=8192,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1705,6 +1736,7 @@ def test_train_only_script_draft_vocab_size_none_by_default():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1726,6 +1758,7 @@ def test_train_only_script_contains_vocab_mapping_logic():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)

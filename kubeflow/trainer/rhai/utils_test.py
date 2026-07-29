@@ -594,7 +594,11 @@ def test_speculator_same_pvc_deduplicates_mount():
     """Test SpeculativeDecodingTrainer with same PVC for output_dir and hidden_states_path mounts once."""
     print("Executing test: speculator_same_pvc_deduplicates_mount")
 
-    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
+    from kubeflow.trainer.rhai.speculator import (
+        SpeculativeDecodingTrainer,
+        SpeculatorConfig,
+        SpeculatorMode,
+    )
 
     mock_core_api = MagicMock()
 
@@ -605,6 +609,7 @@ def test_speculator_same_pvc_deduplicates_mount():
         hidden_states_path="pvc://shared/hidden-states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     mock_trainer_cr = MagicMock()
@@ -638,7 +643,11 @@ def test_speculator_different_pvcs_raises_error():
     """Test SpeculativeDecodingTrainer with different PVCs raises NotImplementedError."""
     print("Executing test: speculator_different_pvcs_raises_error")
 
-    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
+    from kubeflow.trainer.rhai.speculator import (
+        SpeculativeDecodingTrainer,
+        SpeculatorConfig,
+        SpeculatorMode,
+    )
 
     mock_core_api = MagicMock()
 
@@ -649,6 +658,7 @@ def test_speculator_different_pvcs_raises_error():
         hidden_states_path="pvc://pvc-a/hidden-states",
         data_path="pvc://pvc-a/arrow_dataset",
         output_dir="pvc://pvc-b/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     mock_trainer_cr = MagicMock()
@@ -694,7 +704,11 @@ def test_speculator_pvc_and_direct_path_no_conflict():
     """Test SpeculativeDecodingTrainer with all PVC URIs on same PVC mounts once."""
     print("Executing test: speculator_pvc_and_direct_path_no_conflict")
 
-    from kubeflow.trainer.rhai.speculator import SpeculativeDecodingTrainer, SpeculatorMode
+    from kubeflow.trainer.rhai.speculator import (
+        SpeculativeDecodingTrainer,
+        SpeculatorConfig,
+        SpeculatorMode,
+    )
 
     mock_core_api = MagicMock()
 
@@ -705,6 +719,7 @@ def test_speculator_pvc_and_direct_path_no_conflict():
         hidden_states_path="pvc://shared/hidden-states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     mock_trainer_cr = MagicMock()

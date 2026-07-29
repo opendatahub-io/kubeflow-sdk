@@ -411,7 +411,7 @@ class SpeculativeDecodingTrainer:
                 f"direct paths, or HuggingFace dataset names are supported."
             )
 
-        if self.mode == SpeculatorMode.DATA_ONLY:
+        if self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.TRAIN_ONLY):
             cfg = self.config or SpeculatorConfig()
             if self.verifier_model.startswith(PVC_URI_SCHEME):
                 if cfg.target_layer_ids is None:
@@ -444,7 +444,7 @@ class SpeculativeDecodingTrainer:
                             ) from e
                         raise ValueError(
                             f"verifier_model {self.verifier_model!r} is not a valid "
-                            f"HuggingFace model ID. For DATA_ONLY mode, verifier_model "
+                            f"HuggingFace model ID. verifier_model "
                             f"must be either a HuggingFace model ID "
                             f"(e.g. 'meta-llama/Llama-3.1-8B-Instruct') or a PVC URI "
                             f"(pvc://<name>/<path>)."
@@ -455,12 +455,14 @@ class SpeculativeDecodingTrainer:
                     cfg.target_layer_ids = [2, n // 2, n - 3, n]
                     self.config = cfg
 
-            if cfg.target_layer_ids is not None and len(cfg.target_layer_ids) != 4:
-                raise ValueError(
-                    f"config.target_layer_ids must have exactly 4 layers, "
-                    f"got {len(cfg.target_layer_ids)}: {cfg.target_layer_ids}. "
-                    f"Eagle3 training requires 4 layers (3 as input + 1 for target distribution)."
-                )
+
+        cfg = self.config or SpeculatorConfig()
+        if cfg.target_layer_ids is not None and len(cfg.target_layer_ids) != 4:
+            raise ValueError(
+                f"config.target_layer_ids must have exactly 4 layers, "
+                f"got {len(cfg.target_layer_ids)}: {cfg.target_layer_ids}. "
+                f"Eagle3 training requires 4 layers (3 as input + 1 for target distribution)."
+            )
 
 
 def _speculator_data_only(
