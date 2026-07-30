@@ -42,6 +42,7 @@ def test_speculator_trainer_initialization():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.verifier_model == "Qwen/Qwen3-8B"
@@ -54,7 +55,7 @@ def test_speculator_trainer_initialization():
     assert trainer.training_resources == {"nvidia.com/gpu": 1}
     assert trainer.vllm_resources is None
     assert trainer.vllm_gpu_memory_utilization == 0.9
-    assert trainer.config is None
+    assert trainer.config.target_layer_ids == [2, 16, 29, 31]
     assert trainer.packages_to_install is None
     assert trainer.pip_index_urls == list(constants.DEFAULT_PIP_INDEX_URLS)
     assert trainer.env is None
@@ -91,6 +92,7 @@ def test_speculator_trainer_with_custom_config():
             num_layers=1,
             ttt_steps=5,
             hidden_states_dtype="float16",
+            target_layer_ids=[2, 16, 29, 31],
         ),
     )
 
@@ -122,6 +124,7 @@ def test_speculator_mode_train_only_requires_hidden_states():
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.TRAIN_ONLY,
             training_resources={"nvidia.com/gpu": 1},
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -138,11 +141,10 @@ def test_speculator_mode_train_only_requires_data_path():
             training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             output_dir="pvc://test-pvc/output",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
-
-
 
 
 @pytest.mark.parametrize(
@@ -187,6 +189,7 @@ def test_metrics_port_validation(test_case):
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             metrics_port=test_case.config["metrics_port"],
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
         assert test_case.expected_status == SUCCESS
@@ -241,6 +244,7 @@ def test_metrics_poll_interval_validation(test_case):
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             metrics_poll_interval_seconds=test_case.config["metrics_poll_interval_seconds"],
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
         assert test_case.expected_status == SUCCESS
@@ -265,6 +269,7 @@ def test_non_pvc_output_dir_not_supported():
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="s3://my-bucket/checkpoints",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     with pytest.raises(ValueError, match="output_dir must use a PVC URI"):
@@ -275,6 +280,7 @@ def test_non_pvc_output_dir_not_supported():
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="gcs://my-bucket/checkpoints",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -291,6 +297,7 @@ def test_pvc_output_dir_normalized():
         hidden_states_path="pvc://my-pvc/hidden_states",
         data_path="pvc://my-pvc/arrow_dataset",
         output_dir="pvc://my-pvc/checkpoints/",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.output_dir == "pvc://my-pvc/checkpoints"
@@ -311,9 +318,11 @@ def test_training_script_content():
         output_dir="pvc://test-pvc/output",
         epochs=5,
         lr=1e-5,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "_speculator_train_only" in script
     assert "verifier_model='Qwen/Qwen3-8B'" in script
@@ -339,6 +348,7 @@ def test_training_script_trainer_config_fields():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(
+            target_layer_ids=[2, 16, 29, 31],
             scheduler_type="cosine",
             scheduler_warmup_steps=100,
             scheduler_total_steps=5000,
@@ -351,6 +361,7 @@ def test_training_script_trainer_config_fields():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "scheduler_type='cosine'" in script
     assert "scheduler_warmup_steps=100" in script
@@ -375,9 +386,11 @@ def test_training_script_trainer_config_defaults():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "scheduler_type='linear'" in script
     assert "scheduler_warmup_steps=None" in script
@@ -402,9 +415,11 @@ def test_training_script_with_pvc_output_dir():
         hidden_states_path="pvc://shared/hidden_states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/speculator_output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "/mnt/kubeflow-checkpoints/speculator_output" in script
 
@@ -422,6 +437,7 @@ def test_train_only_requires_output_dir():
             training_resources={"nvidia.com/gpu": 1},
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -439,9 +455,11 @@ def test_training_script_custom_total_seq_len():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         total_seq_len=2048,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "total_seq_len=2048" in script
     assert "total_seq_len=8192" not in script
@@ -460,10 +478,11 @@ def test_training_script_custom_hidden_states_dtype():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(hidden_states_dtype="float16"),
+        config=SpeculatorConfig(hidden_states_dtype="float16", target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "hidden_states_dtype='float16'" in script
     assert "hidden_states_dtype='bfloat16'" not in script
@@ -483,7 +502,9 @@ def test_hidden_states_dtype_validation():
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
-            config=SpeculatorConfig(hidden_states_dtype="float64"),
+            config=SpeculatorConfig(
+                hidden_states_dtype="float64", target_layer_ids=[2, 16, 29, 31]
+            ),
         )
 
     print("test execution complete")
@@ -500,9 +521,11 @@ def test_training_script_distributed_batch_sampler():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "_speculator_train_only" in script
     assert "MultipackDistributedBatchSamplerV2" in script
@@ -547,6 +570,7 @@ def test_numeric_field_validation(test_case):
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             **test_case.config,
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
         assert test_case.expected_status == SUCCESS
@@ -578,6 +602,7 @@ def test_crd_conversion_train_only():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -612,6 +637,7 @@ def test_crd_conversion_with_env_vars():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         env={"WANDB_DISABLED": "true", "NCCL_DEBUG": "INFO"},
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -647,6 +673,7 @@ def test_crd_conversion_no_env_vars():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -676,6 +703,7 @@ def test_crd_conversion_with_training_resources():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -705,6 +733,7 @@ def test_crd_uses_torchrun_entrypoint_for_train_only():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -734,7 +763,7 @@ def test_crd_uses_python_entrypoint_for_data_only():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -788,6 +817,7 @@ def test_speculator_trainer_configurations(test_case):
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
             **test_case.config,
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
         assert test_case.expected_status == SUCCESS
@@ -841,6 +871,7 @@ def test_progression_tracking_injected_when_enabled():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=True,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -875,6 +906,7 @@ def test_progression_tracking_not_injected_when_disabled():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=False,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -932,6 +964,7 @@ def test_hidden_states_path_normalization():
         hidden_states_path="pvc://shared//hidden_states/",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.hidden_states_path == "pvc://shared/hidden_states"
@@ -951,6 +984,7 @@ def test_hidden_states_path_unsupported_scheme():
             hidden_states_path="s3://bucket/hidden_states",
             data_path="pvc://shared/arrow_dataset",
             output_dir="pvc://shared/output",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -968,6 +1002,7 @@ def test_hidden_states_path_bare_path_rejected():
             hidden_states_path="/mnt/data/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -1016,7 +1051,7 @@ def test_data_only_valid():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.mode == SpeculatorMode.DATA_ONLY
@@ -1038,10 +1073,11 @@ def test_data_only_renders_correct_script():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "_speculator_data_only(" in script
     assert "_speculator_train_only(" not in script
@@ -1064,10 +1100,11 @@ def test_data_only_script_passes_world_size_and_rank():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert '"--world-size"' in script
     assert '"--rank"' in script
@@ -1088,10 +1125,11 @@ def test_data_only_script_embeds_datagen_script():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "_DATAGEN_SCRIPT_B64" in script
     assert "base64.b64decode(_DATAGEN_SCRIPT_B64)" in script
@@ -1234,7 +1272,7 @@ def test_data_only_script_contains_progress_server_call():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1255,7 +1293,7 @@ def test_data_only_progression_tracking_injected():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=True,
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     runtime = types.Runtime(
@@ -1288,10 +1326,11 @@ def test_data_only_script_contains_marker_logic():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "EXTRACTION_INCOMPLETE_MARKER" in script
     assert "Previous data extraction" in script
@@ -1311,9 +1350,11 @@ def test_train_only_script_contains_training_function():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "EXTRACTION_INCOMPLETE_MARKER" in script
     assert "_speculator_train_only" in script
@@ -1332,10 +1373,11 @@ def test_data_only_script_contains_vllm_health_check():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "/health" in script
     assert "vLLM sidecar is ready" in script
@@ -1355,10 +1397,11 @@ def test_data_only_script_skips_completed_extraction():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert ".safetensors" in script
     assert "Data extraction already completed. Skipping." in script
@@ -1378,7 +1421,7 @@ def test_apply_speculator_sidecar_overrides():
         output_dir="pvc://shared/speculator/run1",
         vllm_resources={"nvidia.com/gpu": 1},
         vllm_gpu_memory_utilization=0.85,
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     result = apply_speculator_sidecar_overrides(trainer, [])
@@ -1400,7 +1443,7 @@ def test_apply_speculator_sidecar_overrides():
     )
     assert env_dict["SPECULATOR_GPU_MEM_UTIL"] == "0.85"
     assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "1"
-    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33"
+    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
 
     assert sidecar["volumeMounts"][0]["name"] == "checkpoint-storage"
     assert sidecar["volumeMounts"][0]["mountPath"] == "/mnt/kubeflow-checkpoints"
@@ -1421,7 +1464,7 @@ def test_apply_speculator_sidecar_overrides_preserves_existing():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     existing = [
@@ -1466,10 +1509,11 @@ def test_data_only_script_uses_sidecar_endpoint():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "http://localhost:8234/v1" in script
     assert "gpu_memory_utilization" not in script
@@ -1489,10 +1533,11 @@ def test_data_only_script_resolves_pvc_verifier_model():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert (
         "verifier_model='/mnt/kubeflow-checkpoints/models/meta-llama/Llama-3.1-8B-Instruct'"
@@ -1586,7 +1631,7 @@ def test_sidecar_overrides_resolves_pvc_verifier_model():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     result = apply_speculator_sidecar_overrides(trainer, [])
@@ -1609,14 +1654,14 @@ def test_sidecar_overrides_passes_target_layer_ids():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="sharegpt",
         output_dir="pvc://shared/datagen_output",
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     result = apply_speculator_sidecar_overrides(trainer, [])
 
     sidecar = result[0]["spec"]["initContainers"][0]
     env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
-    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33"
+    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
 
     print("test execution complete")
 
@@ -1632,9 +1677,11 @@ def test_train_only_script_resolves_pvc_data_path():
         hidden_states_path="pvc://shared/hidden_states",
         data_path="pvc://shared/arrow_dataset",
         output_dir="pvc://shared/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "data_path='/mnt/kubeflow-checkpoints/arrow_dataset'" in script
 
@@ -1653,9 +1700,11 @@ def test_train_only_script_passes_draft_vocab_size():
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
         draft_vocab_size=8192,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "draft_vocab_size=8192" in script
 
@@ -1673,9 +1722,11 @@ def test_train_only_script_draft_vocab_size_none_by_default():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "draft_vocab_size=None" in script
 
@@ -1693,9 +1744,11 @@ def test_train_only_script_contains_vocab_mapping_logic():
         hidden_states_path="pvc://test-pvc/hidden_states",
         data_path="pvc://test-pvc/arrow_dataset",
         output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
 
     assert "build_vocab_mappings_from_distribution" in script
     assert "d2t_path = Path(data_path)" in script
@@ -1720,7 +1773,7 @@ def test_online_mode_valid():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.mode == SpeculatorMode.ONLINE
@@ -1739,7 +1792,7 @@ def test_online_mode_requires_dataset_name():
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.ONLINE,
             output_dir="pvc://test-pvc/output",
-            config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -1756,7 +1809,7 @@ def test_online_mode_rejects_vllm_endpoint():
             dataset_name="sharegpt",
             output_dir="pvc://test-pvc/output",
             vllm_endpoint="http://vllm-svc:8000/v1",
-            config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -1775,7 +1828,7 @@ def test_online_mode_rejects_regenerate_responses():
             dataset_name="sharegpt",
             output_dir="pvc://test-pvc/output",
             regenerate_responses=True,
-            config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -1791,7 +1844,7 @@ def test_online_mode_allows_max_samples():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         max_samples=1000,
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.max_samples == 1000
@@ -1825,7 +1878,7 @@ def test_online_renders_correct_script():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://shared/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1850,7 +1903,7 @@ def test_online_script_uses_on_missing_generate():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1871,7 +1924,7 @@ def test_online_script_no_datagen_embedded():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1891,7 +1944,7 @@ def test_online_script_contains_vllm_health_check():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1911,7 +1964,7 @@ def test_online_script_contains_preprocessing():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1932,7 +1985,7 @@ def test_online_script_contains_model_setup():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -1965,7 +2018,7 @@ def test_online_crd_uses_torchrun():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -1994,7 +2047,7 @@ def test_online_crd_has_gpu_resources():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     trainer_crd = get_trainer_cr_from_speculator_trainer(runtime, trainer)
@@ -2013,7 +2066,7 @@ def test_online_sidecar_overrides():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     result = apply_speculator_sidecar_overrides(trainer, [])
@@ -2022,7 +2075,7 @@ def test_online_sidecar_overrides():
     env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
 
     assert env_dict["SPECULATOR_VERIFIER_MODEL"] == "Qwen/Qwen3-8B"
-    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,16,29"
+    assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,16,29,31"
     assert "SPECULATOR_HS_PATH" in env_dict
 
     print("test execution complete")
@@ -2056,7 +2109,7 @@ def test_online_script_passes_max_samples():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         max_samples=500,
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -2075,12 +2128,12 @@ def test_online_script_passes_target_layer_ids():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29]),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
 
-    assert "target_layer_ids=[2, 16, 29]" in script
+    assert "target_layer_ids=[2, 16, 29, 31]" in script
 
     print("test execution complete")
 
@@ -2096,7 +2149,7 @@ def test_offline_script_with_hidden_states_path():
         output_dir="pvc://shared/speculator/output",
         vllm_endpoint="http://vllm-svc:8000/v1",
         hidden_states_path="pvc://shared/offline_output/hidden_states",
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     script = _render_speculator_training_script(trainer)
@@ -2117,7 +2170,7 @@ def test_offline_requires_hidden_states_path():
             dataset_name="sharegpt",
             output_dir="pvc://shared/speculator/output",
             vllm_endpoint="http://vllm-svc:8000/v1",
-            config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+            config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
         )
 
     print("test execution complete")
@@ -2134,7 +2187,7 @@ def test_offline_script_skips_model_arg_with_hidden_states_path():
         output_dir="pvc://shared/speculator/output",
         vllm_endpoint="http://vllm-svc:8000/v1",
         hidden_states_path="pvc://shared/offline_output/hidden_states",
-        config=SpeculatorConfig(target_layer_ids=[2, 18, 33]),
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
     script = _render_speculator_training_script(trainer)
