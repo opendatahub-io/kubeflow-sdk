@@ -128,7 +128,7 @@ def test_checkpoint_staging_dir_is_safe_basename() -> None:
 
 
 def test_ephemeral_volume_size_is_valid_k8s_quantity() -> None:
-    """Ephemeral volume size must be a positive integer with a binary/SI suffix."""
+    """Ephemeral volume size must be digits plus one of Gi/Mi/Ki/G/M/K (e.g. 50Gi)."""
     print("Executing test: ephemeral_volume_size_is_valid_k8s_quantity")
     assert CHECKPOINT_EPHEMERAL_VOLUME_SIZE.endswith(("Gi", "Mi", "Ki", "G", "M", "K"))
     numeric_part = CHECKPOINT_EPHEMERAL_VOLUME_SIZE
