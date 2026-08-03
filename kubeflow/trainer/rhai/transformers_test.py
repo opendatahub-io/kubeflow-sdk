@@ -4612,7 +4612,7 @@ def test_progression_metrics_handler_do_get(progression_instrumentation):
     try:
         import urllib.request
 
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5)
         assert resp.status == 200
         assert resp.headers["Content-Type"] == "application/json"
 
@@ -4998,7 +4998,7 @@ def test_on_train_begin_server_startup(progression_instrumentation):
 
     try:
         port = callback.server.server_address[1]
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5)
         assert resp.status == 200
         body = json.loads(resp.read().decode("utf-8"))
         assert body["totalSteps"] == 100

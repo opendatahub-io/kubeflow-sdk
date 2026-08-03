@@ -141,7 +141,7 @@ def test_jit_checkpoint_footer_contains_upload() -> None:
 
 
 def test_jit_checkpoint_header_contains_constants() -> None:
-    """Header must inline CHECKPOINT_INCOMPLETE_MARKER and CHECKPOINT_STAGING_DIR."""
+    """Header must inline constants and exclude the SDK constants import."""
     print("Executing test: jit_checkpoint_header_contains_constants")
     header, _ = get_jit_checkpoint_injection_code(
         output_dir="/mnt/checkpoints",
@@ -149,3 +149,5 @@ def test_jit_checkpoint_header_contains_constants() -> None:
     )
     assert "CHECKPOINT_INCOMPLETE_MARKER" in header
     assert "CHECKPOINT_STAGING_DIR" in header
+    assert "kubeflow.trainer.rhai.constants" not in header
+    assert "# Constants defined globally above" in header

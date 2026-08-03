@@ -8,6 +8,25 @@ import textwrap
 from kubeflow.trainer.types import types
 
 
+def _render_dict_literal(func_args: dict, indent: str) -> str:
+    """Render a dict literal with repr-safe values only."""
+    import ast
+
+    lines: list[str] = []
+    for key, value in func_args.items():
+        try:
+            if ast.literal_eval(repr(value)) != value:
+                raise ValueError(
+                    f"func_args[{key!r}] value type {type(value).__name__} is not repr-safe"
+                )
+        except (ValueError, SyntaxError) as e:
+            raise ValueError(
+                f"func_args[{key!r}] value type {type(value).__name__} is not repr-safe"
+            ) from e
+        lines.append(f"{indent}{key!r}: {value!r},")
+    return "\n".join(lines)
+
+
 def _create_training_hub_progression_instrumentation(
     algorithm_metadata: dict,
     ckpt_output_dir: str,
@@ -43,6 +62,18 @@ def _create_training_hub_progression_instrumentation(
     import subprocess
     import threading
 
+    def _fmt(value, precision: int = 4):
+        """Format numeric metric values; return None for invalid/non-numeric."""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        return f"{number:.{precision}f}"
+
     # Extract algorithm metadata (pre-resolved from centralized registry)
     algorithm = algorithm_metadata["name"]
     metrics_file_pattern = algorithm_metadata["metrics_file_pattern"]
@@ -56,6 +87,9 @@ def _create_training_hub_progression_instrumentation(
 
         def do_GET(self):
             """Handle GET requests to expose metrics as JSON."""
+            if self.path.split("?", 1)[0] != "/metrics":
+                self.send_error(404)
+                return
             try:
                 # Read latest metrics
                 metrics = self._read_latest_metrics()
@@ -150,9 +184,10 @@ def _create_training_hub_progression_instrumentation(
                         capture_output=True,
                         text=True,
                         check=True,
+                        timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except subprocess.CalledProcessError:
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                     return {}
 
                 if last_line:
@@ -209,9 +244,10 @@ def _create_training_hub_progression_instrumentation(
                         capture_output=True,
                         text=True,
                         check=True,
+                        timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except subprocess.CalledProcessError:
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                     return {}
 
                 if last_line:
@@ -338,15 +374,13 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": epoch + 1,
                 "totalEpochs": total_epochs,
                 "trainMetrics": {
-                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
-                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
-                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
-                    "throughput": (
-                        f"{samples_per_second:.2f}" if samples_per_second is not None else None
-                    ),
+                    "loss": _fmt(loss_val),
+                    "learning_rate": _fmt(lr_val, 6),
+                    "grad_norm": _fmt(grad_norm_val),
+                    "throughput": _fmt(samples_per_second, 2),
                 },
                 "evalMetrics": {
-                    "eval_loss": f"{val_loss_val:.4f}" if val_loss_val is not None else None,
+                    "eval_loss": _fmt(val_loss_val),
                 },
             }
 
@@ -371,9 +405,7 @@ def _create_training_hub_progression_instrumentation(
                 estimated_total_epochs = configured_num_epochs
             elif num_epoch_steps > 0 and samples_seen > 0:
                 estimated_progress_through_epochs = (
-                    samples_seen / (num_epoch_steps * total_samples / num_epoch_steps)
-                    if total_samples > 0
-                    else 0
+                    samples_seen / total_samples if total_samples > 0 else 0
                 )
                 if estimated_progress_through_epochs > current_epoch:
                     estimated_total_epochs = max(2, int(estimated_progress_through_epochs) + 1)
@@ -387,7 +419,7 @@ def _create_training_hub_progression_instrumentation(
             if num_epoch_steps > 0:
                 step_total = num_epoch_steps * estimated_total_epochs
             else:
-                step_total = max(step, step + 10)
+                step_total = step + 10
 
             progress = (current_step_absolute / step_total * 100) if step_total > 0 else 0
             percent_int = int(round(progress))
@@ -421,10 +453,10 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": current_epoch,
                 "totalEpochs": estimated_total_epochs,
                 "trainMetrics": {
-                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
-                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
-                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
-                    "throughput": f"{throughput_val:.2f}" if throughput_val is not None else None,
+                    "loss": _fmt(loss_val),
+                    "learning_rate": _fmt(lr_val, 6),
+                    "grad_norm": _fmt(grad_norm_val),
+                    "throughput": _fmt(throughput_val, 2),
                 },
                 "evalMetrics": {},
             }
@@ -464,9 +496,9 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": max(1, math.ceil(epoch)),
                 "totalEpochs": None,
                 "trainMetrics": {
-                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
-                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
-                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
+                    "loss": _fmt(loss_val),
+                    "learning_rate": _fmt(lr_val, 6),
+                    "grad_norm": _fmt(grad_norm_val),
                 },
                 "evalMetrics": {},
             }
@@ -561,16 +593,12 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": max(1, math.ceil(epoch)),
                 "totalEpochs": 1,
                 "trainMetrics": {
-                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
-                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
-                    "grad_norm": (f"{grad_norm_val:.4f}" if grad_norm_val is not None else None),
-                    "mean_reward": (
-                        f"{mean_reward_val:.4f}" if mean_reward_val is not None else None
-                    ),
-                    "full_match_rate": (
-                        f"{full_match_rate_val:.4f}" if full_match_rate_val is not None else None
-                    ),
-                    "entropy": f"{entropy_val:.4f}" if entropy_val is not None else None,
+                    "loss": _fmt(loss_val),
+                    "learning_rate": _fmt(lr_val, 6),
+                    "grad_norm": _fmt(grad_norm_val),
+                    "mean_reward": _fmt(mean_reward_val),
+                    "full_match_rate": _fmt(full_match_rate_val),
+                    "entropy": _fmt(entropy_val),
                 },
                 "evalMetrics": {},
             }
@@ -697,6 +725,8 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) 
     """
     # Extract values from pre-validated metadata
     algorithm_name = algorithm_metadata["name"]
+    if not isinstance(algorithm_name, str) or not algorithm_name.isidentifier():
+        raise ValueError(f"Invalid algorithm name for code generation: {algorithm_name!r}")
     metrics_file_rank0 = algorithm_metadata["metrics_file_rank0"]
 
     base_script = textwrap.dedent("""
@@ -826,11 +856,12 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) 
     if func_args is None:
         call_line = "if __name__ == '__main__':\n    training_func({})\n"
     elif isinstance(func_args, dict):
-        params_lines: list[str] = ["if __name__ == '__main__':\n    training_func({\n"]
-        for key, value in func_args.items():
-            params_lines.append(f"        {repr(key)}: {repr(value)},\n")
-        params_lines.append("    })\n")
-        call_line = "".join(params_lines)
+        params_body = _render_dict_literal(func_args, "        ")
+        call_line = (
+            "if __name__ == '__main__':\n    training_func({\n"
+            + (params_body + "\n" if params_body else "")
+            + "    })\n"
+        )
     else:
         raise ValueError("func_args must be a dict or None")
 
@@ -848,13 +879,14 @@ def _render_user_func_code(func: Callable, func_args: dict | None) -> tuple[str,
     if func_args is None:
         call_block = f"{func.__name__}()"
     elif isinstance(func_args, dict):
+        params_body = _render_dict_literal(func_args, "    ")
         params_lines: list[str] = [f"{func.__name__}(**{{"]
-        for key, value in func_args.items():
-            params_lines.append(f"    {repr(key)}: {repr(value)},")
+        if params_body:
+            params_lines.append(params_body)
         params_lines.append("})")
         call_block = "\n".join(params_lines)
     else:
-        call_block = f"{func.__name__}({func_args})"
+        raise ValueError("func_args must be a dict or None")
 
     func_code = f"{func_code}\n{call_block}\n"
     func_file = os.path.basename(inspect.getfile(func))
@@ -921,6 +953,9 @@ def get_training_hub_instrumentation_wrapper(
 
     from kubeflow.trainer.algorithms import get_algorithm_pod_metadata
 
+    if not isinstance(metrics_port, int) or not (1024 <= metrics_port <= 65535):
+        raise ValueError(f"metrics_port must be an int in [1024, 65535], got {metrics_port!r}")
+
     # Resolve algorithm metadata from centralized registry
     # This validates the algorithm name and retrieves its metadata
     algorithm_metadata = get_algorithm_pod_metadata(algorithm)
@@ -932,7 +967,7 @@ def get_training_hub_instrumentation_wrapper(
     # Build the wrapper with function call
     wrapper = f"""# =============================================================================
 # Kubeflow SDK - Training Hub Progression Tracking Instrumentation
-# Generated by kubeflow.trainer.rhai.traininghub
+# Generated by kubeflow.trainer.rhai.traininghub_instrumentation
 # =============================================================================
 
 print("[Kubeflow] Initializing Training Hub progression tracking", flush=True)
@@ -947,7 +982,7 @@ print("[Kubeflow] Initializing Training Hub progression tracking", flush=True)
 ) = _create_training_hub_progression_instrumentation(
     algorithm_metadata={algorithm_metadata!r},
     ckpt_output_dir={ckpt_output_dir!r},
-    metrics_port={metrics_port}
+    metrics_port={metrics_port!r}
 )
 apply_progression_tracking()
 print("[Kubeflow] Training Hub progression tracking enabled", flush=True)
