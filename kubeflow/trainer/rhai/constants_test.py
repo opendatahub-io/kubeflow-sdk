@@ -14,6 +14,8 @@
 
 """Tests for RHAI constants."""
 
+import re
+
 import pytest
 
 from kubeflow.trainer.rhai.constants import (
@@ -98,24 +100,31 @@ def test_checkpoint_mount_path_is_absolute() -> None:
 
 
 def test_checkpoint_volume_name_is_dns_safe() -> None:
-    """Volume names must be valid DNS labels (lowercase, alphanumeric, hyphens)."""
+    """Volume names must match the Kubernetes DNS_LABEL subset (max 63 chars)."""
     print("Executing test: checkpoint_volume_name_is_dns_safe")
-    assert CHECKPOINT_VOLUME_NAME.lower() == CHECKPOINT_VOLUME_NAME
-    assert all(c.isalnum() or c == "-" for c in CHECKPOINT_VOLUME_NAME)
-    assert not CHECKPOINT_VOLUME_NAME.startswith("-")
-    assert not CHECKPOINT_VOLUME_NAME.endswith("-")
+    assert len(CHECKPOINT_VOLUME_NAME) <= 63
+    assert re.fullmatch(r"[a-z]([-a-z0-9]*[a-z0-9])?", CHECKPOINT_VOLUME_NAME)
 
 
-def test_checkpoint_incomplete_marker_has_extension() -> None:
-    """Marker file should have a file extension for easy identification."""
-    print("Executing test: checkpoint_incomplete_marker_has_extension")
+def test_checkpoint_incomplete_marker_is_safe_basename() -> None:
+    """Marker must be a non-empty basename with an extension; no path traversal."""
+    print("Executing test: checkpoint_incomplete_marker_is_safe_basename")
+    assert CHECKPOINT_INCOMPLETE_MARKER
+    assert CHECKPOINT_INCOMPLETE_MARKER not in (".", "..")
+    assert "/" not in CHECKPOINT_INCOMPLETE_MARKER
+    assert "\\" not in CHECKPOINT_INCOMPLETE_MARKER
     assert "." in CHECKPOINT_INCOMPLETE_MARKER
+    name, ext = CHECKPOINT_INCOMPLETE_MARKER.rsplit(".", 1)
+    assert name and ext
 
 
-def test_checkpoint_staging_dir_has_no_slashes() -> None:
-    """Staging dir is a relative directory name, not a path."""
-    print("Executing test: checkpoint_staging_dir_has_no_slashes")
+def test_checkpoint_staging_dir_is_safe_basename() -> None:
+    """Staging dir must be a relative basename; no path separators or traversal."""
+    print("Executing test: checkpoint_staging_dir_is_safe_basename")
+    assert CHECKPOINT_STAGING_DIR
+    assert CHECKPOINT_STAGING_DIR not in (".", "..")
     assert "/" not in CHECKPOINT_STAGING_DIR
+    assert "\\" not in CHECKPOINT_STAGING_DIR
 
 
 def test_ephemeral_volume_size_is_valid_k8s_quantity() -> None:
