@@ -1,3 +1,17 @@
+# Copyright 2024 The Kubeflow Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Progression tracking instrumentation code injected into TrainingHubTrainer pods."""
 
 
@@ -18,9 +32,10 @@ def _create_training_hub_progression_instrumentation(
 
     Args:
         algorithm_metadata: Pre-resolved algorithm metadata dict containing:
-            - name: Algorithm name (e.g., "sft", "osft", "lora_sft", "lora_grpo")
-            - metrics_file_pattern: Glob pattern string for metrics files, or None
+            - name: Algorithm name (e.g., "sft", "osft")
+            - metrics_file_patterns: List of glob patterns for metrics files
             - metrics_file_rank0: Filename for rank 0 metrics
+            - config_file: Optional config file name (for OSFT)
         ckpt_output_dir: Directory where metrics files are written
         metrics_port: Port for HTTP metrics server
 
@@ -35,18 +50,6 @@ def _create_training_hub_progression_instrumentation(
     import subprocess
     import threading
 
-    def _fmt(value, precision: int = 4):
-        """Format numeric metric values; return None for invalid/non-numeric."""
-        if value is None or isinstance(value, bool):
-            return None
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(number):
-            return None
-        return f"{number:.{precision}f}"
-
     # Extract algorithm metadata (pre-resolved from centralized registry)
     algorithm = algorithm_metadata["name"]
     metrics_file_pattern = algorithm_metadata["metrics_file_pattern"]
@@ -60,9 +63,6 @@ def _create_training_hub_progression_instrumentation(
 
         def do_GET(self):
             """Handle GET requests to expose metrics as JSON."""
-            if self.path.split("?", 1)[0] != "/metrics":
-                self.send_error(404)
-                return
             try:
                 # Read latest metrics
                 metrics = self._read_latest_metrics()
@@ -157,16 +157,9 @@ def _create_training_hub_progression_instrumentation(
                         capture_output=True,
                         text=True,
                         check=True,
-                        timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                    # timeout bounds the wait, not the child: a tail stuck in
-                    # uninterruptible IO on a dead mount can still block here.
-                    print(
-                        f"[Kubeflow] Warning: Failed to read OSFT metrics: {e}",
-                        flush=True,
-                    )
+                except subprocess.CalledProcessError:
                     return {}
 
                 if last_line:
@@ -223,16 +216,9 @@ def _create_training_hub_progression_instrumentation(
                         capture_output=True,
                         text=True,
                         check=True,
-                        timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                    # timeout bounds the wait, not the child: a tail stuck in
-                    # uninterruptible IO on a dead mount can still block here.
-                    print(
-                        f"[Kubeflow] Warning: Failed to read SFT metrics: {e}",
-                        flush=True,
-                    )
+                except subprocess.CalledProcessError:
                     return {}
 
                 if last_line:
@@ -271,16 +257,9 @@ def _create_training_hub_progression_instrumentation(
                         capture_output=True,
                         text=True,
                         check=True,
-                        timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                    # timeout bounds the wait, not the child: a tail stuck in
-                    # uninterruptible IO on a dead mount can still block here.
-                    print(
-                        f"[Kubeflow] Warning: Failed to read LoRA SFT metrics: {e}",
-                        flush=True,
-                    )
+                except subprocess.CalledProcessError:
                     return {}
 
                 if last_line:
@@ -366,13 +345,15 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": epoch + 1,
                 "totalEpochs": total_epochs,
                 "trainMetrics": {
-                    "loss": _fmt(loss_val),
-                    "learning_rate": _fmt(lr_val, 6),
-                    "grad_norm": _fmt(grad_norm_val),
-                    "throughput": _fmt(samples_per_second, 2),
+                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
+                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
+                    "throughput": (
+                        f"{samples_per_second:.2f}" if samples_per_second is not None else None
+                    ),
                 },
                 "evalMetrics": {
-                    "eval_loss": _fmt(val_loss_val),
+                    "eval_loss": f"{val_loss_val:.4f}" if val_loss_val is not None else None,
                 },
             }
 
@@ -397,7 +378,9 @@ def _create_training_hub_progression_instrumentation(
                 estimated_total_epochs = configured_num_epochs
             elif num_epoch_steps > 0 and samples_seen > 0:
                 estimated_progress_through_epochs = (
-                    samples_seen / total_samples if total_samples > 0 else 0
+                    samples_seen / (num_epoch_steps * total_samples / num_epoch_steps)
+                    if total_samples > 0
+                    else 0
                 )
                 if estimated_progress_through_epochs > current_epoch:
                     estimated_total_epochs = max(2, int(estimated_progress_through_epochs) + 1)
@@ -411,7 +394,7 @@ def _create_training_hub_progression_instrumentation(
             if num_epoch_steps > 0:
                 step_total = num_epoch_steps * estimated_total_epochs
             else:
-                step_total = step + 10
+                step_total = max(step, step + 10)
 
             progress = (current_step_absolute / step_total * 100) if step_total > 0 else 0
             percent_int = int(round(progress))
@@ -445,10 +428,10 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": current_epoch,
                 "totalEpochs": estimated_total_epochs,
                 "trainMetrics": {
-                    "loss": _fmt(loss_val),
-                    "learning_rate": _fmt(lr_val, 6),
-                    "grad_norm": _fmt(grad_norm_val),
-                    "throughput": _fmt(throughput_val, 2),
+                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
+                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
+                    "throughput": f"{throughput_val:.2f}" if throughput_val is not None else None,
                 },
                 "evalMetrics": {},
             }
@@ -488,9 +471,9 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": max(1, math.ceil(epoch)),
                 "totalEpochs": None,
                 "trainMetrics": {
-                    "loss": _fmt(loss_val),
-                    "learning_rate": _fmt(lr_val, 6),
-                    "grad_norm": _fmt(grad_norm_val),
+                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
+                    "grad_norm": f"{grad_norm_val:.4f}" if grad_norm_val is not None else None,
                 },
                 "evalMetrics": {},
             }
@@ -516,13 +499,7 @@ def _create_training_hub_progression_instrumentation(
                         timeout=2,
                     )
                     lines = result.stdout.strip().split("\n")
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                    # timeout bounds the wait, not the child: a tail stuck in
-                    # uninterruptible IO on a dead mount can still block here.
-                    print(
-                        f"[Kubeflow] Warning: Failed to read LoRA GRPO metrics: {e}",
-                        flush=True,
-                    )
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                     return {}
 
                 parsed = []
@@ -591,12 +568,16 @@ def _create_training_hub_progression_instrumentation(
                 "currentEpoch": max(1, math.ceil(epoch)),
                 "totalEpochs": 1,
                 "trainMetrics": {
-                    "loss": _fmt(loss_val),
-                    "learning_rate": _fmt(lr_val, 6),
-                    "grad_norm": _fmt(grad_norm_val),
-                    "mean_reward": _fmt(mean_reward_val),
-                    "full_match_rate": _fmt(full_match_rate_val),
-                    "entropy": _fmt(entropy_val),
+                    "loss": f"{loss_val:.4f}" if loss_val is not None else None,
+                    "learning_rate": f"{lr_val:.6f}" if lr_val is not None else None,
+                    "grad_norm": (f"{grad_norm_val:.4f}" if grad_norm_val is not None else None),
+                    "mean_reward": (
+                        f"{mean_reward_val:.4f}" if mean_reward_val is not None else None
+                    ),
+                    "full_match_rate": (
+                        f"{full_match_rate_val:.4f}" if full_match_rate_val is not None else None
+                    ),
+                    "entropy": f"{entropy_val:.4f}" if entropy_val is not None else None,
                 },
                 "evalMetrics": {},
             }

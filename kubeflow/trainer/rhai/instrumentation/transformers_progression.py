@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 """Progression tracking instrumentation code injected into TransformersTrainer pods."""
 
 
@@ -28,13 +27,11 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
         metrics_port: Port for HTTP metrics server
 
     Returns:
-        Tuple of (apply_fn, callback_class, handler_class, get_metrics_json_fn,
-        update_metrics_fn) for testing purposes
+        Tuple of (apply_fn, callback_class, handler_class) for testing purposes
     """
     from dataclasses import asdict, dataclass, field
     import http.server
     import json
-    import math
     import threading
     import time
     from typing import Any
@@ -68,23 +65,10 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
                     else:
                         setattr(_progression_metrics_state, key, value)
 
-    # Keys already reported as non-finite, so the warning is logged once per metric
-    _warned_non_finite_metrics: set[str] = set()
-
-    def _json_safe(value):
-        """Replace non-finite floats with None so payloads stay valid JSON."""
-        if isinstance(value, float):
-            return value if math.isfinite(value) else None
-        if isinstance(value, dict):
-            return {key: _json_safe(item) for key, item in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [_json_safe(item) for item in value]
-        return value
-
     def _get_progression_metrics_json() -> str:
         """Get current metrics as JSON string."""
         with _progression_metrics_lock:
-            return json.dumps(_json_safe(asdict(_progression_metrics_state)), allow_nan=False)
+            return json.dumps(asdict(_progression_metrics_state))
 
     class ProgressionMetricsHandler(http.server.BaseHTTPRequestHandler):
         """HTTP server that exposes training progress metrics as JSON."""
@@ -95,9 +79,6 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
 
         def do_GET(self):
             """Handle GET requests to expose metrics as JSON."""
-            if self.path.split("?", 1)[0] != "/metrics":
-                self.send_error(404)
-                return
             try:
                 payload = _get_progression_metrics_json()
             except Exception as e:
@@ -228,21 +209,8 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
                         except (ImportError, AttributeError):
                             pass
 
-                    if not isinstance(metric_value, (int, float)):
+                    if metric_value is None:
                         continue
-                    # NaN/inf serialize as invalid JSON (`NaN`, `Infinity`) and break
-                    # strict parsers. Report None rather than skipping: the state
-                    # dicts are merged, so skipping would keep serving the last good
-                    # value and hide divergence behind a plausible stale number.
-                    if not math.isfinite(metric_value):
-                        if key not in _warned_non_finite_metrics:
-                            _warned_non_finite_metrics.add(key)
-                            print(
-                                f"[Kubeflow] Warning: metric {key!r} is non-finite "
-                                f"({metric_value}); reporting null",
-                                flush=True,
-                            )
-                        metric_value = None
 
                     if key.startswith("eval_"):
                         eval_metrics[key] = metric_value
@@ -313,15 +281,7 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
                         }
 
                         with open("/dev/termination-log", "w") as f:
-                            payload = json.dumps(_json_safe(termination_message), allow_nan=False)
-                            # Kubernetes truncates the termination log at 4096 bytes.
-                            if len(payload.encode("utf-8")) > 4000:
-                                termination_message["trainMetrics"] = {}
-                                termination_message["evalMetrics"] = {}
-                                payload = json.dumps(
-                                    _json_safe(termination_message), allow_nan=False
-                                )
-                            f.write(payload)
+                            json.dump(termination_message, f)
                     print("[Kubeflow] Final metrics written to termination message", flush=True)
                 except Exception as e:
                     print(

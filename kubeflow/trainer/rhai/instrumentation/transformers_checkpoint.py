@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 """Checkpoint instrumentation code injected into TransformersTrainer pods."""
 
 
@@ -102,40 +101,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log("SIGTERM received, checkpoint will be saved at next safe point")
             self.checkpoint_requested = True
 
-        def _call_save_checkpoint(self):
-            """Invoke Trainer._save_checkpoint across Transformers signature variants.
-
-            The method is private Transformers API and has changed shape between
-            releases (e.g. the `metrics` parameter was removed). Passing only the
-            parameters the installed version accepts avoids a TypeError that the
-            surrounding blanket except would otherwise swallow as a "completed"
-            checkpoint.
-            """
-            import inspect
-
-            save_checkpoint = self.trainer._save_checkpoint
-            try:
-                params = inspect.signature(save_checkpoint).parameters
-            except (TypeError, ValueError) as e:
-                _log(
-                    f"Could not introspect _save_checkpoint signature ({e}); "
-                    "falling back to the legacy (model, trial) call"
-                )
-                save_checkpoint(self.trainer.model, trial=None)
-                return
-            # A wrapped/decorated method may expose only (*args, **kwargs); name
-            # lookups find nothing, so pass the legacy arguments it forwards on.
-            accepts_kwargs = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
-            if accepts_kwargs and "trial" not in params:
-                save_checkpoint(self.trainer.model, trial=None)
-                return
-            kwargs = {}
-            if "trial" in params:
-                kwargs["trial"] = None
-            if "metrics" in params:
-                kwargs["metrics"] = None
-            save_checkpoint(self.trainer.model, **kwargs)
-
         def _save_jit_checkpoint(self):
             """Execute checkpoint, saving model state and training artifacts."""
             self.checkpoint_requested = False
@@ -149,9 +114,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     local_rank = self.trainer.args.local_process_index
                 except Exception:
                     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-                # Restrict to safe characters so the marker cannot escape checkpoint_path
-                node = re.sub(r"[^A-Za-z0-9_-]", "_", str(node))
-                local_rank = re.sub(r"[^A-Za-z0-9_-]", "_", str(local_rank))
 
                 output_dir = self.trainer._get_output_dir(trial=None)
                 checkpoint_path = os.path.join(
@@ -186,11 +148,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         param.record_stream(self.checkpoint_stream)
 
                     with torch.cuda.stream(self.checkpoint_stream):
-                        self._call_save_checkpoint()
+                        self.trainer._save_checkpoint(self.trainer.model, trial=None)
                     self.checkpoint_stream.synchronize()
                 else:
                     # Fallback if no CUDA stream
-                    self._call_save_checkpoint()
+                    self.trainer._save_checkpoint(self.trainer.model, trial=None)
 
                 if os.path.exists(sentinel_file):
                     try:
@@ -216,7 +178,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 _log(
                     f"Failed to save JIT checkpoint: {e}. "
                     "Check local disk space, write permissions, and model save errors; "
-                    "training will resume from latest periodic checkpoint."
+                    "training will resume from lastest periodic checkpoint."
                 )
                 import traceback
 
@@ -238,7 +200,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             self.upload_queue = None  # LifoQueue for background uploads
             self._upload_thread = None  # Background worker thread
             self._shutdown_event = None  # Event to signal shutdown
-            self._atexit_registered = False  # Drain hook registered at most once
             self._upload_error = None  # Store background thread errors
             self._upload_error_lock = threading.Lock()  # Lock for error propagation
 
@@ -272,9 +233,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
 
                     # Verify storage access by writing/reading test file (if enabled)
                     if checkpoint_config.get("verify_cloud_storage_access", True):
-                        import uuid
-
-                        test_file = f".kubeflow-access-test-{uuid.uuid4().hex}"
+                        test_file = ".kubeflow-access-test"
                         last_error = None
                         for attempt in range(1, 4):  # 3 attempts with backoff
                             try:
@@ -387,25 +346,12 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 # when resuming after interruptions the latest state is picked.
                 self.upload_queue = LifoQueue()
             self._shutdown_event = threading.Event()
-            # daemon=True is required for the atexit drain below to run at all:
-            # CPython joins every non-daemon thread before calling atexit handlers,
-            # so a non-daemon worker whose loop only exits on _shutdown_event would
-            # deadlock interpreter shutdown and the handler would never fire.
             self._upload_thread = threading.Thread(
                 target=self._upload_worker_loop,
-                daemon=True,
+                daemon=False,
                 name="KubeflowCheckpointUploader",
             )
             self._upload_thread.start()
-            # Transformers skips on_train_end when the training loop raises, so the
-            # graceful shutdown never runs on that path. Drain uploads at exit
-            # instead; shutdown_upload_worker is idempotent, and registering only
-            # once keeps a restarted worker from queuing duplicate 1h joins.
-            if not self._atexit_registered:
-                import atexit
-
-                atexit.register(self.shutdown_upload_worker)
-                self._atexit_registered = True
             _log("Background upload worker started")
 
         def _upload_worker_loop(self) -> None:
@@ -569,7 +515,6 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     )
                 else:
                     _log("Background upload worker stopped")
-                    self._upload_thread = None
 
         def on_init_end(self, args, state, control, **kwargs):
             """Download latest checkpoint from S3 (local rank 0)."""
@@ -865,69 +810,67 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
         # Store original __init__ method
         _original_trainer_init = _TransformersTrainer.__init__
 
-        def _apply_checkpoint_config_to_args(training_args) -> None:
-            """Apply Kubeflow checkpoint_config fields onto a TrainingArguments instance."""
-            if not training_args or not checkpoint_config:
-                return
-
-            if getattr(training_args, "save_only_model", False):
-                raise ValueError(
-                    "save_only_model=True is incompatible with Kubeflow checkpointing. "
-                    "When enabled, only model weights are saved, but optimizer state, "
-                    "scheduler state, and RNG state are excluded. This prevents resuming "
-                    "training from the exact point of interruption, breaking fault tolerance. "
-                    "\nTo fix: Set save_only_model=False in your TrainingArguments, or "
-                    "remove it entirely (defaults to False)."
-                )
-
-            if "output_dir" in checkpoint_config:
-                training_args.output_dir = checkpoint_config["output_dir"]
-                _log(
-                    f"Applied output_dir: {checkpoint_config['output_dir']}",
-                    args=training_args,
-                )
-
-            if "save_strategy" in checkpoint_config:
-                training_args.save_strategy = checkpoint_config["save_strategy"]
-                _log(
-                    f"Applied save_strategy: {checkpoint_config['save_strategy']}",
-                    args=training_args,
-                )
-
-            if "save_steps" in checkpoint_config and checkpoint_config["save_steps"] is not None:
-                training_args.save_steps = checkpoint_config["save_steps"]
-                _log(
-                    f"Applied save_steps: {checkpoint_config['save_steps']}",
-                    args=training_args,
-                )
-
-            if "save_total_limit" in checkpoint_config:
-                training_args.save_total_limit = checkpoint_config["save_total_limit"]
-                _log(
-                    f"Applied save_total_limit: {checkpoint_config['save_total_limit']}",
-                    args=training_args,
-                )
-
-            if checkpoint_config.get("cloud_remote_storage_uri") and getattr(
-                training_args, "save_on_each_node", False
-            ):
-                raise ValueError(
-                    "save_on_each_node=True is not supported when output_dir is an S3 URI. "
-                    "This would duplicate full checkpoints on every node and waste bandwidth. "
-                    "Set save_on_each_node=False or use a PVC-backed output_dir instead."
-                )
-
         def _patched_trainer_init(self, *args, **kwargs):
             """Patched Trainer.__init__ that auto-injects JIT checkpoint callback."""
             enable_jit = checkpoint_config.get("enable_jit", False)
 
-            # Extract caller-provided TrainingArguments (may be omitted)
+            # Extract TrainingArguments to patch
             training_args = kwargs.get("args")
             if not training_args and len(args) > 1:
                 training_args = args[1]
 
-            # Apply config before init when caller supplied args (Trainer reads them during init)
-            _apply_checkpoint_config_to_args(training_args)
+            # Apply Kubeflow checkpoint config to training_args
+            if training_args and checkpoint_config:
+                if getattr(training_args, "save_only_model", False):
+                    raise ValueError(
+                        "save_only_model=True is incompatible with Kubeflow checkpointing. "
+                        "When enabled, only model weights are saved, but optimizer state, "
+                        "scheduler state, and RNG state are excluded. This prevents resuming "
+                        "training from the exact point of interruption, breaking fault tolerance. "
+                        "\nTo fix: Set save_only_model=False in your TrainingArguments, or "
+                        "remove it entirely (defaults to False)."
+                    )
+
+                # Apply output_dir if provided by user
+                if "output_dir" in checkpoint_config:
+                    training_args.output_dir = checkpoint_config["output_dir"]
+                    _log(
+                        f"Applied output_dir: {checkpoint_config['output_dir']}",
+                        args=training_args,
+                    )
+
+                if "save_strategy" in checkpoint_config:
+                    training_args.save_strategy = checkpoint_config["save_strategy"]
+                    _log(
+                        f"Applied save_strategy: {checkpoint_config['save_strategy']}",
+                        args=training_args,
+                    )
+
+                if (
+                    "save_steps" in checkpoint_config
+                    and checkpoint_config["save_steps"] is not None
+                ):
+                    training_args.save_steps = checkpoint_config["save_steps"]
+                    _log(
+                        f"Applied save_steps: {checkpoint_config['save_steps']}",
+                        args=training_args,
+                    )
+
+                if "save_total_limit" in checkpoint_config:
+                    training_args.save_total_limit = checkpoint_config["save_total_limit"]
+                    _log(
+                        f"Applied save_total_limit: {checkpoint_config['save_total_limit']}",
+                        args=training_args,
+                    )
+
+                if checkpoint_config.get("cloud_remote_storage_uri") and getattr(
+                    training_args, "save_on_each_node", False
+                ):
+                    raise ValueError(
+                        "save_on_each_node=True is not supported when output_dir is an S3 URI. "
+                        "This would duplicate full checkpoints on every node and waste bandwidth. "
+                        "Set save_on_each_node=False or use a PVC-backed output_dir instead."
+                    )
 
             # Inject JIT callback if enabled
             if enable_jit:
@@ -946,29 +889,17 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             if enable_jit:
                 _jit_checkpoint_callback._trainer_ref = self
 
-            # Trainer builds a default TrainingArguments when args is omitted.
-            # Apply checkpoint_config to that resolved instance so auto-resume still works.
-            resolved_args = getattr(self, "args", None) or training_args
-            if training_args is None and resolved_args is not None:
-                _log(
-                    "Warning: TrainingArguments not supplied to Trainer; applying "
-                    "Kubeflow checkpoint_config to Trainer-built defaults.",
-                    args=resolved_args,
-                )
-                _apply_checkpoint_config_to_args(resolved_args)
-
             _original_train = self.train
 
             def _patched_train(resume_from_checkpoint=None, **train_kwargs):
                 """Patched train() that auto-resumes from latest checkpoint if available."""
-                active_args = getattr(self, "args", None) or resolved_args
                 if dist.is_available() and dist.is_initialized():
                     rank = dist.get_rank()
                     world_size = dist.get_world_size()
                     _log(
                         f"Rank {rank}/{world_size} - "
                         "Waiting for all ranks before training starts...",
-                        args=active_args,
+                        args=training_args,
                     )
                     try:
                         # Specify device to avoid "guessing device ID" warning
@@ -987,15 +918,15 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         ) from e
                     _log(
                         f"Rank {rank}/{world_size} - All ranks synchronized, proceeding...",
-                        args=active_args,
+                        args=training_args,
                     )
 
                 # Only auto-resume if user didn't explicitly set it
-                if resume_from_checkpoint is None and active_args:
-                    latest_checkpoint = _find_latest_checkpoint(active_args.output_dir)
+                if resume_from_checkpoint is None and training_args:
+                    latest_checkpoint = _find_latest_checkpoint(training_args.output_dir)
                     if latest_checkpoint:
                         resume_from_checkpoint = latest_checkpoint
-                        _log(f"Auto-resuming from: {latest_checkpoint}", args=active_args)
+                        _log(f"Auto-resuming from: {latest_checkpoint}", args=training_args)
                 return _original_train(
                     resume_from_checkpoint=resume_from_checkpoint, **train_kwargs
                 )

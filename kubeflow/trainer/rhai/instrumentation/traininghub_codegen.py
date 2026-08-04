@@ -1,3 +1,17 @@
+# Copyright 2024 The Kubeflow Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Code generation utilities for TrainingHubTrainer script construction."""
 
 from collections.abc import Callable
@@ -6,33 +20,6 @@ import os
 import textwrap
 
 from kubeflow.trainer.types import types
-
-
-def _render_dict_literal(func_args: dict, indent: str) -> str:
-    """Render a dict literal with repr-safe values only."""
-    import ast
-
-    lines: list[str] = []
-    for key, value in func_args.items():
-        # Exact str only: a str subclass can override __repr__ and inject arbitrary
-        # code through the key, which is emitted below without a literal_eval check.
-        if type(key) is not str:
-            raise ValueError(f"func_args key of type {type(key).__name__} must be str")
-        # Render repr exactly once and validate that rendering — a stateful __repr__
-        # must not be able to return a safe literal during validation and an
-        # executable expression during rendering (CWE-94).
-        rendered_value = repr(value)
-        try:
-            if ast.literal_eval(rendered_value) != value:
-                raise ValueError(
-                    f"func_args[{key!r}] value type {type(value).__name__} is not repr-safe"
-                )
-        except (ValueError, SyntaxError) as e:
-            raise ValueError(
-                f"func_args[{key!r}] value type {type(value).__name__} is not repr-safe"
-            ) from e
-        lines.append(f"{indent}{key!r}: {rendered_value},")
-    return "\n".join(lines)
 
 
 def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) -> str:
@@ -50,8 +37,6 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) 
     """
     # Extract values from pre-validated metadata
     algorithm_name = algorithm_metadata["name"]
-    if not isinstance(algorithm_name, str) or not algorithm_name.isidentifier():
-        raise ValueError(f"Invalid algorithm name for code generation: {algorithm_name!r}")
     metrics_file_rank0 = algorithm_metadata["metrics_file_rank0"]
 
     base_script = textwrap.dedent("""
@@ -89,15 +74,12 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) 
                 )
                 return
 
-            # Read final metrics from rank 0 file (keep only the last line to
-            # avoid loading the whole JSONL history into memory)
+            # Read final metrics from rank 0 file
             metrics = None
             with open(metrics_file, 'r') as f:
-                last_line = None
-                for line in f:
-                    last_line = line
-                if last_line is not None:
-                    metrics = json.loads(last_line)
+                lines = f.readlines()
+                if lines:
+                    metrics = json.loads(lines[-1])
                 else:
                     print(
                         f"[Kubeflow] WARNING: Metrics file is empty: {{metrics_file_rank0}}",
@@ -184,12 +166,11 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) 
     if func_args is None:
         call_line = "if __name__ == '__main__':\n    training_func({})\n"
     elif isinstance(func_args, dict):
-        params_body = _render_dict_literal(func_args, "        ")
-        call_line = (
-            "if __name__ == '__main__':\n    training_func({\n"
-            + (params_body + "\n" if params_body else "")
-            + "    })\n"
-        )
+        params_lines: list[str] = ["if __name__ == '__main__':\n    training_func({\n"]
+        for key, value in func_args.items():
+            params_lines.append(f"        {repr(key)}: {repr(value)},\n")
+        params_lines.append("    })\n")
+        call_line = "".join(params_lines)
     else:
         raise ValueError("func_args must be a dict or None")
 
@@ -207,14 +188,13 @@ def _render_user_func_code(func: Callable, func_args: dict | None) -> tuple[str,
     if func_args is None:
         call_block = f"{func.__name__}()"
     elif isinstance(func_args, dict):
-        params_body = _render_dict_literal(func_args, "    ")
         params_lines: list[str] = [f"{func.__name__}(**{{"]
-        if params_body:
-            params_lines.append(params_body)
+        for key, value in func_args.items():
+            params_lines.append(f"    {repr(key)}: {repr(value)},")
         params_lines.append("})")
         call_block = "\n".join(params_lines)
     else:
-        raise ValueError("func_args must be a dict or None")
+        call_block = f"{func.__name__}({func_args})"
 
     func_code = f"{func_code}\n{call_block}\n"
     func_file = os.path.basename(inspect.getfile(func))

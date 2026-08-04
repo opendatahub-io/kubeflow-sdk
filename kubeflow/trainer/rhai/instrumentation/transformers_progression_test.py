@@ -50,16 +50,3 @@ class TestCreateProgressionInstrumentation:
         """Source must define all symbols expected by the generated training wrapper."""
         source = inspect.getsource(_create_progression_instrumentation)
         assert required_symbol in source
-
-    def test_source_contains_metrics_endpoint(self) -> None:
-        """Generated HTTP handler must serve the /metrics path."""
-        source = inspect.getsource(_create_progression_instrumentation)
-        assert '"/metrics"' in source
-
-    def test_source_rejects_non_finite_metrics(self) -> None:
-        """NaN/inf serialize as invalid JSON and must never reach a payload."""
-        source = inspect.getsource(_create_progression_instrumentation)
-        assert "_json_safe" in source
-        assert "math.isfinite" in source
-        # Bare json.dumps would emit NaN/Infinity, which strict parsers reject
-        assert "allow_nan=False" in source

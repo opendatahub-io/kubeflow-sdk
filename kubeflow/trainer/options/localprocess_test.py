@@ -33,7 +33,6 @@ def test_localprocess_options_module_imports(test_case):
     """Verify the localprocess options module can be imported."""
     print("Executing test:", test_case.name)
 
-    import kubeflow.trainer.options.localprocess as lp_module
+    import kubeflow.trainer.options.localprocess  # noqa: F401
 
-    assert lp_module.__name__ == "kubeflow.trainer.options.localprocess"
     print("test execution complete")

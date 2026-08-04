@@ -225,9 +225,13 @@ def get_trainer_cr_from_training_hub_trainer(
 
 # Re-exports for backward compatibility
 from kubeflow.trainer.rhai.instrumentation.traininghub import (  # noqa: E402, F401
-    _create_training_hub_progression_instrumentation,
+    get_training_hub_instrumentation_wrapper,
+)
+from kubeflow.trainer.rhai.instrumentation.traininghub_codegen import (  # noqa: E402, F401
     _get_command_from_runtime,
     _render_algorithm_wrapper,
     _render_user_func_code,
-    get_training_hub_instrumentation_wrapper,
+)
+from kubeflow.trainer.rhai.instrumentation.traininghub_progression import (  # noqa: E402, F401
+    _create_training_hub_progression_instrumentation,
 )

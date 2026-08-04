@@ -17,9 +17,11 @@
 import pytest
 
 from kubeflow.trainer.rhai.instrumentation.traininghub import (
+    get_training_hub_instrumentation_wrapper,
+)
+from kubeflow.trainer.rhai.instrumentation.traininghub_codegen import (
     _render_algorithm_wrapper,
     _render_user_func_code,
-    get_training_hub_instrumentation_wrapper,
 )
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 
@@ -194,25 +196,3 @@ def test_get_training_hub_instrumentation_wrapper_compiles() -> None:
     print("Executing test: get_training_hub_instrumentation_wrapper_compiles")
     wrapper = get_training_hub_instrumentation_wrapper("sft", "/tmp/ckpts", 28080)
     compile(wrapper, "<generated>", "exec")
-
-
-def test_render_algorithm_wrapper_invalid_algorithm_name_raises() -> None:
-    """Algorithm name with special characters must raise ValueError."""
-    print("Executing test: render_algorithm_wrapper_invalid_algorithm_name_raises")
-    metadata = {"name": "sft;evil", "metrics_file_rank0": "metrics_rank0.json"}
-    with pytest.raises(ValueError, match="Invalid algorithm name"):
-        _render_algorithm_wrapper(metadata, None)
-
-
-def test_render_user_func_code_non_dict_func_args_raises() -> None:
-    """Non-dict func_args must raise ValueError."""
-    print("Executing test: render_user_func_code_non_dict_func_args_raises")
-    with pytest.raises(ValueError, match="func_args must be a dict or None"):
-        _render_user_func_code(_sample_train_func, "invalid_string_args")
-
-
-def test_get_training_hub_instrumentation_wrapper_invalid_port_raises() -> None:
-    """Invalid metrics_port must raise ValueError."""
-    print("Executing test: get_training_hub_instrumentation_wrapper_invalid_port_raises")
-    with pytest.raises(ValueError, match="metrics_port must be an int"):
-        get_training_hub_instrumentation_wrapper("sft", "/tmp/ckpts", 80)

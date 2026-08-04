@@ -37,6 +37,20 @@ def is_primary_pod() -> bool:
 
     Returns:
         True if this is the primary pod, False otherwise.
+
+    Examples:
+        >>> os.environ["JOB_COMPLETION_INDEX"] = "0"
+        >>> is_primary_pod()
+        True
+
+        >>> os.environ["JOB_COMPLETION_INDEX"] = "1"
+        >>> is_primary_pod()
+        False
+
+        >>> del os.environ["JOB_COMPLETION_INDEX"]
+        >>> os.environ["PET_NODE_RANK"] = "0"
+        >>> is_primary_pod()
+        True
     """
     job_index = os.environ.get("JOB_COMPLETION_INDEX")
     if job_index is not None:
