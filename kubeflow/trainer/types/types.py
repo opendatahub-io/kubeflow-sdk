@@ -17,10 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-<<<<<<< HEAD
 from urllib.parse import urlparse
-=======
->>>>>>> upstream/main
 
 import kubeflow.common.constants as common_constants
 from kubeflow.trainer.constants import constants
@@ -91,15 +88,12 @@ class CustomTrainerContainer:
     num_nodes: int | None = None
     resources_per_node: dict | None = None
     env: dict[str, str] | None = None
-<<<<<<< HEAD
-=======
 
 
 # The Kind name for the ClusterTrainingRuntime, TrainingRuntime.
 class RuntimeKind(Enum):
     CLUSTER_TRAINING_RUNTIME = "ClusterTrainingRuntime"
     TRAINING_RUNTIME = "TrainingRuntime"
->>>>>>> upstream/main
 
 
 # TODO(Electronic-Waste): Add more loss functions.
@@ -281,10 +275,7 @@ class RuntimeTrainer:
 class Runtime:
     name: str
     trainer: RuntimeTrainer
-<<<<<<< HEAD
-=======
     kind: RuntimeKind
->>>>>>> upstream/main
     pretrained_model: str | None = None
 
 
@@ -350,7 +341,6 @@ class HuggingFaceDatasetInitializer(BaseInitializer):
 
     ignore_patterns: list[str] | None = None
     access_token: str | None = None
-<<<<<<< HEAD
 
     def __post_init__(self):
         """Validate HuggingFaceDatasetInitializer parameters."""
@@ -363,8 +353,6 @@ class HuggingFaceDatasetInitializer(BaseInitializer):
                 "storage_uri: must have absolute path with 'hf://<user_name>/<dataset_name>', got "
                 f"{self.storage_uri}"
             )
-=======
->>>>>>> upstream/main
 
 
 @dataclass
@@ -455,15 +443,12 @@ class HuggingFaceModelInitializer(BaseInitializer):
         default_factory=lambda: constants.INITIALIZER_DEFAULT_IGNORE_PATTERNS
     )
     access_token: str | None = None
-<<<<<<< HEAD
 
     def __post_init__(self):
         """Validate HuggingFaceModelInitializer parameters."""
 
         if not self.storage_uri.startswith("hf://"):
             raise ValueError(f"storage_uri must start with 'hf://', got {self.storage_uri}")
-=======
->>>>>>> upstream/main
 
 
 @dataclass

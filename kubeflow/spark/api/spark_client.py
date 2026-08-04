@@ -15,21 +15,10 @@
 """SparkClient for Kubeflow SDK."""
 
 from collections.abc import Iterator
-<<<<<<< HEAD
-import logging
-=======
->>>>>>> upstream/main
 
 from pyspark.sql import SparkSession
 
 from kubeflow.common.types import KubernetesBackendConfig
-<<<<<<< HEAD
-from kubeflow.spark.backends.kubernetes import KubernetesBackend
-from kubeflow.spark.backends.kubernetes.utils import validate_spark_connect_url
-from kubeflow.spark.types.types import Driver, Executor, SparkConnectInfo
-
-logger = logging.getLogger(__name__)
-=======
 import kubeflow.common.utils as common_utils
 from kubeflow.spark.backends.kubernetes import KubernetesBackend
 from kubeflow.spark.backends.kubernetes.utils import validate_spark_connect_url
@@ -42,16 +31,12 @@ from kubeflow.spark.types.types import (
     SparkJob,
     SparkJobStatus,
 )
->>>>>>> upstream/main
 
 
 class SparkClient:
     """Stateless Spark client for Kubeflow."""
 
     def __init__(self, backend_config: KubernetesBackendConfig | None = None):
-<<<<<<< HEAD
-        """Initialize SparkClient."""
-=======
         """Initialize the Spark client.
 
         Args:
@@ -62,7 +47,6 @@ class SparkClient:
             ValueError:
                 If backend_config is not a KubernetesBackendConfig instance.
         """
->>>>>>> upstream/main
         if backend_config is None:
             backend_config = KubernetesBackendConfig()
 
@@ -71,13 +55,10 @@ class SparkClient:
         else:
             raise ValueError(f"Invalid backend config: {type(backend_config)}")
 
-<<<<<<< HEAD
-=======
     # ------------------------------------------------------------------
     # Spark Connect sessions
     # ------------------------------------------------------------------
 
->>>>>>> upstream/main
     def connect(
         self,
         base_url: str | None = None,
@@ -91,11 +72,7 @@ class SparkClient:
         timeout: int = 300,
         connect_timeout: int = 120,
     ) -> SparkSession:
-<<<<<<< HEAD
-        """Connect to or create a SparkConnect session (KEP-107 lines 298-347).
-=======
         """Connect to or create a SparkConnect session.
->>>>>>> upstream/main
 
         This method supports two modes based on parameters:
         - **Connect mode**: When `base_url` is provided, connects to an existing Spark Connect server
@@ -119,39 +96,10 @@ class SparkClient:
         Returns:
             SparkSession connected to Spark (self-managing).
 
-<<<<<<< HEAD
-        Examples:
-            # Connect to existing server
-            spark = client.connect(base_url="sc://server:15002")
-
-            # Create with simple parameters
-            spark = client.connect(
-                num_executors=5,
-                resources_per_executor={"cpu": "5", "memory": "10Gi"},
-                spark_conf={"spark.sql.adaptive.enabled": "true"}
-            )
-
-            # Create with custom name
-            from kubeflow.spark.types.options import Name
-            spark = client.connect(options=[Name("my-session")])
-
-            # Create with advanced configuration
-            spark = client.connect(
-                driver=Driver(resources={"cpu": "2", "memory": "4Gi"}),
-                executor=Executor(
-                    num_instances=5,
-                    resources_per_executor={"cpu": "4", "memory": "8Gi"}
-                )
-            )
-
-            # Minimal - use all defaults (auto-generated name)
-            spark = client.connect()
-=======
         Raises:
             ValueError: If base_url is invalid or the provided resource configuration is invalid.
             TimeoutError: If creating a Spark Connect session or connecting to it times out.
             RuntimeError: If the Spark Connect session cannot be created or connected to.
->>>>>>> upstream/main
 
         Note:
             Server port defaults to 15002 (Spark Connect gRPC). PySpark and server Spark
@@ -176,22 +124,6 @@ class SparkClient:
         )
 
     def list_sessions(self) -> list[SparkConnectInfo]:
-<<<<<<< HEAD
-        """List all SparkConnect sessions."""
-        return self.backend.list_sessions()
-
-    def get_session(self, name: str) -> SparkConnectInfo:
-        """Get session info by name."""
-        return self.backend.get_session(name)
-
-    def delete_session(self, name: str) -> None:
-        """Delete a SparkConnect session."""
-        self.backend.delete_session(name)
-
-    def get_session_logs(self, name: str, follow: bool = False) -> Iterator[str]:
-        """Get logs from a session."""
-        return self.backend.get_session_logs(name, follow=follow)
-=======
         """List SparkConnect sessions.
 
         Returns:
@@ -383,4 +315,3 @@ class SparkClient:
             name=name,
             follow=follow,
         )
->>>>>>> upstream/main

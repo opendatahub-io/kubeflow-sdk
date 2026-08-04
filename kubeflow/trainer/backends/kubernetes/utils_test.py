@@ -225,21 +225,6 @@ def test_get_resources_per_node(test_case: TestCase):
                 "    python -m ensurepip || python -m ensurepip --user || "
                 "apt-get install python-pip\n"
                 "fi\n\n\n"
-<<<<<<< HEAD
-                'PACKAGES="torch numpy custom-package"\n'
-                'PIP_OPTS="--index-url https://pypi.org/simple --extra-index-url https://private.repo.com/simple --extra-index-url https://internal.company.com/simple"\n'
-                'LOG_FILE="pip_install.log"\n'
-                'rm -f "$LOG_FILE"\n'
-                "\n"
-                "if PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
-                '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
-                '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                "else\n"
-                '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
-=======
                 "PACKAGES=(torch numpy custom-package)\n"
                 "PIP_OPTS=(--index-url https://pypi.org/simple --extra-index-url https://private.repo.com/simple --extra-index-url https://internal.company.com/simple)\n"
                 'LOG_FILE="pip_install.log"\n'
@@ -253,7 +238,6 @@ def test_get_resources_per_node(test_case: TestCase):
                 '    echo "Successfully installed Python packages (system-wide): ${PACKAGES[*]}"\n'
                 "else\n"
                 '    echo "ERROR: Failed to install Python packages: ${PACKAGES[*]}" >&2\n'
->>>>>>> upstream/main
                 '    cat "$LOG_FILE" >&2\n'
                 "    exit 1\n"
                 "fi\n\n"
@@ -271,21 +255,6 @@ def test_get_resources_per_node(test_case: TestCase):
                 "    python -m ensurepip || python -m ensurepip --user || "
                 "apt-get install python-pip\n"
                 "fi\n\n\n"
-<<<<<<< HEAD
-                'PACKAGES="torch numpy custom-package"\n'
-                'PIP_OPTS="--index-url https://pypi.org/simple"\n'
-                'LOG_FILE="pip_install.log"\n'
-                'rm -f "$LOG_FILE"\n'
-                "\n"
-                "if PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
-                '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
-                '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                "else\n"
-                '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
-=======
                 "PACKAGES=(torch numpy custom-package)\n"
                 "PIP_OPTS=(--index-url https://pypi.org/simple)\n"
                 'LOG_FILE="pip_install.log"\n'
@@ -299,7 +268,6 @@ def test_get_resources_per_node(test_case: TestCase):
                 '    echo "Successfully installed Python packages (system-wide): ${PACKAGES[*]}"\n'
                 "else\n"
                 '    echo "ERROR: Failed to install Python packages: ${PACKAGES[*]}" >&2\n'
->>>>>>> upstream/main
                 '    cat "$LOG_FILE" >&2\n'
                 "    exit 1\n"
                 "fi\n\n"
@@ -321,21 +289,6 @@ def test_get_resources_per_node(test_case: TestCase):
                 "    python -m ensurepip || python -m ensurepip --user || "
                 "apt-get install python-pip\n"
                 "fi\n\n\n"
-<<<<<<< HEAD
-                'PACKAGES="torch numpy custom-package"\n'
-                'PIP_OPTS="--index-url https://pypi.org/simple --extra-index-url https://private.repo.com/simple --extra-index-url https://internal.company.com/simple"\n'
-                'LOG_FILE="pip_install.log"\n'
-                'rm -f "$LOG_FILE"\n'
-                "\n"
-                "if PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
-                '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
-                '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                "else\n"
-                '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
-=======
                 "PACKAGES=(torch numpy custom-package)\n"
                 "PIP_OPTS=(--index-url https://pypi.org/simple --extra-index-url https://private.repo.com/simple --extra-index-url https://internal.company.com/simple)\n"
                 'LOG_FILE="pip_install.log"\n'
@@ -349,7 +302,6 @@ def test_get_resources_per_node(test_case: TestCase):
                 '    echo "Successfully installed Python packages (system-wide): ${PACKAGES[*]}"\n'
                 "else\n"
                 '    echo "ERROR: Failed to install Python packages: ${PACKAGES[*]}" >&2\n'
->>>>>>> upstream/main
                 '    cat "$LOG_FILE" >&2\n'
                 "    exit 1\n"
                 "fi\n\n"
@@ -367,21 +319,6 @@ def test_get_resources_per_node(test_case: TestCase):
                 "    python -m ensurepip || python -m ensurepip --user || "
                 "apt-get install python-pip\n"
                 "fi\n\n\n"
-<<<<<<< HEAD
-                'PACKAGES="torch numpy"\n'
-                'PIP_OPTS="--index-url https://pypi.org/simple"\n'
-                'LOG_FILE="pip_install.log"\n'
-                'rm -f "$LOG_FILE"\n'
-                "\n"
-                "if PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
-                '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
-                '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                "else\n"
-                '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
-=======
                 "PACKAGES=(torch numpy)\n"
                 "PIP_OPTS=(--index-url https://pypi.org/simple)\n"
                 'LOG_FILE="pip_install.log"\n'
@@ -429,7 +366,6 @@ def test_get_resources_per_node(test_case: TestCase):
                 '    echo "Successfully installed Python packages (system-wide): ${PACKAGES[*]}"\n'
                 "else\n"
                 '    echo "ERROR: Failed to install Python packages: ${PACKAGES[*]}" >&2\n'
->>>>>>> upstream/main
                 '    cat "$LOG_FILE" >&2\n'
                 "    exit 1\n"
                 "fi\n\n"
@@ -575,21 +511,6 @@ def test_get_script_for_python_packages(test_case):
                     "    python -m ensurepip || python -m ensurepip --user || "
                     "apt-get install python-pip\n"
                     "fi\n\n\n"
-<<<<<<< HEAD
-                    'PACKAGES="requests"\n'
-                    'PIP_OPTS="--index-url https://pypi.org/simple"\n'
-                    'LOG_FILE="pip_install.log"\n'
-                    'rm -f "$LOG_FILE"\n'
-                    "\n"
-                    "if PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                    '    --no-warn-script-location $PIP_OPTS --user $PACKAGES >"$LOG_FILE" 2>&1; then\n'
-                    '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                    "elif PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --quiet \\\n"
-                    '    --no-warn-script-location $PIP_OPTS $PACKAGES >>"$LOG_FILE" 2>&1; then\n'
-                    '    echo "Successfully installed Python packages: $PACKAGES"\n'
-                    "else\n"
-                    '    echo "ERROR: Failed to install Python packages: $PACKAGES" >&2\n'
-=======
                     "PACKAGES=(requests)\n"
                     "PIP_OPTS=(--index-url https://pypi.org/simple)\n"
                     'LOG_FILE="pip_install.log"\n'
@@ -603,7 +524,6 @@ def test_get_script_for_python_packages(test_case):
                     '    echo "Successfully installed Python packages (system-wide): ${PACKAGES[*]}"\n'
                     "else\n"
                     '    echo "ERROR: Failed to install Python packages: ${PACKAGES[*]}" >&2\n'
->>>>>>> upstream/main
                     '    cat "$LOG_FILE" >&2\n'
                     "    exit 1\n"
                     "fi\n\n"
@@ -954,8 +874,6 @@ def test_get_args_from_dataset_preprocess_config(test_case: TestCase):
         assert test_case.expected_status == FAILED
         assert type(e) is test_case.expected_error
     print("test execution complete")
-<<<<<<< HEAD
-=======
 
 
 def _build_builtin_runtime() -> types.Runtime:
@@ -1776,4 +1694,3 @@ def test_get_tpu_num_nodes(test_case: TestCase):
         assert test_case.expected_status == FAILED
         assert isinstance(e, test_case.expected_error)
     print("test execution complete")
->>>>>>> upstream/main

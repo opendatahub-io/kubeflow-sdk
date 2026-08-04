@@ -210,8 +210,6 @@ class TestSparkExamples:
             pytest.skip("Requires in-cluster execution (SPARK_E2E_RUN_IN_CLUSTER=1)")
 
         self._run_example("connect_existing_session.py", namespace)
-<<<<<<< HEAD
-=======
 
     def test_batch_job_lifecycle_example(self):
         """EX04: Validate batch_job_lifecycle.py runs without errors."""
@@ -247,4 +245,3 @@ class TestSparkExamples:
         stdout = self._run_example("batch_func_job_lifecycle.py", namespace)
 
         assert "FUNCJOB LIFECYCLE COMPLETE!" in stdout
->>>>>>> upstream/main

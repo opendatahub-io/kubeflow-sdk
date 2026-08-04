@@ -15,13 +15,6 @@
 """Unit tests for the KubernetesBackend class in the Kubeflow Optimizer SDK.
 
 This module uses pytest and unittest.mock to simulate Kubernetes API interactions.
-<<<<<<< HEAD
-It tests that KubernetesBackend.optimize() does not mutate caller-provided inputs.
-"""
-
-from unittest.mock import Mock, patch
-
-=======
 It tests KubernetesBackend's behavior across job listing, resource creation, deletion,
 log retrieval, event filtering, and status waiting.
 """
@@ -33,16 +26,10 @@ from typing import Any, TypeVar
 from unittest.mock import Mock, patch
 
 from kubeflow_katib_api import models
->>>>>>> upstream/main
 import pytest
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.optimizer.backends.kubernetes.backend import KubernetesBackend
-<<<<<<< HEAD
-from kubeflow.optimizer.types.search_types import Search
-from kubeflow.trainer.test.common import SUCCESS, TestCase
-from kubeflow.trainer.types.types import CustomTrainer, TrainJobTemplate
-=======
 from kubeflow.optimizer.constants import constants
 from kubeflow.optimizer.types.algorithm_types import RandomSearch
 from kubeflow.optimizer.types.optimization_types import (
@@ -88,7 +75,6 @@ BASIC_TRIAL_NAME_2 = "basic-trial-2"
 # --------------------------
 # Fixtures
 # --------------------------
->>>>>>> upstream/main
 
 
 @pytest.fixture
@@ -99,12 +85,6 @@ def optimizer_backend():
         patch(
             "kubernetes.client.CustomObjectsApi",
             return_value=Mock(
-<<<<<<< HEAD
-                create_namespaced_custom_object=Mock(return_value=None),
-            ),
-        ),
-        patch("kubernetes.client.CoreV1Api", return_value=Mock()),
-=======
                 create_namespaced_custom_object=Mock(side_effect=conditional_error_handler),
                 delete_namespaced_custom_object=Mock(side_effect=conditional_error_handler),
                 get_namespaced_custom_object=Mock(
@@ -121,7 +101,6 @@ def optimizer_backend():
                 list_namespaced_event=Mock(side_effect=mock_list_namespaced_event),
             ),
         ),
->>>>>>> upstream/main
         patch(
             "kubeflow.trainer.backends.kubernetes.backend.KubernetesBackend.verify_backend",
             return_value=None,
@@ -131,11 +110,6 @@ def optimizer_backend():
         backend.trainer_backend._get_trainjob_spec = Mock(
             return_value=Mock(to_dict=Mock(return_value={}))
         )
-<<<<<<< HEAD
-        yield backend
-
-
-=======
         backend.trainer_backend.get_job = Mock(side_effect=mock_trainer_get_job)
         backend.trainer_backend._read_pod_logs = Mock(return_value=iter(["test log content"]))
         yield backend
@@ -436,7 +410,6 @@ def get_optimization_job_data_type(
 # --------------------------
 
 
->>>>>>> upstream/main
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -459,12 +432,6 @@ def get_optimization_job_data_type(
                 },
             },
         ),
-<<<<<<< HEAD
-    ],
-)
-def test_optimize(optimizer_backend, test_case):
-    """Test that optimize() does not mutate the caller's input objects."""
-=======
         TestCase(
             name="empty search space raises ValueError",
             expected_status=FAILED,
@@ -499,7 +466,6 @@ def test_optimize(optimizer_backend, test_case):
 )
 def test_optimize(optimizer_backend, test_case):
     """Test KubernetesBackend.optimize with success and error paths."""
->>>>>>> upstream/main
     print("Executing test:", test_case.name)
 
     search_space = test_case.config["search_space"]
@@ -518,21 +484,14 @@ def test_optimize(optimizer_backend, test_case):
     original_func_args = dict(trial_template.trainer.func_args)
 
     try:
-<<<<<<< HEAD
-        optimizer_backend.optimize(
-=======
         optimizer_backend.namespace = test_case.config.get("namespace", DEFAULT_NAMESPACE)
         job_name = optimizer_backend.optimize(
->>>>>>> upstream/main
             trial_template=trial_template,
             search_space=search_space,
         )
 
         assert test_case.expected_status == SUCCESS
-<<<<<<< HEAD
-=======
         assert isinstance(job_name, str) and len(job_name) > 0
->>>>>>> upstream/main
 
         # Verify search_space param_spec.name values are unchanged.
         for param_name, param_spec in search_space.items():
@@ -541,13 +500,6 @@ def test_optimize(optimizer_backend, test_case):
         # Verify trial_template.trainer.func_args is unchanged.
         assert trial_template.trainer.func_args == original_func_args
 
-<<<<<<< HEAD
-    except Exception as e:
-        assert test_case.expected_status != SUCCESS
-        assert isinstance(e, test_case.expected_error)
-
-    print("test execution complete")
-=======
         # Verify the Experiment CR was created with expected payload.
         optimizer_backend.custom_api.create_namespaced_custom_object.assert_called_once()
         call_args = optimizer_backend.custom_api.create_namespaced_custom_object.call_args
@@ -1221,4 +1173,3 @@ def test_get_job_events(optimizer_backend, test_case):
         assert test_case.expected_status != SUCCESS
         assert type(e) is test_case.expected_error
     print("test execution complete")
->>>>>>> upstream/main

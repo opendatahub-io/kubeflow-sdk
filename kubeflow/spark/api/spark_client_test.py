@@ -21,14 +21,11 @@ import pytest
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.spark.api.spark_client import SparkClient
 from kubeflow.spark.test.common import FAILED, SUCCESS, TestCase
-<<<<<<< HEAD
-=======
 from kubeflow.spark.types.types import (
     FileJob,
     FuncJob,
     SparkJob,
 )
->>>>>>> upstream/main
 
 
 @pytest.mark.parametrize(
@@ -81,8 +78,6 @@ def test_create_and_connect(test_case: TestCase):
             assert isinstance(e, test_case.expected_error), (
                 f"Expected exception type '{test_case.expected_error.__name__}' but got '{type(e).__name__}: {str(e)}'"
             )
-<<<<<<< HEAD
-=======
 
 
 @pytest.mark.parametrize(
@@ -176,4 +171,3 @@ def test_submit_job_success(job):
             num_executors=None,
             resources_per_executor=None,
         )
->>>>>>> upstream/main

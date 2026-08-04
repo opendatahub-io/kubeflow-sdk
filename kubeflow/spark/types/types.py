@@ -14,11 +14,6 @@
 
 """Types for Kubeflow Spark SDK."""
 
-<<<<<<< HEAD
-from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
-=======
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,7 +22,6 @@ import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
->>>>>>> upstream/main
 
 
 class SparkConnectState(str, Enum):
@@ -49,11 +43,7 @@ class SparkConnectInfo:
         namespace: Kubernetes namespace. Included in SparkConnectInfo for standalone usage
             and passing info between components without requiring SparkClient context.
         state: Current state of the session.
-<<<<<<< HEAD
-        pod_name: Name of the server pod.
-=======
         driver_pod_name: Name of the driver pod.
->>>>>>> upstream/main
         pod_ip: IP address of the server pod.
         service_name: Name of the Kubernetes service.
         creation_timestamp: Timestamp when the session was created.
@@ -62,11 +52,7 @@ class SparkConnectInfo:
     name: str
     namespace: str
     state: SparkConnectState
-<<<<<<< HEAD
-    pod_name: str | None = None
-=======
     driver_pod_name: str | None = None
->>>>>>> upstream/main
     pod_ip: str | None = None
     service_name: str | None = None
     creation_timestamp: datetime | None = None
@@ -74,11 +60,7 @@ class SparkConnectInfo:
 
 @dataclass
 class Driver:
-<<<<<<< HEAD
-    """Driver configuration for Spark Connect session (KEP-107 lines 165-170).
-=======
     """Driver configuration for Spark Connect session.
->>>>>>> upstream/main
 
     The Driver configuration allows fine-grained control over the Spark driver pod.
     All fields are optional, with sensible defaults applied by the backend.
@@ -86,10 +68,6 @@ class Driver:
     Args:
         image: Custom container image for the driver.
         resources: Resource requirements as dict (e.g., {"cpu": "2", "memory": "4Gi"}).
-<<<<<<< HEAD
-            Supports arbitrary Kubernetes resources including GPUs (nvidia.com/gpu).
-=======
->>>>>>> upstream/main
         java_options: JVM options for the driver (e.g., "-Xmx4g -XX:+UseG1GC").
         service_account: Kubernetes service account name for RBAC.
 
@@ -101,11 +79,7 @@ class Driver:
 
     Note:
         The resources dict is extensible - any valid Kubernetes resource name is supported.
-<<<<<<< HEAD
-        This design allows GPU support and future resource types without API changes.
-=======
         This design allows future resource types without API changes.
->>>>>>> upstream/main
     """
 
     image: str | None = None
@@ -116,11 +90,7 @@ class Driver:
 
 @dataclass
 class Executor:
-<<<<<<< HEAD
-    """Executor configuration for Spark Connect session (KEP-107 lines 172-177).
-=======
     """Executor configuration for Spark Connect session.
->>>>>>> upstream/main
 
     The Executor configuration controls the worker pods that execute Spark tasks.
     All fields are optional, with sensible defaults applied by the backend.
@@ -128,39 +98,23 @@ class Executor:
     Args:
         num_instances: Number of executor instances (pods).
         resources_per_executor: Resource requirements per executor as dict
-<<<<<<< HEAD
-            (e.g., {"cpu": "4", "memory": "8Gi", "nvidia.com/gpu": "1"}).
-            Supports arbitrary Kubernetes resources for future extensibility.
-=======
             (e.g., {"cpu": "4", "memory": "8Gi"}).
->>>>>>> upstream/main
         java_options: JVM options for executors (e.g., "-Xmx28g -XX:+UseG1GC").
 
     Example:
         executor = Executor(
             num_instances=20,
-<<<<<<< HEAD
-            resources_per_executor={"cpu": "8", "memory": "32Gi", "nvidia.com/gpu": "2"}
-=======
             resources_per_executor={"cpu": "8", "memory": "32Gi"}
->>>>>>> upstream/main
         )
 
     Note:
         The resources_per_executor dict is extensible - any valid Kubernetes resource
-<<<<<<< HEAD
-        name is supported. This design allows GPU support, custom devices, and future
-        resource types without API changes.
-=======
         name is supported. This design allows future resource types without API changes.
->>>>>>> upstream/main
     """
 
     num_instances: int | None = None
     resources_per_executor: dict[str, str] | None = None
     java_options: str | None = None
-<<<<<<< HEAD
-=======
 
 
 class SparkJobStatus(str, Enum):
@@ -280,4 +234,3 @@ class FuncJob:
 
     func: Callable
     func_args: dict[str, Any] | None = None
->>>>>>> upstream/main

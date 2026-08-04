@@ -21,11 +21,7 @@ import random
 import re
 import string
 import time
-<<<<<<< HEAD
 from typing import Any, get_args
-=======
-from typing import Any
->>>>>>> upstream/main
 import uuid
 
 from kubeflow_trainer_api import models
@@ -88,13 +84,9 @@ class KubernetesBackend(RuntimeBackend):
             logger.warning(
                 "Trainer control-plane version info is not available: "
                 f"unable to read 'kubeflow_trainer_version' from ConfigMap "
-<<<<<<< HEAD
-                f"'{config_map_name}' in namespace '{system_namespace}': {e}"
-=======
                 f"'{config_map_name}' in namespace '{system_namespace}': {e}. "
                 "If your Trainer control-plane is installed in a different namespace, "
                 "set the KUBEFLOW_SYSTEM_NAMESPACE environment variable accordingly."
->>>>>>> upstream/main
             )
             return
 
@@ -129,21 +121,12 @@ class KubernetesBackend(RuntimeBackend):
                 namespace_thread.get(common_constants.DEFAULT_TIMEOUT)
             )
         except multiprocessing.TimeoutError as e:
-<<<<<<< HEAD
-            raise TimeoutError(f"Timeout to list {constants.TRAINING_RUNTIME_KIND}s") from e
-        except client.ApiException as e:
-            if e.status != 404:
-                raise RuntimeError(f"Failed to list {constants.TRAINING_RUNTIME_KIND}s") from e
-        except Exception as e:
-            raise RuntimeError(f"Failed to list {constants.TRAINING_RUNTIME_KIND}s") from e
-=======
             raise TimeoutError(f"Timeout to list {types.RuntimeKind.TRAINING_RUNTIME}s") from e
         except client.ApiException as e:
             if e.status != 404:
                 raise RuntimeError(f"Failed to list {types.RuntimeKind.TRAINING_RUNTIME}s") from e
         except Exception as e:
             raise RuntimeError(f"Failed to list {types.RuntimeKind.TRAINING_RUNTIME}s") from e
->>>>>>> upstream/main
 
         # Fetch cluster-scoped ClusterTrainingRuntimes.
         cluster_runtimes = None
@@ -152,11 +135,6 @@ class KubernetesBackend(RuntimeBackend):
                 cluster_thread.get(common_constants.DEFAULT_TIMEOUT)
             )
         except multiprocessing.TimeoutError as e:
-<<<<<<< HEAD
-            raise TimeoutError(f"Timeout to list {constants.CLUSTER_TRAINING_RUNTIME_KIND}s") from e
-        except Exception as e:
-            raise RuntimeError(f"Failed to list {constants.CLUSTER_TRAINING_RUNTIME_KIND}s") from e
-=======
             raise TimeoutError(
                 f"Timeout to list {types.RuntimeKind.CLUSTER_TRAINING_RUNTIME}s"
             ) from e
@@ -164,7 +142,6 @@ class KubernetesBackend(RuntimeBackend):
             raise RuntimeError(
                 f"Failed to list {types.RuntimeKind.CLUSTER_TRAINING_RUNTIME}s"
             ) from e
->>>>>>> upstream/main
 
         # Collect runtimes in a map, preferring namespaced over cluster-scoped
         runtimes_by_name = {}
@@ -179,14 +156,10 @@ class KubernetesBackend(RuntimeBackend):
         if cluster_runtimes:
             for runtime in cluster_runtimes.items:
                 if runtime.metadata and runtime.metadata.name:
-<<<<<<< HEAD
-                    runtimes_by_name.setdefault(runtime.metadata.name, runtime)
-=======
                     runtimes_by_name.setdefault(
                         runtime.metadata.name,
                         runtime,
                     )
->>>>>>> upstream/main
 
         try:
             for runtime in runtimes_by_name.values():
@@ -229,28 +202,16 @@ class KubernetesBackend(RuntimeBackend):
 
         except multiprocessing.TimeoutError as e:
             raise TimeoutError(
-<<<<<<< HEAD
-                f"Timeout to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
-=======
                 f"Timeout to get {types.RuntimeKind.TRAINING_RUNTIME}: {self.namespace}/{name}"
->>>>>>> upstream/main
             ) from e
         except client.ApiException as e:
             if e.status != 404:
                 raise RuntimeError(
-<<<<<<< HEAD
-                    f"Failed to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
-                ) from e
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
-=======
                     f"Failed to get {types.RuntimeKind.TRAINING_RUNTIME}: {self.namespace}/{name}"
                 ) from e
         except Exception as e:
             raise RuntimeError(
                 f"Failed to get {types.RuntimeKind.TRAINING_RUNTIME}: {self.namespace}/{name}"
->>>>>>> upstream/main
             ) from e
 
         try:
@@ -267,11 +228,7 @@ class KubernetesBackend(RuntimeBackend):
             return self.__get_runtime_from_cr(runtime)
         except multiprocessing.TimeoutError as e:
             raise TimeoutError(
-<<<<<<< HEAD
-                f"Timeout to get {constants.CLUSTER_TRAINING_RUNTIME_KIND}: {name}"
-=======
                 f"Timeout to get {types.RuntimeKind.CLUSTER_TRAINING_RUNTIME}: {name}"
->>>>>>> upstream/main
             ) from e
         except Exception as e:
             raise RuntimeError(
@@ -846,13 +803,7 @@ class KubernetesBackend(RuntimeBackend):
         | types.BuiltinTrainer
         | None = None,
         trainer_overrides: dict[str, Any] | None = None,
-<<<<<<< HEAD
-        spec_labels: dict[str, str] | None = None,
-        spec_annotations: dict[str, str] | None = None,
-        pod_template_overrides: models.IoK8sApiCoreV1PodTemplateSpec | None = None,
-=======
         runtime_patches: list[dict[str, Any]] | None = None,
->>>>>>> upstream/main
     ) -> models.TrainerV1alpha1TrainJobSpec:
         """Get TrainJob spec from the given parameters."""
 
@@ -902,21 +853,19 @@ class KubernetesBackend(RuntimeBackend):
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
 
-<<<<<<< HEAD
         # Setup RHAI trainer storage: parse output_dir for volume mounts (PVC/S3)
         # and inject cloud storage credentials from data connection secret
         if is_rhai_trainer:
-            _, trainer_cr, pod_template_overrides = rhai_utils.setup_rhai_trainer_storage(
-                trainer, trainer_cr, pod_template_overrides, self.core_api, self.namespace
+            _, trainer_cr, runtime_patches = rhai_utils.setup_rhai_trainer_storage(
+                trainer, trainer_cr, runtime_patches, self.core_api, self.namespace
             )
-=======
+
         # Convert runtime patches dicts to native model objects.
         runtime_patch_models = None
         if runtime_patches:
             runtime_patch_models = [
                 models.TrainerV1alpha1RuntimePatch.from_dict(p) for p in runtime_patches
             ]
->>>>>>> upstream/main
 
         trainjob_spec = models.TrainerV1alpha1TrainJobSpec(
             runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name, kind=runtime.kind.value),

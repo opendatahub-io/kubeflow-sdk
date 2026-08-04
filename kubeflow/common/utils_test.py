@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-<<<<<<< HEAD
 
 """Unit tests for kubeflow.common.utils module."""
 
@@ -19,26 +18,19 @@ from unittest.mock import mock_open, patch
 
 import pytest
 
-from kubeflow.common import constants
-from kubeflow.common.test.common import SUCCESS, TestCase
+from kubeflow.common import constants, utils
 from kubeflow.common.utils import get_default_target_namespace, is_running_in_k8s
+from kubeflow.trainer.test.common import SUCCESS, TestCase
 
 # --------------------------
 # is_running_in_k8s tests
 # --------------------------
-=======
-import pytest
-
-from kubeflow.common import utils
-from kubeflow.trainer.test.common import SUCCESS, TestCase
->>>>>>> upstream/main
 
 
 @pytest.mark.parametrize(
     "test_case",
     [
         TestCase(
-<<<<<<< HEAD
             name="running inside kubernetes",
             expected_status=SUCCESS,
             config={"isdir_return": True},
@@ -163,7 +155,17 @@ def test_get_default_target_namespace(test_case: TestCase):
     assert test_case.expected_status == SUCCESS
     assert result == test_case.expected_output
     print("test execution complete")
-=======
+
+
+# --------------------------
+# validate_wait_for_job_status tests
+# --------------------------
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
             name="valid polling_interval and timeout",
             expected_status=SUCCESS,
             config={"polling_interval": 2, "timeout": 600},
@@ -210,4 +212,3 @@ def test_validate_wait_for_job_status(test_case):
             utils.validate_wait_for_job_status(polling_interval, timeout)
     else:
         utils.validate_wait_for_job_status(polling_interval, timeout)
->>>>>>> upstream/main

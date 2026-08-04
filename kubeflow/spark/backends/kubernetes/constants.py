@@ -14,19 +14,14 @@
 
 """Constants for Kubernetes Spark backend."""
 
-<<<<<<< HEAD
-=======
 import textwrap
 
->>>>>>> upstream/main
 # SparkConnect CRD
 SPARK_CONNECT_GROUP = "sparkoperator.k8s.io"
 SPARK_CONNECT_VERSION = "v1alpha1"
 SPARK_CONNECT_PLURAL = "sparkconnects"
 SPARK_CONNECT_KIND = "SparkConnect"
 
-<<<<<<< HEAD
-=======
 # Spark Connect server port (must match Spark ConnectCommon.CONNECT_GRPC_BINDING_PORT)
 SPARK_CONNECT_PORT = 15002
 
@@ -45,7 +40,6 @@ SPARK_APPLICATION_VERSION = "v1beta2"
 SPARK_APPLICATION_PLURAL = "sparkapplications"
 SPARK_APPLICATION_KIND = "SparkApplication"
 
->>>>>>> upstream/main
 # Default values; keep major.minor aligned with pyspark-connect in pyproject.toml
 DEFAULT_SPARK_VERSION = "4.0.1"
 DEFAULT_SPARK_IMAGE = "apache/spark:4.0.1"
@@ -57,17 +51,6 @@ DEFAULT_DRIVER_CPU = 1
 DEFAULT_DRIVER_MEMORY = "512Mi"
 DEFAULT_EXECUTOR_CPU = 1
 DEFAULT_EXECUTOR_MEMORY = "512Mi"
-<<<<<<< HEAD
-
-# Spark Connect server port (must match Spark ConnectCommon.CONNECT_GRPC_BINDING_PORT)
-SPARK_CONNECT_PORT = 15002
-
-# Session name prefix
-SESSION_NAME_PREFIX = "spark-connect"
-
-# Spark Connect Maven package (required for Connect server main class on classpath)
-SPARK_CONNECT_PACKAGE_SCALA_VERSION = "2.13"
-=======
 DEFAULT_SERVICE_ACCOUNT = "spark-operator-spark"
 
 # Function-based Spark job script
@@ -86,4 +69,3 @@ FUNC_JOB_SCRIPT_TEMPLATE = textwrap.dedent(
     printf "%s" "$SCRIPT" > "{{func_file}}"
     """
 )
->>>>>>> upstream/main

@@ -367,13 +367,8 @@ def get_train_job(
     train_job_trainer: models.TrainerV1alpha1Trainer | None = None,
     labels: dict[str, str] | None = None,
     annotations: dict[str, str] | None = None,
-<<<<<<< HEAD
-    spec_labels: dict[str, str] | None = None,
-    spec_annotations: dict[str, str] | None = None,
-=======
     runtime_patches: list[models.TrainerV1alpha1RuntimePatch] | None = None,
     runtime_kind: types.RuntimeKind = types.RuntimeKind.TRAINING_RUNTIME,
->>>>>>> upstream/main
 ) -> models.TrainerV1alpha1TrainJob:
     """
     Create a mock TrainJob object with optional trainer configurations.
@@ -690,11 +685,7 @@ def create_cluster_training_runtime(
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
             mlPolicy=models.TrainerV1alpha1MLPolicy(
-<<<<<<< HEAD
-                torch=models.TrainerV1alpha1TorchMLPolicySource(),
-=======
                 torch={},
->>>>>>> upstream/main
                 numNodes=2,
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(
@@ -715,11 +706,7 @@ def create_training_runtime(
     """Create a mock namespaced TrainingRuntime object (not cluster-scoped)."""
     return models.TrainerV1alpha1TrainingRuntime(
         apiVersion=constants.API_VERSION,
-<<<<<<< HEAD
-        kind=constants.TRAINING_RUNTIME_KIND,
-=======
         kind=types.RuntimeKind.TRAINING_RUNTIME.value,
->>>>>>> upstream/main
         metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
             name=name,
             namespace=namespace,
@@ -727,11 +714,7 @@ def create_training_runtime(
         ),
         spec=models.TrainerV1alpha1TrainingRuntimeSpec(
             mlPolicy=models.TrainerV1alpha1MLPolicy(
-<<<<<<< HEAD
-                torch=models.TrainerV1alpha1TorchMLPolicySource(),
-=======
                 torch={},
->>>>>>> upstream/main
                 numNodes=2,
             ),
             template=models.TrainerV1alpha1JobSetTemplateSpec(
@@ -785,11 +768,6 @@ def create_runtime_type(
         image="example.com/test-runtime",
     )
     trainer.set_command(constants.TORCH_COMMAND)
-<<<<<<< HEAD
-    # Namespaced TrainingRuntime objects and default torch runtime use namespace scope;
-    # other runtimes created as cluster-scoped use cluster scope.
-    return types.Runtime(name=name, trainer=trainer)
-=======
 
     if kind is None:
         kind = (
@@ -803,7 +781,6 @@ def create_runtime_type(
         trainer=trainer,
         kind=kind,
     )
->>>>>>> upstream/main
 
 
 def get_train_job_data_type(
@@ -858,8 +835,6 @@ def get_train_job_data_type(
     )
 
 
-<<<<<<< HEAD
-=======
 def get_train_job_with_restarted_pods_data_type(
     runtime_name: str,
     train_job_name: str,
@@ -880,7 +855,6 @@ def get_train_job_with_restarted_pods_data_type(
     return train_job
 
 
->>>>>>> upstream/main
 def _run_verify_backend_with_core_api(core_api: Mock) -> tuple[list[str], int]:
     """Helper to run verify_backend and capture warning logs."""
 
@@ -939,10 +913,7 @@ def _run_verify_backend_with_core_api(core_api: Mock) -> tuple[list[str], int]:
                     "Trainer control-plane version info is not available",
                     "kubeflow-trainer-public",
                     "ConfigMap not found",
-<<<<<<< HEAD
-=======
                     "KUBEFLOW_SYSTEM_NAMESPACE",
->>>>>>> upstream/main
                 ],
             },
         ),
@@ -987,8 +958,6 @@ def test_verify_backend(test_case):
             expected_output=create_runtime_type(
                 name=TORCH_RUNTIME,
             ),
-<<<<<<< HEAD
-=======
         ),
         TestCase(
             name="prefer namespaced TrainingRuntime when both TrainingRuntime and ClusterTrainingRuntime exist",
@@ -998,7 +967,6 @@ def test_verify_backend(test_case):
                 name="runtime-1",
                 kind=types.RuntimeKind.TRAINING_RUNTIME,
             ),
->>>>>>> upstream/main
         ),
         TestCase(
             name="timeout error when getting runtime",
@@ -1075,15 +1043,11 @@ def test_get_runtime(kubernetes_backend, test_case):
                 "name": LIST_RUNTIMES,
             },
             expected_output=[
-<<<<<<< HEAD
-                create_runtime_type(name="runtime-1"),
-=======
                 types.Runtime(
                     name="runtime-1",
                     trainer=create_runtime_type(name="runtime-1").trainer,
                     kind=types.RuntimeKind.CLUSTER_TRAINING_RUNTIME,
                 ),
->>>>>>> upstream/main
                 create_runtime_type(name="runtime-2"),
                 create_runtime_type(name="runtime-3"),
             ],

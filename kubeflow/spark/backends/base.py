@@ -17,9 +17,6 @@
 import abc
 from collections.abc import Iterator
 
-<<<<<<< HEAD
-from kubeflow.spark.types.types import Driver, Executor, SparkConnectInfo
-=======
 from pyspark.sql import SparkSession
 
 from kubeflow.spark.types.types import (
@@ -31,19 +28,11 @@ from kubeflow.spark.types.types import (
     SparkJob,
     SparkJobStatus,
 )
->>>>>>> upstream/main
 
 
 class RuntimeBackend(abc.ABC):
     """Abstract base class for Spark backends.
 
-<<<<<<< HEAD
-    All Spark backends must implement these methods to manage SparkConnect sessions.
-    """
-
-    @abc.abstractmethod
-    def connect(
-=======
     All Spark backends must implement these methods to manage SparkConnect sessions and Spark batch jobs.
     """
 
@@ -53,7 +42,6 @@ class RuntimeBackend(abc.ABC):
 
     @abc.abstractmethod
     def create_and_connect(
->>>>>>> upstream/main
         self,
         num_executors: int | None = None,
         resources_per_executor: dict[str, str] | None = None,
@@ -61,13 +49,9 @@ class RuntimeBackend(abc.ABC):
         driver: Driver | None = None,
         executor: Executor | None = None,
         options: list | None = None,
-<<<<<<< HEAD
-    ) -> SparkConnectInfo:
-=======
         timeout: int = 300,
         connect_timeout: int = 120,
     ) -> SparkSession:
->>>>>>> upstream/main
         """Create a new SparkConnect session (INTERNAL USE ONLY).
 
         This is an internal method used by SparkClient.connect().
@@ -80,17 +64,11 @@ class RuntimeBackend(abc.ABC):
             driver: Driver configuration.
             executor: Executor configuration.
             options: List of configuration options (use Name option for custom name).
-<<<<<<< HEAD
-
-        Returns:
-            SparkConnectInfo with session details (may be in PROVISIONING state).
-=======
             timeout: Maximum time in seconds to wait for the session to become ready.
             connect_timeout: Maximum time in seconds to establish the Spark Connect session.
 
         Returns:
             Connected SparkSession.
->>>>>>> upstream/main
 
         Raises:
             TimeoutError: If the creation request times out.
@@ -141,37 +119,6 @@ class RuntimeBackend(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
-<<<<<<< HEAD
-    def _wait_for_session_ready(
-        self,
-        name: str,
-        timeout: int = 300,
-        polling_interval: int = 2,
-    ) -> SparkConnectInfo:
-        """Wait for a SparkConnect session to become ready (INTERNAL USE ONLY).
-
-        This is an internal method used by SparkClient.connect().
-        Use SparkClient.connect() instead of calling this directly.
-
-        Polls the session status until it reaches READY state or times out.
-
-        Args:
-            name: Session name.
-            timeout: Maximum wait time in seconds. Default 300 (5 minutes).
-            polling_interval: Seconds between status checks. Default 2.
-
-        Returns:
-            SparkConnectInfo when session is ready.
-
-        Raises:
-            TimeoutError: If session does not become ready within timeout.
-            RuntimeError: If session fails.
-        """
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-=======
->>>>>>> upstream/main
     def get_session_logs(
         self,
         name: str,
@@ -191,8 +138,6 @@ class RuntimeBackend(abc.ABC):
             RuntimeError: If the session/pod is not found or reading fails.
         """
         raise NotImplementedError()
-<<<<<<< HEAD
-=======
 
     # ------------------------------------------------------------------
     # Spark batch jobs
@@ -300,4 +245,3 @@ class RuntimeBackend(abc.ABC):
             Iterator over log lines.
         """
         raise NotImplementedError()
->>>>>>> upstream/main

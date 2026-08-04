@@ -28,42 +28,19 @@ classifiers = [
 dependencies = [
   "kubernetes>=27.2.0,<36.0.0",       # 36.0.0 has multiple regressions; see kubernetes-client/python#2592, #2596
   "pydantic>=2.10.0",
-<<<<<<< HEAD
-  "kubeflow-trainer-api>=2.0.0",
-  "kubeflow-katib-api>=0.19.0",
-  "structlog>=24.1.0",
-]
-
-[project.optional-dependencies]
-docker = [
-  "docker>=6.1.3",
-]
-podman = [
-  "podman>=5.6.0"
-]
-rhai = [
-  "fsspec>=2025.3.0",
-  "s3fs>=2025.3.0",
-]
-spark = [
-    # pyspark-connect is Apache Spark Python API with Spark Connect by default
-    # Match major.minor of pyspark-connect to Spark constants declared in kubeflow.spark.backends.kubernetes.constants
-    # Ensure pyspark-connect and the spark image align with the Spark version used in the Spark operator image
-    # https://github.com/kubeflow/spark-operator/blob/master/Dockerfile#L17
-    "pyspark-connect==4.0.1",
-    "kubeflow-spark-api>=2.4.0",
-]
-hub = [
-  "model-registry>=0.3.6",
-=======
   "requests>=2.25.0",
   "kubeflow-trainer-api>=2.2.0,<2.3",
   "kubeflow-katib-api>=0.19.0,<0.20",
+  "structlog>=24.1.0",
 ]
 
 [project.optional-dependencies]
 docker = ["docker>=6.1.3"]
 podman = ["podman>=5.6.0"]
+rhai = [
+  "fsspec>=2025.3.0",
+  "s3fs>=2025.3.0",
+]
 spark = [
   # pyspark-connect is Apache Spark Python API with Spark Connect by default
   # Match major.minor of pyspark-connect to Spark constants declared in kubeflow.spark.backends.kubernetes.constants
@@ -71,7 +48,6 @@ spark = [
   # https://github.com/kubeflow/spark-operator/blob/master/Dockerfile#L17
   "pyspark-connect==4.2.0",
   "kubeflow-spark-api>=2.4.0,<2.5",
->>>>>>> upstream/main
 ]
 hub = ["model-registry>=0.3.14,<0.4"]
 pipelines = ["kfp[kubernetes]>=2.17.0,<2.18"]
@@ -88,20 +64,7 @@ docs = [
 # These dependencies are only needed in E2E tests with Papermill.
 notebooks = ["papermill>=2.6.0", "ipykernel>=6.29.5"]
 dev = [
-<<<<<<< HEAD
-  "kubeflow[hub,spark]",
-  "pytest>=7.0",
-  "pytest-mock>=3.10",
-  "coverage>=7.0",
-  "kubeflow_trainer_api@git+https://github.com/opendatahub-io/trainer.git@095d52e5673bdf4fd2ca4696d38a7b83ba74b622#subdirectory=api/python_api",
-  "kubeflow_katib_api@git+https://github.com/kubeflow/katib.git@master#subdirectory=api/python_api",
-  "kubeflow_spark_api@git+https://github.com/kubeflow/spark-operator.git@master#subdirectory=api/python_api",
-  "ruff>=0.12.2",
-  "pre-commit>=4.2.0",
-  "PyGithub>=2.7.0",
-  "git-cliff>=2.11.0",
-=======
-  "kubeflow[docker,hub,pipelines,spark]",
+  "kubeflow[docker,hub,pipelines,rhai,spark]",
   "pytest>=7.0",
   "pytest-mock>=3.10",
   "coverage>=7.0",
@@ -109,7 +72,7 @@ dev = [
   "ruff>=0.12.2",
   "pre-commit>=4.2.0",
   "PyGithub>=2.7.0",
->>>>>>> upstream/main
+  "git-cliff>=2.11.0",
   "setuptools>=80.9.0",
   "ty>=0.0.11",
 ]
@@ -183,13 +146,8 @@ select = [
 ]
 
 ignore = [
-<<<<<<< HEAD
-  "B006",  # mutable-argument-default
-  "E501",  # Embedded HTML/SVG has long lines
-=======
   "B006", # mutable-argument-default
   "E501", # Embedded HTML/SVG has long lines
->>>>>>> upstream/main
 ]
 
 
@@ -207,13 +165,7 @@ markers = [
   "timeout: marks tests with timeout limit",
   "options: marks tests for Spark options pattern",
 ]
-<<<<<<< HEAD
-filterwarnings = [
-  "ignore::pydantic.warnings.PydanticDeprecatedSince20",
-]
-=======
 filterwarnings = ["ignore::pydantic.warnings.PydanticDeprecatedSince20"]
->>>>>>> upstream/main
 
 [tool.ty.environment]
 python-version = "3.10"

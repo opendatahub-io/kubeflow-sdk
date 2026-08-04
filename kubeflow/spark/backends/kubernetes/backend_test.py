@@ -14,32 +14,20 @@
 
 """Unit tests for KubernetesBackend."""
 
-<<<<<<< HEAD
-=======
-from datetime import datetime
-from functools import wraps
->>>>>>> upstream/main
 import multiprocessing
 from unittest.mock import Mock, patch
 
 from kubeflow_spark_api import models
-<<<<<<< HEAD
-=======
 from kubernetes import client
->>>>>>> upstream/main
 from kubernetes.client import ApiException
 import pytest
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.spark.backends.kubernetes import constants
 from kubeflow.spark.backends.kubernetes.backend import KubernetesBackend
-<<<<<<< HEAD
-from kubeflow.spark.backends.kubernetes.utils import validate_spark_connect_url
-=======
 from kubeflow.spark.backends.kubernetes.utils import (
     validate_spark_connect_url,
 )
->>>>>>> upstream/main
 from kubeflow.spark.test.common import (
     DEFAULT_NAMESPACE,
     FAILED,
@@ -52,9 +40,6 @@ from kubeflow.spark.test.common import (
     TestCase,
 )
 from kubeflow.spark.types.options import Labels, Name
-<<<<<<< HEAD
-from kubeflow.spark.types.types import SparkConnectInfo, SparkConnectState
-=======
 from kubeflow.spark.types.types import (
     FileJob,
     FuncJob,
@@ -62,7 +47,6 @@ from kubeflow.spark.types.types import (
     SparkConnectState,
     SparkJobStatus,
 )
->>>>>>> upstream/main
 
 # --------------------------
 # Fixtures
@@ -94,24 +78,6 @@ def kubernetes_backend():
 
 
 # --------------------------
-<<<<<<< HEAD
-# Mock Handlers
-# --------------------------
-
-
-def create_mock_thread(response=None):
-    """Create mock thread that returns response on .get()."""
-    mock_thread = Mock()
-    mock_thread.get.return_value = response
-    return mock_thread
-
-
-def create_error_thread(exc: Exception):
-    """Create mock thread whose .get() raises the given exception."""
-    mock_thread = Mock()
-    mock_thread.get.side_effect = exc
-    return mock_thread
-=======
 # Mock Helpers
 # --------------------------
 
@@ -168,7 +134,6 @@ def get_spark_application_list(
     return models.SparkV1beta2SparkApplicationList(
         items=items,
     )
->>>>>>> upstream/main
 
 
 def get_spark_connect(
@@ -207,8 +172,6 @@ def get_spark_connect(
     )
 
 
-<<<<<<< HEAD
-=======
 def create_mock_thread(response=None):
     """Create mock thread that returns response on .get()."""
     mock_thread = Mock()
@@ -228,7 +191,6 @@ def create_error_thread(exc: Exception):
 # --------------------------
 
 
->>>>>>> upstream/main
 def mock_get_response(name: str) -> dict:
     """Return mock CR response based on session name."""
     if name == SPARK_CONNECT_READY:
@@ -244,18 +206,13 @@ def mock_get_response(name: str) -> dict:
         return get_spark_connect(name=name, state="Provisioning").to_dict()
     elif name == SPARK_CONNECT_FAILED:
         return get_spark_connect(name=name, state="Failed").to_dict()
-<<<<<<< HEAD
-=======
     elif name.startswith("spark-job-"):
         return get_spark_application(name=name).to_dict()
->>>>>>> upstream/main
     raise ApiException(status=404, reason="Not Found")
 
 
 def mock_list_response(*args, **kwargs) -> dict:
     """Return mock list response."""
-<<<<<<< HEAD
-=======
     plural = kwargs.get("plural")
 
     if plural == constants.SPARK_APPLICATION_PLURAL:
@@ -268,7 +225,6 @@ def mock_list_response(*args, **kwargs) -> dict:
             ]
         ).to_dict()
 
->>>>>>> upstream/main
     spark_connect_list = models.SparkV1alpha1SparkConnectList(
         api_version=f"{constants.SPARK_CONNECT_GROUP}/{constants.SPARK_CONNECT_VERSION}",
         kind="SparkConnectList",
@@ -289,8 +245,6 @@ def mock_create_response(*args, **kwargs) -> dict:
     return spark_connect.to_dict()
 
 
-<<<<<<< HEAD
-=======
 def mock_create_spark_application_response(*args, **kwargs) -> dict:
     """Return mock SparkApplication create response."""
     body = kwargs.get("body", {})
@@ -309,7 +263,6 @@ def mock_create_spark_application_response(*args, **kwargs) -> dict:
     return spark_application.to_dict()
 
 
->>>>>>> upstream/main
 def mock_delete_response(name: str) -> None:
     """Mock delete - raise 404 for unknown sessions."""
     if name.startswith("unknown"):
@@ -324,14 +277,10 @@ def _mock_create(*args, **kw):
         return create_error_thread(multiprocessing.TimeoutError())
     elif namespace == RUNTIME:
         return create_error_thread(RuntimeError())
-<<<<<<< HEAD
-    return create_mock_thread(response=mock_create_response(**kw))
-=======
     body = kw.get("body", {})
     if body.get("kind") == constants.SPARK_APPLICATION_KIND:
         return create_mock_thread(response=mock_create_spark_application_response(*args, **kw))
     return create_mock_thread(response=mock_create_response(*args, **kw))
->>>>>>> upstream/main
 
 
 def _mock_get(*args, **kw):
@@ -376,11 +325,7 @@ def _mock_list(*args, **kw):
         return create_error_thread(multiprocessing.TimeoutError())
     elif namespace == RUNTIME:
         return create_error_thread(RuntimeError())
-<<<<<<< HEAD
-    return create_mock_thread(response=mock_list_response())
-=======
     return create_mock_thread(response=mock_list_response(*args, **kw))
->>>>>>> upstream/main
 
 
 def _mock_read_logs(*args, **kw):
@@ -394,54 +339,6 @@ def _mock_read_logs(*args, **kw):
 
 
 # --------------------------
-<<<<<<< HEAD
-=======
-# Test Helpers
-# --------------------------
-
-
-def sample_func() -> None:
-    """Sample function used for FuncJob tests."""
-    pass
-
-
-async def async_func() -> None:
-    """Sample async function used for FuncJob tests."""
-    pass
-
-
-def func_with_reserved_delimiter() -> None:
-    print(
-        """
-__KUBEFLOW_FUNC_JOB_SCRIPT__
-"""
-    )
-
-
-def sample_func_with_args(
-    name: str,
-    count: int,
-) -> None:
-    """Sample function with parameters."""
-    pass
-
-
-def _decorator(func: callable) -> callable:
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-@_decorator
-def decorated_func() -> None:
-    """Sample decorated function for testing."""
-    pass
-
-
-# --------------------------
->>>>>>> upstream/main
 # Tests
 # --------------------------
 
@@ -690,18 +587,6 @@ def test_get_session_logs(kubernetes_backend, test_case):
 
         # Mock get_session so execution always reaches the log-reading code path.
         pod_name = test_case.config.get("pod_name", f"{test_case.config['name']}-0")
-<<<<<<< HEAD
-        kubernetes_backend.get_session = Mock(return_value=Mock(pod_name=pod_name))
-
-        logs = list(kubernetes_backend.get_session_logs(test_case.config["name"], follow=False))
-
-        if test_case.expected_status == SUCCESS:
-            assert len(logs) == 2
-            assert logs[0] == "log line 1"
-        else:
-            # Should not reach here for failed test cases
-            raise AssertionError(f"Expected {test_case.expected_error.__name__} but test succeeded")
-=======
         kubernetes_backend.get_session = Mock(return_value=Mock(driver_pod_name=pod_name))
 
         with patch(
@@ -742,7 +627,6 @@ def test_get_session_logs(kubernetes_backend, test_case):
                             follow=False,
                         )
                     )
->>>>>>> upstream/main
 
     except Exception as e:
         if test_case.expected_status == FAILED:
@@ -986,8 +870,6 @@ def test_extract_name_option(kubernetes_backend, test_case):
     except Exception as e:
         assert type(e) is test_case.expected_error
     print("test execution complete")
-<<<<<<< HEAD
-=======
 
 
 @pytest.mark.parametrize(
@@ -1062,192 +944,6 @@ def test_validate_file_job(kubernetes_backend, test_case):
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("hello", True),
-        (123, True),
-        (3.14, True),
-        (True, True),
-        (None, True),
-        ([1, "a", False, None], True),
-        ((1, 2, "a"), True),
-        ({"a": 1, "b": [1, 2, None]}, True),
-        (float("inf"), False),
-        (float("-inf"), False),
-        (float("nan"), False),
-        ({1: "value"}, False),
-        (object(), False),
-    ],
-)
-def test_is_supported_func_arg(
-    kubernetes_backend,
-    value,
-    expected,
-):
-    """Test KubernetesBackend._is_supported_func_arg()."""
-
-    assert kubernetes_backend._is_supported_func_arg(value) is expected
-
-
-@pytest.mark.parametrize(
-    "test_case",
-    [
-        TestCase(
-            name="valid function job",
-            expected_status=SUCCESS,
-            config={
-                "job": FuncJob(
-                    func=sample_func,
-                ),
-            },
-        ),
-        TestCase(
-            name="non callable function",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func="not-callable",
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="lambda function",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=lambda: None,
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="async function",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=async_func,
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="decorated function",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=decorated_func,
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="func_args unsupported value",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=sample_func,
-                    func_args={
-                        "date": datetime.now(),
-                    },
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="func_args not dict",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=sample_func,
-                    func_args="invalid",
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="func_args keys not strings",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=sample_func,
-                    func_args={1: "value"},
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="func source contains reserved heredoc delimiter",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=func_with_reserved_delimiter,
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="valid func_args",
-            expected_status=SUCCESS,
-            config={
-                "job": FuncJob(
-                    func=sample_func_with_args,
-                    func_args={
-                        "name": "spark",
-                        "count": 1,
-                    },
-                ),
-            },
-        ),
-        TestCase(
-            name="func_args missing required argument",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=sample_func_with_args,
-                    func_args={
-                        "name": "spark",
-                    },
-                ),
-            },
-            expected_error=ValueError,
-        ),
-        TestCase(
-            name="func_args unexpected keyword",
-            expected_status=FAILED,
-            config={
-                "job": FuncJob(
-                    func=sample_func_with_args,
-                    func_args={
-                        "name": "spark",
-                        "count": 1,
-                        "extra": True,
-                    },
-                ),
-            },
-            expected_error=ValueError,
-        ),
-    ],
-)
-def test_validate_func_job(kubernetes_backend, test_case):
-    """Test KubernetesBackend._validate_func_job()."""
-
-    print("Executing test:", test_case.name)
-
-    try:
-        kubernetes_backend._validate_func_job(
-            test_case.config["job"],
-        )
-
-        assert test_case.expected_status == SUCCESS
-
-    except Exception as e:
-        assert type(e) is test_case.expected_error
-
-    print("Test execution complete.")
-
-
-@pytest.mark.parametrize(
     "test_case",
     [
         TestCase(
@@ -1260,13 +956,14 @@ def test_validate_func_job(kubernetes_backend, test_case):
             },
         ),
         TestCase(
-            name="valid function job",
-            expected_status=SUCCESS,
+            name="function job not implemented",
+            expected_status=FAILED,
             config={
                 "job": FuncJob(
-                    func=sample_func,
+                    func=lambda: None,
                 ),
             },
+            expected_error=NotImplementedError,
         ),
         TestCase(
             name="invalid job type",
@@ -1338,16 +1035,6 @@ def test_validate_job(kubernetes_backend, test_case):
             },
             expected_error=ValueError,
         ),
-        TestCase(
-            name="valid function job submission",
-            expected_status=SUCCESS,
-            config={
-                "job": FuncJob(
-                    func=sample_func,
-                ),
-                "use_mock_command": True,
-            },
-        ),
     ],
 )
 def test_submit_job(kubernetes_backend, test_case):
@@ -1360,27 +1047,9 @@ def test_submit_job(kubernetes_backend, test_case):
             DEFAULT_NAMESPACE,
         )
 
-        if test_case.config.get("use_mock_command"):
-            with patch(
-                "kubeflow.spark.backends.kubernetes.backend.get_spark_application_cr_from_func_job",
-            ) as mock_build:
-                mock_build.return_value = get_spark_application(
-                    "spark-job-test",
-                )
-
-                job = kubernetes_backend.submit_job(
-                    job=test_case.config["job"],
-                )
-
-                mock_build.assert_called_once()
-
-                assert mock_build.call_args.kwargs["func"] == test_case.config["job"].func
-                assert mock_build.call_args.kwargs["func_args"] == test_case.config["job"].func_args
-
-        else:
-            job = kubernetes_backend.submit_job(
-                job=test_case.config["job"],
-            )
+        job = kubernetes_backend.submit_job(
+            job=test_case.config["job"],
+        )
 
         assert test_case.expected_status == SUCCESS
         assert job.name.startswith("spark-job-")
@@ -1834,12 +1503,14 @@ def test_wait_for_job_status(kubernetes_backend, test_case):
             if test_case.expected_status == SUCCESS:
                 kubernetes_backend.wait_for_job_status(
                     name="test-job",
+                    status={SparkJobStatus.COMPLETED},
                     timeout=1,
                 )
             else:
                 with pytest.raises(test_case.expected_error):
                     kubernetes_backend.wait_for_job_status(
                         name="test-job",
+                        status={SparkJobStatus.COMPLETED},
                         timeout=1,
                     )
 
@@ -2000,4 +1671,3 @@ def test_get_job_logs(kubernetes_backend, test_case):
             raise
 
     print("test execution complete")
->>>>>>> upstream/main

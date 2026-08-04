@@ -14,28 +14,17 @@
 
 """Utility functions for Kubernetes Spark backend."""
 
-<<<<<<< HEAD
-import re
-=======
-from collections.abc import Callable, Iterator
-import inspect
+from collections.abc import Iterator
 import logging
 import math
 import multiprocessing
 import os
 import re
-import textwrap
->>>>>>> upstream/main
 from typing import Any
 from urllib.parse import urlparse
 import uuid
 
 from kubeflow_spark_api import models
-<<<<<<< HEAD
-
-from kubeflow.spark.backends.kubernetes import constants
-from kubeflow.spark.types.types import Driver, Executor, SparkConnectInfo, SparkConnectState
-=======
 from kubernetes import client
 
 from kubeflow.common import constants as common_constants
@@ -304,7 +293,6 @@ def _validate_cpu_value(cpu: str | int | None) -> int:
 # ----------------------------------------------------------------------
 # Spark Connect session utility functions
 # ----------------------------------------------------------------------
->>>>>>> upstream/main
 
 
 def generate_session_name() -> str:
@@ -337,25 +325,6 @@ def validate_spark_connect_url(url: str) -> bool:
     return True
 
 
-<<<<<<< HEAD
-def _memory_kubernetes_to_spark(memory: str) -> str:
-    """Convert Kubernetes-style memory (e.g. 4Gi, 512Mi) to Spark/JVM style (4g, 512m).
-
-    SparkSubmit expects JVM memory suffixes (k, m, g, t); Kubernetes uses Ki, Mi, Gi, Ti.
-    """
-    if not memory or not memory[-1].isalpha():
-        return memory
-    m = re.match(r"^(\d+(?:\.\d+)?)\s*([KMGTPE]i?|k|m|g|t|kb|mb|gb|tb)?$", memory, re.IGNORECASE)
-    if not m:
-        return memory
-    num, suffix = m.group(1), (m.group(2) or "").lower()
-    k8s_to_spark = {"ki": "k", "mi": "m", "gi": "g", "ti": "t", "pi": "p", "ei": "e"}
-    spark_suffix = k8s_to_spark.get(suffix, suffix.rstrip("b") if suffix else "")
-    return num + spark_suffix
-
-
-=======
->>>>>>> upstream/main
 def build_service_url(info: SparkConnectInfo) -> str:
     """Build Spark Connect URL from session info.
 
@@ -369,11 +338,7 @@ def build_service_url(info: SparkConnectInfo) -> str:
     return f"sc://{service}.{info.namespace}.svc.cluster.local:{constants.SPARK_CONNECT_PORT}"
 
 
-<<<<<<< HEAD
-def get_server_spec_from_driver(
-=======
 def get_spark_connect_driver_spec(
->>>>>>> upstream/main
     driver: Driver | None = None,
 ) -> models.SparkV1alpha1ServerSpec:
     """Convert SDK Driver to API ServerSpec.
@@ -383,28 +348,6 @@ def get_spark_connect_driver_spec(
 
     Returns:
         API ServerSpec model.
-<<<<<<< HEAD
-    """
-    cores = constants.DEFAULT_DRIVER_CPU
-    memory = _memory_kubernetes_to_spark(constants.DEFAULT_DRIVER_MEMORY)
-    template = None
-
-    if driver:
-        if driver.resources:
-            if "cpu" in driver.resources:
-                cores = int(driver.resources["cpu"])
-            if "memory" in driver.resources:
-                memory = _memory_kubernetes_to_spark(driver.resources["memory"])
-
-        if driver.service_account:
-            # PodSpec requires containers field (can be empty list)
-            template = models.IoK8sApiCoreV1PodTemplateSpec(
-                spec=models.IoK8sApiCoreV1PodSpec(
-                    containers=[],
-                    service_account_name=driver.service_account,
-                )
-            )
-=======
 
     Raises:
         ValueError:
@@ -421,7 +364,6 @@ def get_spark_connect_driver_spec(
                 service_account_name=driver.service_account,
             )
         )
->>>>>>> upstream/main
 
     return models.SparkV1alpha1ServerSpec(
         cores=cores,
@@ -430,11 +372,7 @@ def get_spark_connect_driver_spec(
     )
 
 
-<<<<<<< HEAD
-def get_executor_spec_from_executor(
-=======
 def get_spark_connect_executor_spec(
->>>>>>> upstream/main
     executor: Executor | None = None,
     num_executors: int | None = None,
     resources_per_executor: dict[str, str] | None = None,
@@ -452,33 +390,6 @@ def get_spark_connect_executor_spec(
 
     Returns:
         API ExecutorSpec model.
-<<<<<<< HEAD
-    """
-    # Determine number of instances
-    if executor and executor.num_instances:
-        instances = executor.num_instances
-    elif num_executors:
-        instances = num_executors
-    else:
-        instances = constants.DEFAULT_NUM_EXECUTORS
-
-    # Determine resource dict
-    resource_dict = None
-    if executor and executor.resources_per_executor:
-        resource_dict = executor.resources_per_executor
-    elif resources_per_executor:
-        resource_dict = resources_per_executor
-
-    # Extract cores and memory
-    cores = constants.DEFAULT_EXECUTOR_CPU
-    memory = _memory_kubernetes_to_spark(constants.DEFAULT_EXECUTOR_MEMORY)
-
-    if resource_dict:
-        if "cpu" in resource_dict:
-            cores = int(resource_dict["cpu"])
-        if "memory" in resource_dict:
-            memory = _memory_kubernetes_to_spark(resource_dict["memory"])
-=======
 
     Raises:
         ValueError:
@@ -489,7 +400,6 @@ def get_spark_connect_executor_spec(
         num_executors,
         resources_per_executor,
     )
->>>>>>> upstream/main
 
     return models.SparkV1alpha1ExecutorSpec(
         instances=instances,
@@ -521,11 +431,7 @@ def build_spark_connect_cr(
     Args:
         name: Session name.
         namespace: Kubernetes namespace.
-<<<<<<< HEAD
-        spark_version: Spark version (default: 3.4.1).
-=======
         spark_version: Spark version (default: `constants.DEFAULT_SPARK_VERSION`).
->>>>>>> upstream/main
         num_executors: Number of executor instances (simple mode).
         resources_per_executor: Resource requirements per executor (simple mode).
         spark_conf: Spark configuration properties.
@@ -536,26 +442,14 @@ def build_spark_connect_cr(
 
     Returns:
         SparkConnect CR as typed Pydantic model.
-<<<<<<< HEAD
-=======
 
     Raises:
         ValueError:
             If the provided driver or executor resource configuration is invalid.
->>>>>>> upstream/main
     """
     spark_version = spark_version or constants.DEFAULT_SPARK_VERSION
 
     # Build server spec using conversion function
-<<<<<<< HEAD
-    server_spec = get_server_spec_from_driver(driver)
-
-    # Build executor spec using conversion function
-    executor_spec = get_executor_spec_from_executor(executor, num_executors, resources_per_executor)
-
-    # Determine image (driver.image > default)
-    image = driver.image if driver and driver.image else constants.DEFAULT_SPARK_IMAGE
-=======
     server_spec = get_spark_connect_driver_spec(driver)
 
     # Build executor spec using conversion function
@@ -568,7 +462,6 @@ def build_spark_connect_cr(
     )
 
     image = driver.image if driver and driver.image else default_image
->>>>>>> upstream/main
 
     # Use direct JAR URL to avoid Ivy cache (container may not have writable ~/.ivy2)
     connect_jar_url = (
@@ -649,17 +542,11 @@ def get_spark_connect_info_from_cr(
         name=spark_connect_cr.metadata.name,
         namespace=spark_connect_cr.metadata.namespace,
         state=state,
-<<<<<<< HEAD
-        pod_name=server_status.pod_name if server_status else None,
-=======
         driver_pod_name=server_status.pod_name if server_status else None,
->>>>>>> upstream/main
         pod_ip=server_status.pod_ip if server_status else None,
         service_name=server_status.service_name if server_status else None,
         creation_timestamp=spark_connect_cr.metadata.creation_timestamp,
     )
-<<<<<<< HEAD
-=======
 
 
 # ----------------------------------------------------------------------
@@ -727,89 +614,7 @@ def get_spark_job_executor_spec(
     )
 
 
-def get_func_job_init_container(
-    command: list[str],
-) -> models.IoK8sApiCoreV1Container:
-    """Build the initContainer for a function-based Spark job.
-
-    The initContainer executes the provided command to reconstruct the
-    generated Spark application in the shared volume before the Spark
-    driver starts.
-
-    Args:
-        command:
-            Container command that generates the Spark application script.
-
-    Returns:
-        Kubernetes initContainer specification.
-    """
-    return models.IoK8sApiCoreV1Container(
-        name=constants.FUNC_JOB_INIT_CONTAINER_NAME,
-        image=constants.DEFAULT_SPARK_IMAGE,
-        command=command,
-        volume_mounts=[
-            models.IoK8sApiCoreV1VolumeMount(
-                name=constants.FUNC_JOB_VOLUME_NAME,
-                mount_path=constants.FUNC_JOB_SCRIPT_DIR,
-            ),
-        ],
-    )
-
-
-def get_command_using_spark_func(
-    func: Callable,
-    func_args: dict[str, Any] | None,
-) -> list[str]:
-    """Get the Spark command from the given function and parameters.
-
-    The generated command contains the user-defined function followed by its
-    invocation. The command is written by the SparkApplication initContainer
-    to a Python script and executed by the Spark driver.
-
-    The provided function must be self-contained because only its source code
-    is extracted. Any required imports should be placed inside the function
-    body. Module-level imports, globals, closures, and decorated functions
-    are not supported.
-
-
-    Args:
-        func:
-            Python function to execute.
-
-        func_args:
-            Keyword arguments passed to the function.
-
-    Returns:
-        Container command that generates the Spark application script.
-
-    Raises:
-        ValueError:
-            If ``func`` is not callable.
-    """
-    if not callable(func):
-        raise ValueError(f"Expected a callable function, got {type(func)}.")
-
-    func_code = textwrap.dedent(
-        inspect.getsource(func),
-    )
-
-    if func_args is None:
-        func_call = f"{func.__name__}()"
-    else:
-        func_call = f"{func.__name__}(**{repr(func_args)})"
-
-    func_code = f"{func_code}\n{func_call}\n"
-    return [
-        "bash",
-        "-c",
-        constants.FUNC_JOB_SCRIPT_TEMPLATE.format(
-            func_code=func_code,
-            func_file=(f"{constants.FUNC_JOB_SCRIPT_DIR}/{constants.FUNC_JOB_SCRIPT_NAME}"),
-        ),
-    ]
-
-
-def get_spark_application_cr_from_file_job(
+def build_spark_application_cr(
     name: str,
     namespace: str,
     main_file: str,
@@ -817,13 +622,13 @@ def get_spark_application_cr_from_file_job(
     num_executors: int | None = None,
     resources_per_executor: dict[str, str] | None = None,
 ) -> models.SparkV1beta2SparkApplication:
-    """Build a SparkApplication custom resource for a file-based Spark job.
+    """Build a SparkApplication custom resource.
 
     Args:
         name: Job name.
         namespace: Kubernetes namespace.
-        main_file: Path or URI to the Spark application file.
-        arguments: Command-line arguments passed to the Spark application.
+        main_file: Application file path or URI.
+        arguments: Command-line arguments.
         num_executors: Number of executor instances.
         resources_per_executor: Resource requirements for each executor.
 
@@ -855,80 +660,6 @@ def get_spark_application_cr_from_file_job(
             ),
         ),
     )
-
-
-def get_spark_application_cr_from_func_job(
-    name: str,
-    namespace: str,
-    func: Callable,
-    func_args: dict[str, Any] | None = None,
-    num_executors: int | None = None,
-    resources_per_executor: dict[str, str] | None = None,
-) -> models.SparkV1beta2SparkApplication:
-    """Build a SparkApplication custom resource for a function-based Spark job.
-
-    Args:
-        name: Job name.
-        namespace: Kubernetes namespace.
-        func: Python function to execute as the Spark application.
-        func_args: Keyword arguments passed to the function.
-        num_executors: Number of executor instances.
-        resources_per_executor: Resource requirements for each executor.
-
-    Returns:
-        SparkApplication custom resource model.
-
-    Raises:
-        ValueError:
-            If the provided function is invalid or the executor resource
-            configuration is invalid.
-    """
-
-    command = get_command_using_spark_func(
-        func=func,
-        func_args=func_args,
-    )
-
-    spark_application = models.SparkV1beta2SparkApplication(
-        api_version=f"{constants.SPARK_APPLICATION_GROUP}/{constants.SPARK_APPLICATION_VERSION}",
-        kind=constants.SPARK_APPLICATION_KIND,
-        metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
-            name=name,
-            namespace=namespace,
-        ),
-        spec=models.SparkV1beta2SparkApplicationSpec(
-            spark_version=constants.DEFAULT_SPARK_VERSION,
-            type="Python",
-            mode="cluster",
-            image=constants.DEFAULT_SPARK_IMAGE,
-            main_application_file=constants.FUNC_JOB_MAIN_FILE,
-            driver=get_spark_job_driver_spec(),
-            executor=get_spark_job_executor_spec(
-                num_executors=num_executors,
-                resources_per_executor=resources_per_executor,
-            ),
-        ),
-    )
-
-    spark_application.spec.volumes = [
-        models.IoK8sApiCoreV1Volume(
-            name=constants.FUNC_JOB_VOLUME_NAME,
-            empty_dir=models.IoK8sApiCoreV1EmptyDirVolumeSource(),
-        ),
-    ]
-
-    spark_application.spec.driver.init_containers = [
-        get_func_job_init_container(command),
-    ]
-
-    spark_application.spec.driver.volume_mounts = [
-        models.IoK8sApiCoreV1VolumeMount(
-            name=constants.FUNC_JOB_VOLUME_NAME,
-            mount_path=constants.FUNC_JOB_SCRIPT_DIR,
-        ),
-    ]
-
-    return spark_application
 
 
 def get_spark_application_info_from_cr(
@@ -970,4 +701,3 @@ def get_spark_application_info_from_cr(
         num_executors=num_executors,
         driver_pod_name=driver_pod_name,
     )
->>>>>>> upstream/main

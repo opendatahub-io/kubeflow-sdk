@@ -86,17 +86,9 @@ class TrainerClient:
             name: Name of the runtime.
 
         Returns:
-<<<<<<< HEAD
-            A runtime object.
-
-        Raises:
-            TimeoutError: Timeout to get a runtime.
-            RuntimeError: Failed to get a runtime.
-=======
             A runtime object. If both namespace-scoped and
             cluster-scoped runtimes exist with the same name, the
             namespace-scoped runtime is returned.
->>>>>>> upstream/main
         """
         return self.backend.get_runtime(name=name)
 
@@ -121,10 +113,7 @@ class TrainerClient:
         trainer: types.CustomTrainer
         | types.CustomTrainerContainer
         | types.BuiltinTrainer
-<<<<<<< HEAD
         | RHAITrainer
-=======
->>>>>>> upstream/main
         | None = None,
         options: list | None = None,
     ) -> str:

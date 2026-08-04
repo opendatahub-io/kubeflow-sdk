@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-# Copyright The Kubeflow Authors.
-=======
 # Copyright 2025 The Kubeflow Authors.
->>>>>>> upstream/main
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,40 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-<<<<<<< HEAD
-"""Unit tests for Container backend utility functions."""
-
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from kubeflow.common.constants import UNKNOWN
-from kubeflow.trainer.backends.container.types import ContainerBackendConfig
-from kubeflow.trainer.backends.container.utils import (
-    aggregate_status_from_containers,
-    build_environment,
-    build_pip_install_cmd,
-    container_status_to_trainjob_status,
-    create_workdir,
-    get_container_status,
-    get_dataset_initializer,
-    get_model_initializer,
-    get_optional_initializer_envs,
-    get_training_script_code,
-    maybe_pull_image,
-)
-=======
-import pytest
-
-from kubeflow.common.constants import UNKNOWN
 from kubeflow.trainer.backends.container import utils as container_utils
->>>>>>> upstream/main
+from kubeflow.trainer.backends.container.types import ContainerBackendConfig
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 from kubeflow.trainer.types import types
 
 
-<<<<<<< HEAD
 # -------------------------------------------------------
 # create_workdir
 # -------------------------------------------------------
@@ -58,7 +32,7 @@ def test_create_workdir(tmp_path):
     print("Executing test: create_workdir creates directory")
 
     with patch("kubeflow.trainer.backends.container.utils.Path.home", return_value=tmp_path):
-        result = create_workdir("my-job")
+        result = container_utils.create_workdir("my-job")
 
     expected = str((tmp_path / ".kubeflow" / "trainer" / "containers" / "my-job").resolve())
     assert result == expected
@@ -73,17 +47,16 @@ def test_create_workdir(tmp_path):
 def _sample_train_func():
     x = 1 + 1
     return x
-=======
+
+
 def simple_train_func():
     print("Training...")
->>>>>>> upstream/main
 
 
 @pytest.mark.parametrize(
     "test_case",
     [
         TestCase(
-<<<<<<< HEAD
             name="training script without func_args",
             expected_status=SUCCESS,
             config={"func_args": None},
@@ -105,7 +78,7 @@ def test_get_training_script_code(test_case: TestCase):
         func=_sample_train_func,
         func_args=test_case.config["func_args"],
     )
-    code = get_training_script_code(trainer)
+    code = container_utils.get_training_script_code(trainer)
 
     assert "def _sample_train_func():" in code
     assert test_case.expected_output in code
@@ -141,7 +114,7 @@ def test_build_environment(test_case: TestCase):
         func=_sample_train_func,
         env=test_case.config["env"],
     )
-    result = build_environment(trainer)
+    result = container_utils.build_environment(trainer)
     assert result == test_case.expected_output
 
     print("test execution complete")
@@ -154,32 +127,12 @@ def test_build_environment(test_case: TestCase):
     "test_case",
     [
         TestCase(
-            name="pip install with packages",
-            expected_status=SUCCESS,
-            config={"packages": ["torch", "numpy"]},
-            expected_output=(
-                "PIP_DISABLE_PIP_VERSION_CHECK=1 pip install "
-                "--no-warn-script-location "
-                "--index-url https://pypi.org/simple  "
-                '"torch" "numpy" && '
-            ),
-        ),
-        TestCase(
-            name="pip install without packages",
-=======
             name="no packages returns empty string",
->>>>>>> upstream/main
             expected_status=SUCCESS,
             config={"packages": None},
             expected_output="",
         ),
         TestCase(
-<<<<<<< HEAD
-            name="pip install with index urls",
-            expected_status=SUCCESS,
-            config={
-                "packages": ["transformers"],
-=======
             name="single package with defaults",
             expected_status=SUCCESS,
             config={"packages": ["torchvision"]},
@@ -205,20 +158,12 @@ def test_build_environment(test_case: TestCase):
             expected_status=SUCCESS,
             config={
                 "packages": ["torchvision", "transformers[torch]"],
->>>>>>> upstream/main
                 "pip_index_urls": [
                     "https://pypi.org/simple",
                     "https://download.pytorch.org/whl/cpu",
                 ],
             },
             expected_output=(
-<<<<<<< HEAD
-                "PIP_DISABLE_PIP_VERSION_CHECK=1 pip install "
-                "--no-warn-script-location "
-                "--index-url https://pypi.org/simple "
-                "--extra-index-url https://download.pytorch.org/whl/cpu "
-                '"transformers" && '
-=======
                 "if PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_BREAK_SYSTEM_PACKAGES=1"
                 " python -m pip install --no-warn-script-location"
                 " --index-url https://pypi.org/simple"
@@ -240,31 +185,12 @@ def test_build_environment(test_case: TestCase):
                 " torchvision 'transformers[torch]'\" >&2;"
                 " cat /tmp/pip_install.log >&2; exit 1;"
                 " fi && "
->>>>>>> upstream/main
             ),
         ),
     ],
 )
 def test_build_pip_install_cmd(test_case: TestCase):
     """Test pip install command generation."""
-<<<<<<< HEAD
-    print(f"Executing test: {test_case.name}")
-
-    kwargs = {"func": _sample_train_func, "packages_to_install": test_case.config["packages"]}
-    if "pip_index_urls" in test_case.config:
-        kwargs["pip_index_urls"] = test_case.config["pip_index_urls"]
-    trainer = types.CustomTrainer(**kwargs)
-
-    result = build_pip_install_cmd(trainer)
-    assert result == test_case.expected_output
-
-    print("test execution complete")
-
-
-# -------------------------------------------------------
-# container_status_to_trainjob_status
-# -------------------------------------------------------
-=======
     print("Executing test:", test_case.name)
     try:
         trainer = types.CustomTrainer(
@@ -283,12 +209,13 @@ def test_build_pip_install_cmd(test_case: TestCase):
     print("test execution complete")
 
 
->>>>>>> upstream/main
+# -------------------------------------------------------
+# container_status_to_trainjob_status
+# -------------------------------------------------------
 @pytest.mark.parametrize(
     "test_case",
     [
         TestCase(
-<<<<<<< HEAD
             name="running container",
             expected_status=SUCCESS,
             config={"status": "running", "exit_code": 0},
@@ -324,7 +251,7 @@ def test_container_status_to_trainjob_status(test_case: TestCase):
     """Test mapping of container status to TrainJob status."""
     print(f"Executing test: {test_case.name}")
 
-    result = container_status_to_trainjob_status(
+    result = container_utils.container_status_to_trainjob_status(
         test_case.config["status"],
         test_case.config["exit_code"],
     )
@@ -340,49 +267,6 @@ def test_container_status_to_trainjob_status(test_case: TestCase):
     "test_case",
     [
         TestCase(
-            name="failed takes priority",
-            expected_status=SUCCESS,
-            config={
-                "statuses": [
-                    constants.TRAINJOB_RUNNING,
-                    constants.TRAINJOB_FAILED,
-                    constants.TRAINJOB_COMPLETE,
-                ],
-            },
-            expected_output=constants.TRAINJOB_FAILED,
-        ),
-        TestCase(
-            name="running takes priority over complete",
-            expected_status=SUCCESS,
-            config={
-                "statuses": [
-                    constants.TRAINJOB_RUNNING,
-                    constants.TRAINJOB_COMPLETE,
-                ],
-            },
-            expected_output=constants.TRAINJOB_RUNNING,
-        ),
-        TestCase(
-            name="all complete",
-            expected_status=SUCCESS,
-            config={
-                "statuses": [
-                    constants.TRAINJOB_COMPLETE,
-                    constants.TRAINJOB_COMPLETE,
-                ],
-            },
-            expected_output=constants.TRAINJOB_COMPLETE,
-        ),
-        TestCase(
-            name="created present",
-            expected_status=SUCCESS,
-            config={
-                "statuses": [
-                    constants.TRAINJOB_CREATED,
-                    constants.TRAINJOB_COMPLETE,
-                ],
-            },
-=======
             name="empty list is not complete",
             expected_status=SUCCESS,
             config={"statuses": []},
@@ -422,19 +306,15 @@ def test_container_status_to_trainjob_status(test_case: TestCase):
             name="created with unknown is created",
             expected_status=SUCCESS,
             config={"statuses": [constants.TRAINJOB_CREATED, UNKNOWN]},
->>>>>>> upstream/main
             expected_output=constants.TRAINJOB_CREATED,
         ),
     ],
 )
 def test_aggregate_status_from_containers(test_case: TestCase):
-<<<<<<< HEAD
-    """Test aggregation of multiple container statuses."""
-    print(f"Executing test: {test_case.name}")
-
-    result = aggregate_status_from_containers(test_case.config["statuses"])
+    """Test aggregation of container statuses into a TrainJob status."""
+    print("Executing test:", test_case.name)
+    result = container_utils.aggregate_status_from_containers(test_case.config["statuses"])
     assert result == test_case.expected_output
-
     print("test execution complete")
 
 
@@ -501,9 +381,9 @@ def test_maybe_pull_image(test_case: TestCase):
 
     if test_case.expected_status == FAILED:
         with pytest.raises(test_case.expected_error):
-            maybe_pull_image(adapter, image, test_case.config["policy"])
+            container_utils.maybe_pull_image(adapter, image, test_case.config["policy"])
     else:
-        maybe_pull_image(adapter, image, test_case.config["policy"])
+        container_utils.maybe_pull_image(adapter, image, test_case.config["policy"])
         if test_case.expected_output == "pull":
             adapter.pull_image.assert_called_once_with(image)
         else:
@@ -545,7 +425,7 @@ def test_get_container_status(test_case: TestCase):
             test_case.config["exit_code"],
         )
 
-    result = get_container_status(adapter, "container-abc")
+    result = container_utils.get_container_status(adapter, "container-abc")
     assert result == test_case.expected_output
 
     print("test execution complete")
@@ -562,7 +442,7 @@ def test_get_optional_initializer_envs():
         storage_uri="hf://user/dataset",
         access_token="tok123",
     )
-    env = get_optional_initializer_envs(init, required_fields={"storage_uri"})
+    env = container_utils.get_optional_initializer_envs(init, required_fields={"storage_uri"})
     assert "ACCESS_TOKEN" in env
     assert env["ACCESS_TOKEN"] == "tok123"
     assert "STORAGE_URI" not in env
@@ -621,9 +501,9 @@ def test_get_dataset_initializer(test_case: TestCase):
 
     if test_case.expected_status == FAILED:
         with pytest.raises(test_case.expected_error):
-            get_dataset_initializer(test_case.config["dataset"], cfg)
+            container_utils.get_dataset_initializer(test_case.config["dataset"], cfg)
     else:
-        result = get_dataset_initializer(test_case.config["dataset"], cfg)
+        result = container_utils.get_dataset_initializer(test_case.config["dataset"], cfg)
         assert result.name == test_case.expected_output["name"]
         assert result.env["STORAGE_URI"] == test_case.expected_output["env_storage_uri"]
         assert result.env["OUTPUT_PATH"] == test_case.expected_output["env_output_path"]
@@ -683,18 +563,12 @@ def test_get_model_initializer(test_case: TestCase):
 
     if test_case.expected_status == FAILED:
         with pytest.raises(test_case.expected_error):
-            get_model_initializer(test_case.config["model"], cfg)
+            container_utils.get_model_initializer(test_case.config["model"], cfg)
     else:
-        result = get_model_initializer(test_case.config["model"], cfg)
+        result = container_utils.get_model_initializer(test_case.config["model"], cfg)
         assert result.name == test_case.expected_output["name"]
         assert result.env["STORAGE_URI"] == test_case.expected_output["env_storage_uri"]
         assert result.env["OUTPUT_PATH"] == test_case.expected_output["env_output_path"]
         assert result.image == cfg.model_initializer_image
 
-=======
-    """Test aggregation of container statuses into a TrainJob status."""
-    print("Executing test:", test_case.name)
-    result = container_utils.aggregate_status_from_containers(test_case.config["statuses"])
-    assert result == test_case.expected_output
->>>>>>> upstream/main
     print("test execution complete")

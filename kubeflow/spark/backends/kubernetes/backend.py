@@ -14,33 +14,17 @@
 
 """Kubernetes backend for Spark operations."""
 
-<<<<<<< HEAD
 from collections.abc import Iterator
 import contextlib
 import logging
-=======
-import ast
-from collections.abc import Iterator
-import contextlib
-import inspect
-import logging
-import math
->>>>>>> upstream/main
 import multiprocessing
 import os
 import random
 import socket
 import subprocess
 import sys
-<<<<<<< HEAD
 import threading
 import time
-=======
-import textwrap
-import threading
-import time
-from typing import Any
->>>>>>> upstream/main
 
 from kubeflow_spark_api import models
 from kubernetes import client, config
@@ -52,18 +36,10 @@ from kubeflow.spark.backends.base import RuntimeBackend
 from kubeflow.spark.backends.kubernetes import constants
 from kubeflow.spark.backends.kubernetes.utils import (
     build_service_url,
+    build_spark_application_cr,
     build_spark_connect_cr,
-<<<<<<< HEAD
-    generate_session_name,
-    get_spark_connect_info_from_cr,
-)
-from kubeflow.spark.types.options import Name
-from kubeflow.spark.types.types import Driver, Executor, SparkConnectInfo, SparkConnectState
-=======
     generate_job_name,
     generate_session_name,
-    get_spark_application_cr_from_file_job,
-    get_spark_application_cr_from_func_job,
     get_spark_application_info_from_cr,
     get_spark_connect_info_from_cr,
     read_pod_logs,
@@ -79,7 +55,6 @@ from kubeflow.spark.types.types import (
     SparkJob,
     SparkJobStatus,
 )
->>>>>>> upstream/main
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +62,6 @@ _spark_debug_logging_enabled = False
 
 
 def _enable_spark_debug_logging() -> None:
-<<<<<<< HEAD
-    """Turn on INFO logging for kubeflow.spark to stderr (for E2E debug)."""
-=======
     """Enable INFO-level logging for the ``kubeflow.spark`` logger.
 
     This helper is intended for E2E debugging and configures logging only once.
@@ -97,7 +69,6 @@ def _enable_spark_debug_logging() -> None:
     Returns:
         None.
     """
->>>>>>> upstream/main
     global _spark_debug_logging_enabled
     if _spark_debug_logging_enabled:
         return
@@ -111,12 +82,6 @@ def _enable_spark_debug_logging() -> None:
 
 
 class KubernetesBackend(RuntimeBackend):
-<<<<<<< HEAD
-    """Kubernetes backend for managing SparkConnect sessions."""
-
-    def __init__(self, backend_config: KubernetesBackendConfig):
-        """Initialize Kubernetes Spark backend."""
-=======
     """Kubernetes backend for managing SparkConnect sessions and Spark batch jobs."""
 
     def __init__(self, backend_config: KubernetesBackendConfig):
@@ -129,7 +94,6 @@ class KubernetesBackend(RuntimeBackend):
             ConfigException:
                 If the Kubernetes configuration cannot be loaded.
         """
->>>>>>> upstream/main
         self.namespace = backend_config.namespace or "default"
 
         if backend_config.config_file:
@@ -145,13 +109,10 @@ class KubernetesBackend(RuntimeBackend):
         self.custom_api = client.CustomObjectsApi()
         self.core_api = client.CoreV1Api()
 
-<<<<<<< HEAD
-=======
     # ------------------------------------------------------------------
     # Spark Connect sessions
     # ------------------------------------------------------------------
 
->>>>>>> upstream/main
     def _extract_name_option(self, options: list | None) -> tuple[str, list]:
         """Extract Name option from options list, or generate name if absent.
 
@@ -190,9 +151,6 @@ class KubernetesBackend(RuntimeBackend):
         executor: Executor | None = None,
         options: list | None = None,
     ) -> SparkConnectInfo:
-<<<<<<< HEAD
-        """Create a new SparkConnect session (INTERNAL USE ONLY)."""
-=======
         """Create a SparkConnect session.
 
         Args:
@@ -212,7 +170,6 @@ class KubernetesBackend(RuntimeBackend):
             RuntimeError:
                 If the SparkConnect resource cannot be created.
         """
->>>>>>> upstream/main
         # Extract Name option if present, or auto-generate
         name, filtered_options = self._extract_name_option(options)
 
@@ -253,9 +210,6 @@ class KubernetesBackend(RuntimeBackend):
         return get_spark_connect_info_from_cr(spark_connect_cr)
 
     def get_session(self, name: str) -> SparkConnectInfo:
-<<<<<<< HEAD
-        """Get information about a SparkConnect session."""
-=======
         """Get information about a SparkConnect session.
 
         Args:
@@ -270,7 +224,6 @@ class KubernetesBackend(RuntimeBackend):
             RuntimeError:
                 If the SparkConnect resource cannot be retrieved.
         """
->>>>>>> upstream/main
         try:
             thread = self.custom_api.get_namespaced_custom_object(
                 group=constants.SPARK_CONNECT_GROUP,
@@ -302,9 +255,6 @@ class KubernetesBackend(RuntimeBackend):
             ) from e
 
     def list_sessions(self) -> list[SparkConnectInfo]:
-<<<<<<< HEAD
-        """List all SparkConnect sessions."""
-=======
         """List SparkConnect sessions.
 
         Returns:
@@ -316,7 +266,6 @@ class KubernetesBackend(RuntimeBackend):
             RuntimeError:
                 If the SparkConnect resources cannot be listed.
         """
->>>>>>> upstream/main
         try:
             thread = self.custom_api.list_namespaced_custom_object(
                 group=constants.SPARK_CONNECT_GROUP,
@@ -339,9 +288,6 @@ class KubernetesBackend(RuntimeBackend):
         return [get_spark_connect_info_from_cr(sc) for sc in spark_connect_list.items]
 
     def delete_session(self, name: str) -> None:
-<<<<<<< HEAD
-        """Delete a SparkConnect session."""
-=======
         """Delete a SparkConnect session.
 
         Args:
@@ -353,7 +299,6 @@ class KubernetesBackend(RuntimeBackend):
             RuntimeError:
                 If the SparkConnect resource cannot be deleted.
         """
->>>>>>> upstream/main
         try:
             thread = self.custom_api.delete_namespaced_custom_object(
                 group=constants.SPARK_CONNECT_GROUP,
@@ -388,11 +333,6 @@ class KubernetesBackend(RuntimeBackend):
         timeout: int = 300,
         polling_interval: int = 2,
     ) -> SparkConnectInfo:
-<<<<<<< HEAD
-        """Wait for a SparkConnect session to become ready (INTERNAL USE ONLY)."""
-        start_time = time.time()
-        last_log_time = 0.0
-=======
         """Wait for a SparkConnect session to become ready.
 
         Args:
@@ -417,7 +357,6 @@ class KubernetesBackend(RuntimeBackend):
         """
         start_time = time.monotonic()
         last_log_time = start_time
->>>>>>> upstream/main
 
         while True:
             info = self.get_session(name)
@@ -429,11 +368,7 @@ class KubernetesBackend(RuntimeBackend):
                     name,
                     info.state,
                     info.service_name,
-<<<<<<< HEAD
-                    time.time() - start_time,
-=======
                     time.monotonic() - start_time,
->>>>>>> upstream/main
                 )
                 return info
 
@@ -442,11 +377,7 @@ class KubernetesBackend(RuntimeBackend):
                     f"{constants.SPARK_CONNECT_KIND} failed: {self.namespace}/{name}"
                 )
 
-<<<<<<< HEAD
-            now = time.time()
-=======
             now = time.monotonic()
->>>>>>> upstream/main
             if now - last_log_time >= 10.0:
                 logger.info(
                     "Waiting for session: %s/%s state=%s serviceName=%s elapsed=%.0fs",
@@ -469,9 +400,6 @@ class KubernetesBackend(RuntimeBackend):
     def _wait_for_connect_port(
         self, host: str, port: int, timeout_sec: int = 60, interval_sec: float = 2.0
     ) -> bool:
-<<<<<<< HEAD
-        """Wait until a TCP connection to host:port succeeds (Spark Connect server reachable)."""
-=======
         """Wait until a Spark Connect server becomes reachable.
 
         Args:
@@ -490,7 +418,6 @@ class KubernetesBackend(RuntimeBackend):
         Returns:
             True if the server becomes reachable before the timeout, otherwise False.
         """
->>>>>>> upstream/main
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() < deadline:
             try:
@@ -526,13 +453,8 @@ class KubernetesBackend(RuntimeBackend):
             port = int(port_str) if port_str else random.randint(15002, 16002)
         # Prefer pod when available (bypasses Service/EndpointSlice); then try svc names
         candidates: list[tuple[str, str]] = []
-<<<<<<< HEAD
-        if info.pod_name:
-            candidates.append(("pod", info.pod_name))
-=======
         if info.driver_pod_name:
             candidates.append(("pod", info.driver_pod_name))
->>>>>>> upstream/main
         for svc in [f"{info.name}-svc", info.service_name, f"{info.name}-server"]:
             if svc and not any(c[0] == "svc" and c[1] == svc for c in candidates):
                 candidates.append(("svc", svc))
@@ -785,45 +707,6 @@ class KubernetesBackend(RuntimeBackend):
         name: str,
         follow: bool = False,
     ) -> Iterator[str]:
-<<<<<<< HEAD
-        """Get logs from a SparkConnect session."""
-        info = self.get_session(name)
-
-        if not info.pod_name:
-            raise RuntimeError(
-                f"No server pod for {constants.SPARK_CONNECT_KIND}: {self.namespace}/{name}"
-            )
-
-        try:
-            if follow:
-                thread = self.core_api.read_namespaced_pod_log(
-                    name=info.pod_name,
-                    namespace=self.namespace,
-                    follow=True,
-                    _preload_content=False,
-                    async_req=True,
-                )
-                resp = thread.get(common_constants.DEFAULT_TIMEOUT)
-                for line in resp.stream():
-                    yield line.decode("utf-8").rstrip("\n")
-            else:
-                thread = self.core_api.read_namespaced_pod_log(
-                    name=info.pod_name,
-                    namespace=self.namespace,
-                    async_req=True,
-                )
-                logs = thread.get(common_constants.DEFAULT_TIMEOUT)
-                for line in logs.split("\n"):
-                    yield line
-        except multiprocessing.TimeoutError as e:
-            raise TimeoutError(
-                f"Timeout to get logs for {constants.SPARK_CONNECT_KIND}: {self.namespace}/{name}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to get logs for {constants.SPARK_CONNECT_KIND}: {self.namespace}/{name}"
-            ) from e
-=======
         """Get logs from a SparkConnect session.
 
         Logs are retrieved from the Kubernetes driver pod associated with the
@@ -889,6 +772,8 @@ class KubernetesBackend(RuntimeBackend):
             job: Spark job definition to validate.
 
         Raises:
+            NotImplementedError: If a function-based job is provided, as function-based jobs are
+                not supported in Phase 1.
             TypeError: If job is not an instance of FileJob or FuncJob.
         """
 
@@ -897,8 +782,7 @@ class KubernetesBackend(RuntimeBackend):
             return
 
         if isinstance(job, FuncJob):
-            self._validate_func_job(job)
-            return
+            raise NotImplementedError("Function-based jobs are not supported in Phase 1.")
 
         raise TypeError("job must be an instance of FileJob or FuncJob.")
 
@@ -925,104 +809,6 @@ class KubernetesBackend(RuntimeBackend):
             if not all(isinstance(arg, str) for arg in job.args):
                 raise ValueError("All `job.args` must be strings.")
 
-    def _is_supported_func_arg(
-        self,
-        value: Any,
-    ) -> bool:
-        """Return whether a FuncJob argument value is supported."""
-
-        if value is None:
-            return True
-
-        if isinstance(value, (str, int, bool)):
-            return True
-
-        if isinstance(value, float):
-            return math.isfinite(value)
-
-        if isinstance(value, (list, tuple)):
-            return all(self._is_supported_func_arg(v) for v in value)
-
-        if isinstance(value, dict):
-            return all(
-                isinstance(k, str) and self._is_supported_func_arg(v) for k, v in value.items()
-            )
-
-        return False
-
-    def _validate_func_job(
-        self,
-        job: FuncJob,
-    ) -> None:
-        """Validate a function-based Spark job.
-
-        Args:
-            job: Function-based Spark job definition.
-
-        Raises:
-            ValueError:
-                If the function or function arguments are invalid.
-        """
-
-        if not inspect.isfunction(job.func):
-            raise ValueError("`job.func` must be a Python function.")
-
-        if inspect.iscoroutinefunction(job.func):
-            raise ValueError("Async functions are not supported.")
-
-        if job.func.__name__ == "<lambda>":
-            raise ValueError("Lambda functions are not supported.")
-
-        try:
-            func_source = textwrap.dedent(inspect.getsource(job.func))
-        except TypeError as e:
-            raise ValueError(
-                "`job.func` must be a pure-Python function; built-in or "
-                "C-implemented callables are not supported."
-            ) from e
-        except OSError as e:
-            raise ValueError(
-                "`job.func` source could not be read. Functions defined "
-                "interactively (REPL/Jupyter) or generated dynamically are "
-                "not supported; define it in a Python module."
-            ) from e
-
-        if any(
-            line.strip() == constants.FUNC_JOB_SCRIPT_DELIMITER for line in func_source.splitlines()
-        ):
-            raise ValueError(
-                "`job.func` source contains the reserved heredoc delimiter "
-                f"{constants.FUNC_JOB_SCRIPT_DELIMITER!r}, which is not supported."
-            )
-
-        try:
-            func_tree = ast.parse(func_source)
-        except SyntaxError as e:
-            raise ValueError("`job.func` source could not be parsed.") from e
-
-        if any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.decorator_list
-            for node in func_tree.body
-        ):
-            raise ValueError("Decorated functions are not supported.")
-
-        if job.func_args is not None:
-            if not isinstance(job.func_args, dict):
-                raise ValueError("`job.func_args` must be a dictionary.")
-
-            if not all(isinstance(key, str) for key in job.func_args):
-                raise ValueError("All `job.func_args` keys must be strings.")
-
-            if not all(self._is_supported_func_arg(value) for value in job.func_args.values()):
-                raise ValueError(
-                    "`job.func_args` values must contain only JSON-like primitive types."
-                )
-
-            try:
-                inspect.signature(job.func).bind(**job.func_args)
-            except TypeError as e:
-                raise ValueError(f"Invalid `job.func_args`: {e}") from e
-
     def submit_job(
         self,
         job: FileJob | FuncJob,
@@ -1033,7 +819,7 @@ class KubernetesBackend(RuntimeBackend):
 
         Args:
             job:
-                File-based or function-based Spark workload definition.
+                File-based Spark workload definition.
 
             num_executors:
                 Number of executor instances.
@@ -1063,25 +849,14 @@ class KubernetesBackend(RuntimeBackend):
             job_name,
         )
 
-        if isinstance(job, FileJob):
-            spark_application = get_spark_application_cr_from_file_job(
-                name=job_name,
-                namespace=self.namespace,
-                main_file=job.file_source,
-                arguments=job.args,
-                num_executors=num_executors,
-                resources_per_executor=resources_per_executor,
-            )
-
-        else:
-            spark_application = get_spark_application_cr_from_func_job(
-                name=job_name,
-                namespace=self.namespace,
-                func=job.func,
-                func_args=job.func_args,
-                num_executors=num_executors,
-                resources_per_executor=resources_per_executor,
-            )
+        spark_application = build_spark_application_cr(
+            name=job_name,
+            namespace=self.namespace,
+            main_file=job.file_source,
+            arguments=job.args,
+            num_executors=num_executors,
+            resources_per_executor=resources_per_executor,
+        )
 
         try:
             thread = self.custom_api.create_namespaced_custom_object(
@@ -1250,7 +1025,7 @@ class KubernetesBackend(RuntimeBackend):
     def wait_for_job_status(
         self,
         name: str,
-        status: set[SparkJobStatus] = {SparkJobStatus.COMPLETED},
+        status: set[SparkJobStatus] | None = None,
         timeout: int = 600,
         polling_interval: int = 2,
     ) -> SparkJob:
@@ -1271,6 +1046,10 @@ class KubernetesBackend(RuntimeBackend):
                 one of the target statuses.
             TimeoutError: If the target status is not reached within the timeout.
         """
+
+        if status is None:
+            status = {SparkJobStatus.COMPLETED}
+
         if timeout <= 0:
             raise ValueError("timeout must be positive.")
 
@@ -1372,4 +1151,3 @@ class KubernetesBackend(RuntimeBackend):
                 ) from e
 
         return _stream()
->>>>>>> upstream/main
