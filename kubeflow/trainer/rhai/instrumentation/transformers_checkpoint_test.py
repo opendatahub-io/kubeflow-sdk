@@ -51,9 +51,28 @@ class TestCreateCheckpointInstrumentation:
             "CheckpointManager",
             "apply_checkpointing",
             "upload_final_model_to_cloud",
+            "_call_save_checkpoint",
         ],
     )
     def test_source_contains_required_symbols(self, required_symbol: str) -> None:
         """Source must define all symbols expected by the generated pod script."""
         source = inspect.getsource(_create_checkpoint_instrumentation)
         assert required_symbol in source
+
+    def test_save_checkpoint_is_called_through_signature_shim(self) -> None:
+        """Direct _save_checkpoint calls break on Transformers signature changes."""
+        source = inspect.getsource(_create_checkpoint_instrumentation)
+        assert "self.trainer._save_checkpoint(self.trainer.model" not in source
+        assert "self._call_save_checkpoint()" in source
+
+    def test_upload_worker_is_daemon_with_atexit_drain(self) -> None:
+        """CPython joins non-daemon threads before atexit, so the worker must be a daemon.
+
+        A non-daemon worker whose loop exits only on _shutdown_event deadlocks
+        interpreter shutdown when training raises, and the atexit drain that would
+        set the event never runs.
+        """
+        source = inspect.getsource(_create_checkpoint_instrumentation)
+        assert "daemon=True" in source
+        assert "daemon=False" not in source
+        assert "atexit.register(self.shutdown_upload_worker)" in source

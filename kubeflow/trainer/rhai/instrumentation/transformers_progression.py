@@ -68,12 +68,17 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
                     else:
                         setattr(_progression_metrics_state, key, value)
 
+    # Keys already reported as non-finite, so the warning is logged once per metric
+    _warned_non_finite_metrics: set[str] = set()
+
     def _json_safe(value):
         """Replace non-finite floats with None so payloads stay valid JSON."""
         if isinstance(value, float):
             return value if math.isfinite(value) else None
         if isinstance(value, dict):
             return {key: _json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_json_safe(item) for item in value]
         return value
 
     def _get_progression_metrics_json() -> str:
@@ -225,10 +230,19 @@ def _create_progression_instrumentation(metrics_port: int) -> tuple:
 
                     if not isinstance(metric_value, (int, float)):
                         continue
-                    # NaN/inf serialize as invalid JSON (`NaN`, `Infinity`) and
-                    # break strict parsers on the controller side
+                    # NaN/inf serialize as invalid JSON (`NaN`, `Infinity`) and break
+                    # strict parsers. Report None rather than skipping: the state
+                    # dicts are merged, so skipping would keep serving the last good
+                    # value and hide divergence behind a plausible stale number.
                     if not math.isfinite(metric_value):
-                        continue
+                        if key not in _warned_non_finite_metrics:
+                            _warned_non_finite_metrics.add(key)
+                            print(
+                                f"[Kubeflow] Warning: metric {key!r} is non-finite "
+                                f"({metric_value}); reporting null",
+                                flush=True,
+                            )
+                        metric_value = None
 
                     if key.startswith("eval_"):
                         eval_metrics[key] = metric_value

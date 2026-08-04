@@ -14,8 +14,10 @@ def _render_dict_literal(func_args: dict, indent: str) -> str:
 
     lines: list[str] = []
     for key, value in func_args.items():
-        if not isinstance(key, str):
-            raise ValueError(f"func_args key {key!r} of type {type(key).__name__} must be str")
+        # Exact str only: a str subclass can override __repr__ and inject arbitrary
+        # code through the key, which is emitted below without a literal_eval check.
+        if type(key) is not str:
+            raise ValueError(f"func_args key of type {type(key).__name__} must be str")
         # Render repr exactly once and validate that rendering — a stateful __repr__
         # must not be able to return a safe literal during validation and an
         # executable expression during rendering (CWE-94).

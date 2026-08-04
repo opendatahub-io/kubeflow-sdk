@@ -72,6 +72,16 @@ class TestRenderDictLiteral:
         with pytest.raises(ValueError, match="must be str"):
             _render_dict_literal({("a",): "value"}, "    ")
 
+    def test_str_subclass_key_cannot_inject(self) -> None:
+        """A str subclass passes isinstance but can override __repr__ to inject code."""
+
+        class EvilKey(str):
+            def __repr__(self) -> str:
+                return "__import__('os').system('id')"
+
+        with pytest.raises(ValueError, match="must be str"):
+            _render_dict_literal({EvilKey("data_path"): "x"}, "    ")
+
     def test_stateful_repr_cannot_inject(self) -> None:
         """A __repr__ that mutates between calls must not reach the rendered output.
 

@@ -2475,7 +2475,11 @@ def test_async_upload_worker_scaffolding():
     )
 
     assert "LifoQueue" in checkpoint_header
-    assert "daemon=False" in checkpoint_header
+    # daemon=True is required: CPython joins non-daemon threads before running
+    # atexit handlers, so a non-daemon worker would deadlock interpreter shutdown
+    # when training raises and the atexit drain below could never fire.
+    assert "daemon=True" in checkpoint_header
+    assert "atexit.register(self.shutdown_upload_worker)" in checkpoint_header
     assert "KubeflowCheckpointUploader" in checkpoint_header
     assert "1 hour" in checkpoint_header
     assert "self._upload_thread.join(timeout=" in checkpoint_header

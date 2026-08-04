@@ -116,7 +116,17 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             save_checkpoint = self.trainer._save_checkpoint
             try:
                 params = inspect.signature(save_checkpoint).parameters
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as e:
+                _log(
+                    f"Could not introspect _save_checkpoint signature ({e}); "
+                    "falling back to the legacy (model, trial) call"
+                )
+                save_checkpoint(self.trainer.model, trial=None)
+                return
+            # A wrapped/decorated method may expose only (*args, **kwargs); name
+            # lookups find nothing, so pass the legacy arguments it forwards on.
+            accepts_kwargs = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+            if accepts_kwargs and "trial" not in params:
                 save_checkpoint(self.trainer.model, trial=None)
                 return
             kwargs = {}
@@ -228,6 +238,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             self.upload_queue = None  # LifoQueue for background uploads
             self._upload_thread = None  # Background worker thread
             self._shutdown_event = None  # Event to signal shutdown
+            self._atexit_registered = False  # Drain hook registered at most once
             self._upload_error = None  # Store background thread errors
             self._upload_error_lock = threading.Lock()  # Lock for error propagation
 
@@ -376,19 +387,25 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 # when resuming after interruptions the latest state is picked.
                 self.upload_queue = LifoQueue()
             self._shutdown_event = threading.Event()
+            # daemon=True is required for the atexit drain below to run at all:
+            # CPython joins every non-daemon thread before calling atexit handlers,
+            # so a non-daemon worker whose loop only exits on _shutdown_event would
+            # deadlock interpreter shutdown and the handler would never fire.
             self._upload_thread = threading.Thread(
                 target=self._upload_worker_loop,
-                daemon=False,
+                daemon=True,
                 name="KubeflowCheckpointUploader",
             )
             self._upload_thread.start()
-            # Transformers skips on_train_end when the training loop raises, which
-            # would leave this non-daemon thread polling forever and hang interpreter
-            # shutdown. atexit guarantees the shutdown event is set on any exit path;
-            # shutdown_upload_worker is idempotent so a second call is harmless.
-            import atexit
+            # Transformers skips on_train_end when the training loop raises, so the
+            # graceful shutdown never runs on that path. Drain uploads at exit
+            # instead; shutdown_upload_worker is idempotent, and registering only
+            # once keeps a restarted worker from queuing duplicate 1h joins.
+            if not self._atexit_registered:
+                import atexit
 
-            atexit.register(self.shutdown_upload_worker)
+                atexit.register(self.shutdown_upload_worker)
+                self._atexit_registered = True
             _log("Background upload worker started")
 
         def _upload_worker_loop(self) -> None:
@@ -552,6 +569,7 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                     )
                 else:
                     _log("Background upload worker stopped")
+                    self._upload_thread = None
 
         def on_init_end(self, args, state, control, **kwargs):
             """Download latest checkpoint from S3 (local rank 0)."""

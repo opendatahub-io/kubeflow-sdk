@@ -160,7 +160,13 @@ def _create_training_hub_progression_instrumentation(
                         timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                    # timeout bounds the wait, not the child: a tail stuck in
+                    # uninterruptible IO on a dead mount can still block here.
+                    print(
+                        f"[Kubeflow] Warning: Failed to read OSFT metrics: {e}",
+                        flush=True,
+                    )
                     return {}
 
                 if last_line:
@@ -220,7 +226,13 @@ def _create_training_hub_progression_instrumentation(
                         timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                    # timeout bounds the wait, not the child: a tail stuck in
+                    # uninterruptible IO on a dead mount can still block here.
+                    print(
+                        f"[Kubeflow] Warning: Failed to read SFT metrics: {e}",
+                        flush=True,
+                    )
                     return {}
 
                 if last_line:
@@ -262,7 +274,13 @@ def _create_training_hub_progression_instrumentation(
                         timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                    # timeout bounds the wait, not the child: a tail stuck in
+                    # uninterruptible IO on a dead mount can still block here.
+                    print(
+                        f"[Kubeflow] Warning: Failed to read LoRA SFT metrics: {e}",
+                        flush=True,
+                    )
                     return {}
 
                 if last_line:
@@ -498,7 +516,13 @@ def _create_training_hub_progression_instrumentation(
                         timeout=2,
                     )
                     lines = result.stdout.strip().split("\n")
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                    # timeout bounds the wait, not the child: a tail stuck in
+                    # uninterruptible IO on a dead mount can still block here.
+                    print(
+                        f"[Kubeflow] Warning: Failed to read LoRA GRPO metrics: {e}",
+                        flush=True,
+                    )
                     return {}
 
                 parsed = []
