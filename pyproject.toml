@@ -168,3 +168,8 @@ filterwarnings = [
 
 [tool.ty.environment]
 python-version = "3.10"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["kubeflow"]
+ignore_missing_imports = true
