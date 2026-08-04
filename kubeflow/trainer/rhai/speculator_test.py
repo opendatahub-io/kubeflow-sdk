@@ -1773,6 +1773,8 @@ def test_online_mode_valid():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -1792,6 +1794,8 @@ def test_online_mode_requires_dataset_name():
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.ONLINE,
             output_dir="pvc://test-pvc/output",
+            training_resources={"nvidia.com/gpu": 2},
+            vllm_resources={"nvidia.com/gpu": 1},
             config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
@@ -1809,6 +1813,8 @@ def test_online_mode_rejects_vllm_endpoint():
             dataset_name="sharegpt",
             output_dir="pvc://test-pvc/output",
             vllm_endpoint="http://vllm-svc:8000/v1",
+            training_resources={"nvidia.com/gpu": 2},
+            vllm_resources={"nvidia.com/gpu": 1},
             config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
@@ -1828,6 +1834,8 @@ def test_online_mode_rejects_regenerate_responses():
             dataset_name="sharegpt",
             output_dir="pvc://test-pvc/output",
             regenerate_responses=True,
+            training_resources={"nvidia.com/gpu": 2},
+            vllm_resources={"nvidia.com/gpu": 1},
             config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
@@ -1844,6 +1852,8 @@ def test_online_mode_allows_max_samples():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         max_samples=1000,
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -1863,7 +1873,9 @@ def test_online_mode_rejects_max_samples_in_train_only():
             hidden_states_path="pvc://test-pvc/hidden_states",
             data_path="pvc://test-pvc/arrow_dataset",
             output_dir="pvc://test-pvc/output",
+            training_resources={"nvidia.com/gpu": 2},
             max_samples=1000,
+            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
         )
 
     print("test execution complete")
@@ -1878,6 +1890,8 @@ def test_online_renders_correct_script():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://shared/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -1903,6 +1917,8 @@ def test_online_script_uses_on_missing_generate():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -1924,6 +1940,8 @@ def test_online_script_no_datagen_embedded():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -1944,6 +1962,8 @@ def test_online_script_contains_vllm_health_check():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -1964,6 +1984,8 @@ def test_online_script_contains_preprocessing():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -1985,6 +2007,8 @@ def test_online_script_contains_model_setup():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -2018,6 +2042,8 @@ def test_online_crd_uses_torchrun():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -2047,6 +2073,7 @@ def test_online_crd_has_gpu_resources():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -2066,6 +2093,8 @@ def test_online_sidecar_overrides():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -2109,6 +2138,8 @@ def test_online_script_passes_max_samples():
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
         max_samples=500,
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -2128,6 +2159,8 @@ def test_online_script_passes_target_layer_ids():
         mode=SpeculatorMode.ONLINE,
         dataset_name="sharegpt",
         output_dir="pvc://test-pvc/output",
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
@@ -2149,6 +2182,7 @@ def test_offline_script_with_hidden_states_path():
         output_dir="pvc://shared/speculator/output",
         vllm_endpoint="http://vllm-svc:8000/v1",
         hidden_states_path="pvc://shared/offline_output/hidden_states",
+        training_resources={"nvidia.com/gpu": 2},
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 
@@ -2170,6 +2204,7 @@ def test_offline_requires_hidden_states_path():
             dataset_name="sharegpt",
             output_dir="pvc://shared/speculator/output",
             vllm_endpoint="http://vllm-svc:8000/v1",
+            training_resources={"nvidia.com/gpu": 2},
             config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
         )
 
@@ -2187,6 +2222,7 @@ def test_offline_script_skips_model_arg_with_hidden_states_path():
         output_dir="pvc://shared/speculator/output",
         vllm_endpoint="http://vllm-svc:8000/v1",
         hidden_states_path="pvc://shared/offline_output/hidden_states",
+        training_resources={"nvidia.com/gpu": 2},
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
 

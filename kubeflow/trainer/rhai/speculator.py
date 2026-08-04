@@ -220,7 +220,7 @@ class SpeculativeDecodingTrainer:
             )
 
         if (
-            self.mode == SpeculatorMode.TRAIN_ONLY
+            self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
             and self.hidden_states_path
             and not self.hidden_states_path.startswith(PVC_URI_SCHEME)
         ):
@@ -322,19 +322,19 @@ class SpeculativeDecodingTrainer:
                 f"total_seq_len must be a positive integer, got {self.total_seq_len!r}."
             )
 
-        if self.mode == SpeculatorMode.TRAIN_ONLY and (
+        if self.mode != SpeculatorMode.DATA_ONLY and (
             not isinstance(self.training_resources, dict) or not self.training_resources
         ):
             raise ValueError(
-                "training_resources is required for TRAIN_ONLY mode. "
+                f"training_resources is required for {self.mode.value} mode. "
                 "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
             )
 
-        if self.mode == SpeculatorMode.DATA_ONLY and (
+        if self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE) and (
             not isinstance(self.vllm_resources, dict) or not self.vllm_resources
         ):
             raise ValueError(
-                "vllm_resources is required for DATA_ONLY mode. "
+                f"vllm_resources is required for {self.mode.value} mode. "
                 "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
             )
 
@@ -1042,7 +1042,9 @@ def _speculator_online(
     scheduler_total_steps: int | None = None,
     scheduler_num_cosine_cycles: float = 0.5,
     checkpoint_freq: float = 1.0,
+    save_best: bool = False,
     log_freq: int = 1,
+    resume_from_checkpoint: bool = False,
     from_pretrained: str | None = None,
     target_layer_ids: list[int] | None = None,
     vllm_port: int = 8234,
@@ -1134,17 +1136,35 @@ def _speculator_online(
         lr=lr,
         num_epochs=epochs,
         save_path=output_dir,
+        resume_from_checkpoint=resume_from_checkpoint,
         is_distributed=is_distributed,
         local_rank=local_rank,
         train_call_kwargs={"shift_fn": shift_batch},
+        val_call_kwargs={"shift_fn": shift_batch},
         scheduler_type=scheduler_type,
         scheduler_warmup_steps=scheduler_warmup_steps,
         scheduler_total_steps=scheduler_total_steps,
         scheduler_num_cosine_cycles=scheduler_num_cosine_cycles,
         checkpoint_freq=checkpoint_freq,
+        save_best=save_best,
         hidden_states_dtype=hs_dtype,
         log_freq=log_freq,
     )
+
+    if resume_from_checkpoint and rank == 0:
+        from pathlib import Path
+
+        interrupted_path = Path(output_dir) / "interrupted"
+        if interrupted_path.exists():
+            import shutil
+
+            shutil.rmtree(str(interrupted_path))
+            print(
+                f"[Kubeflow] Removed interrupted checkpoint at {interrupted_path}",
+                flush=True,
+            )
+    if resume_from_checkpoint and is_distributed:
+        torch.distributed.barrier()
 
     if "_set_phase" in globals():
         _set_phase("training", 15)  # noqa: F821
@@ -1323,7 +1343,9 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    scheduler_total_steps={cfg.scheduler_total_steps!r},\n"
         f"    scheduler_num_cosine_cycles={cfg.scheduler_num_cosine_cycles!r},\n"
         f"    checkpoint_freq={cfg.checkpoint_freq!r},\n"
+        f"    save_best={cfg.save_best!r},\n"
         f"    log_freq={cfg.log_freq!r},\n"
+        f"    resume_from_checkpoint={cfg.resume_from_checkpoint!r},\n"
         f"    from_pretrained={cfg.from_pretrained!r},\n"
         f"    target_layer_ids={cfg.target_layer_ids!r},\n"
         f"    vllm_port={VLLM_SIDECAR_PORT!r},\n"
