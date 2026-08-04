@@ -312,6 +312,18 @@ class SpeculativeDecodingTrainer:
                 "regenerate_responses is only supported in DATA_ONLY, OFFLINE, and ONLINE modes."
             )
 
+        _regen_supported_datasets = ("magpie", "ultrachat", "gsm8k")
+        if self.regenerate_responses and self.dataset_name not in _regen_supported_datasets:
+            raise ValueError(
+                f"regenerate_responses requires dataset_name to be one of "
+                f"{_regen_supported_datasets}, got {self.dataset_name!r}. "
+                f"These are the only supported datasets for response regeneration: "
+                f"magpie (Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered), "
+                f"ultrachat (HuggingFaceH4/ultrachat_200k), "
+                f"gsm8k (openai/gsm8k). "
+                f"PVC paths and other dataset names are not supported."
+            )
+
         if not isinstance(self.epochs, int) or self.epochs < 1:
             raise ValueError(f"epochs must be a positive integer, got {self.epochs!r}.")
 
@@ -694,13 +706,6 @@ def _regenerate_responses(
 
     print(f"[Kubeflow] Regenerating responses via vLLM endpoint '{vllm_endpoint}'", flush=True)
 
-    regen_dataset_map = {
-        "sharegpt": "magpie",
-        "magpie": "magpie",
-        "ultrachat": "ultrachat",
-        "gsm8k": "gsm8k",
-    }
-    regen_dataset = regen_dataset_map.get(dataset_name, "magpie")
     os.makedirs(save_path, exist_ok=True)
     regen_output = str(Path(save_path) / "regenerated_responses.jsonl")
     chat_endpoint = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/v1/chat/completions"
@@ -719,13 +724,13 @@ def _regenerate_responses(
         "--endpoint",
         chat_endpoint,
         "--dataset",
-        regen_dataset,
+        dataset_name,
         "--outfile",
         regen_output,
     ]
     if max_samples is not None:
         regen_cmd.extend(["--limit", str(max_samples)])
-    print(f"[Kubeflow] Regenerating responses using dataset '{regen_dataset}'", flush=True)
+    print(f"[Kubeflow] Regenerating responses using dataset '{dataset_name}'", flush=True)
     regen_result = subprocess.run(regen_cmd, capture_output=False)
     if regen_result.returncode != 0:
         raise RuntimeError(f"response_regeneration.py exited with code {regen_result.returncode}")
