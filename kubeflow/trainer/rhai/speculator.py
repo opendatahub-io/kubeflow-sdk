@@ -129,8 +129,9 @@ class SpeculativeDecodingTrainer:
         data_path: PVC URI (``pvc://<name>/<path>``) to preprocessed Arrow dataset
             (required for TRAIN_ONLY).
         dataset_name: Dataset for hidden state extraction (required for DATA_ONLY).
-            Built-in names (``"sharegpt"``, ``"ultrachat"``, ``"gsm8k"``), a HuggingFace
-            dataset ID, or a local ``.json``/``.jsonl`` file path.
+            Built-in names (``"magpie"``, ``"ultrachat"``, ``"gsm8k"``) or a PVC URI
+            pointing to a ``.json``/``.jsonl`` file (e.g. ``"pvc://shared/data/custom.jsonl"``).
+            HuggingFace dataset IDs and direct filesystem paths are not supported.
         max_samples: Maximum number of dataset samples to use for data generation.
             Useful for quick testing. When ``None`` (default), all samples are used.
         epochs: Training epochs (default: 3).
@@ -259,7 +260,29 @@ class SpeculativeDecodingTrainer:
         ):
             raise ValueError(
                 f"dataset_name is required for {self.mode.name} mode. "
-                "Provide a HuggingFace dataset ID or name (e.g. 'sharegpt')."
+                "Provide a built-in name ('magpie', 'ultrachat', 'gsm8k') or "
+                "a PVC URI to a .json/.jsonl file (e.g. 'pvc://shared/data/custom.jsonl')."
+            )
+
+        _builtin_datasets = ("magpie", "ultrachat", "gsm8k")
+        if (
+            self.dataset_name
+            and not self.dataset_name.startswith(PVC_URI_SCHEME)
+            and self.dataset_name not in _builtin_datasets
+        ):
+            raise ValueError(
+                f"dataset_name must be a built-in name {_builtin_datasets} or a PVC URI "
+                f"to a .json/.jsonl file (e.g. 'pvc://shared/data/custom.jsonl'), "
+                f"got {self.dataset_name!r}."
+            )
+        if (
+            self.dataset_name
+            and self.dataset_name.startswith(PVC_URI_SCHEME)
+            and not (self.dataset_name.endswith(".json") or self.dataset_name.endswith(".jsonl"))
+        ):
+            raise ValueError(
+                f"dataset_name PVC URI must point to a .json or .jsonl file, "
+                f"got {self.dataset_name!r}."
             )
 
         if self.mode == SpeculatorMode.OFFLINE and not self.verifier_model.startswith(
@@ -469,8 +492,9 @@ class SpeculativeDecodingTrainer:
             raise NotImplementedError(
                 f"dataset_name scheme "
                 f"'{self.dataset_name.split('://')[0]}://' is not yet supported "
-                f"for SpeculativeDecodingTrainer. Currently only PVC URIs (pvc://<name>/<path>), "
-                f"direct paths, or HuggingFace dataset names are supported."
+                f"for SpeculativeDecodingTrainer. Currently only PVC URIs "
+                f"(pvc://<name>/<path>.json or .jsonl) or built-in dataset names "
+                f"('magpie', 'ultrachat', 'gsm8k') are supported."
             )
 
         if self.mode in (

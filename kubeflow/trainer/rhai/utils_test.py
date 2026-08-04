@@ -686,7 +686,7 @@ def test_speculator_different_pvcs_raises_error_data_only():
         verifier_model="pvc://pvc-a/model",
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://pvc-b/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )

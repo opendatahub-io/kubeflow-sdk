@@ -761,7 +761,7 @@ def test_crd_uses_python_entrypoint_for_data_only():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1034,7 +1034,7 @@ def test_data_only_requires_output_dir():
             mode=SpeculatorMode.DATA_ONLY,
             vllm_resources={"nvidia.com/gpu": 1},
             training_resources={"nvidia.com/gpu": 1},
-            dataset_name="sharegpt",
+            dataset_name="ultrachat",
         )
 
     print("test execution complete")
@@ -1049,13 +1049,13 @@ def test_data_only_valid():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     assert trainer.mode == SpeculatorMode.DATA_ONLY
-    assert trainer.dataset_name == "sharegpt"
+    assert trainer.dataset_name == "ultrachat"
     assert trainer.output_dir == "pvc://test-pvc/output"
     assert trainer.hidden_states_path is None
 
@@ -1071,7 +1071,7 @@ def test_data_only_renders_correct_script():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1082,7 +1082,7 @@ def test_data_only_renders_correct_script():
     assert "_speculator_data_only(" in script
     assert "_speculator_train_only(" not in script
     assert "verifier_model='meta-llama/Llama-3.1-8B-Instruct'" in script
-    assert "dataset_name='sharegpt'" in script
+    assert "dataset_name='ultrachat'" in script
     assert "/mnt/kubeflow-checkpoints/datagen_output" in script
     assert "EXTRACTION_INCOMPLETE_MARKER" in script
 
@@ -1098,7 +1098,7 @@ def test_data_only_script_passes_world_size_and_rank():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1123,7 +1123,7 @@ def test_data_only_script_embeds_datagen_script():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1270,7 +1270,7 @@ def test_data_only_script_contains_progress_server_call():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1290,7 +1290,7 @@ def test_data_only_progression_tracking_injected():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         enable_progression_tracking=True,
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
@@ -1324,7 +1324,7 @@ def test_data_only_script_contains_marker_logic():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1371,7 +1371,7 @@ def test_data_only_script_contains_vllm_health_check():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1395,7 +1395,7 @@ def test_data_only_script_skips_completed_extraction():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1417,7 +1417,7 @@ def test_apply_speculator_sidecar_overrides():
         verifier_model="pvc://shared/models/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/speculator/run1",
         vllm_resources={"nvidia.com/gpu": 1},
         vllm_gpu_memory_utilization=0.85,
@@ -1462,7 +1462,7 @@ def test_apply_speculator_sidecar_overrides_preserves_existing():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/output",
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
@@ -1507,7 +1507,7 @@ def test_data_only_script_uses_sidecar_endpoint():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1531,7 +1531,7 @@ def test_data_only_script_resolves_pvc_verifier_model():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
@@ -1573,7 +1573,7 @@ def test_verifier_model_hf_id_auto_detects_target_layer_ids():
             mode=SpeculatorMode.DATA_ONLY,
             vllm_resources={"nvidia.com/gpu": 1},
             training_resources={"nvidia.com/gpu": 1},
-            dataset_name="sharegpt",
+            dataset_name="ultrachat",
             output_dir="pvc://shared/datagen_output",
         )
     finally:
@@ -1611,7 +1611,7 @@ def test_verifier_model_invalid_id_fails_autoconfig():
                 mode=SpeculatorMode.DATA_ONLY,
                 vllm_resources={"nvidia.com/gpu": 1},
                 training_resources={"nvidia.com/gpu": 1},
-                dataset_name="sharegpt",
+                dataset_name="ultrachat",
                 output_dir="pvc://shared/datagen_output",
             )
     finally:
@@ -1629,7 +1629,7 @@ def test_sidecar_overrides_resolves_pvc_verifier_model():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
@@ -1652,7 +1652,7 @@ def test_sidecar_overrides_passes_target_layer_ids():
         mode=SpeculatorMode.DATA_ONLY,
         vllm_resources={"nvidia.com/gpu": 1},
         training_resources={"nvidia.com/gpu": 1},
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/datagen_output",
         config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
     )
@@ -1771,7 +1771,7 @@ def test_online_mode_valid():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -1779,7 +1779,7 @@ def test_online_mode_valid():
     )
 
     assert trainer.mode == SpeculatorMode.ONLINE
-    assert trainer.dataset_name == "sharegpt"
+    assert trainer.dataset_name == "ultrachat"
     assert trainer.output_dir == "pvc://test-pvc/output"
 
     print("test execution complete")
@@ -1810,7 +1810,7 @@ def test_online_mode_rejects_vllm_endpoint():
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.ONLINE,
-            dataset_name="sharegpt",
+            dataset_name="ultrachat",
             output_dir="pvc://test-pvc/output",
             vllm_endpoint="http://vllm-svc:8000/v1",
             training_resources={"nvidia.com/gpu": 2},
@@ -1828,7 +1828,7 @@ def test_online_mode_allows_regenerate_responses():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         regenerate_responses=True,
         training_resources={"nvidia.com/gpu": 2},
@@ -1848,7 +1848,7 @@ def test_online_mode_allows_max_samples():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         max_samples=1000,
         training_resources={"nvidia.com/gpu": 2},
@@ -1887,7 +1887,7 @@ def test_online_renders_correct_script():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -1900,7 +1900,7 @@ def test_online_renders_correct_script():
     assert "_speculator_data_only(" not in script
     assert "_speculator_train_only(" not in script
     assert "verifier_model='Qwen/Qwen3-8B'" in script
-    assert "dataset_name='sharegpt'" in script
+    assert "dataset_name='ultrachat'" in script
     assert "output_dir='/mnt/kubeflow-checkpoints/output'" in script
     assert "vllm_endpoint='http://localhost:8234/v1'" in script
 
@@ -1914,7 +1914,7 @@ def test_online_script_uses_on_missing_generate():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -1937,7 +1937,7 @@ def test_online_script_no_datagen_embedded():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -1959,7 +1959,7 @@ def test_online_script_contains_vllm_health_check():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -1981,7 +1981,7 @@ def test_online_script_contains_preprocessing():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -2004,7 +2004,7 @@ def test_online_script_contains_model_setup():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -2039,7 +2039,7 @@ def test_online_crd_uses_torchrun():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -2069,7 +2069,7 @@ def test_online_crd_has_gpu_resources():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -2090,7 +2090,7 @@ def test_online_sidecar_overrides():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -2134,7 +2134,7 @@ def test_online_script_passes_max_samples():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         max_samples=500,
         training_resources={"nvidia.com/gpu": 2},
@@ -2156,7 +2156,7 @@ def test_online_script_passes_target_layer_ids():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.ONLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         training_resources={"nvidia.com/gpu": 2},
         vllm_resources={"nvidia.com/gpu": 1},
@@ -2177,7 +2177,7 @@ def test_offline_script_with_hidden_states_path():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="pvc://shared/speculator/models/Qwen3-8B",
         mode=SpeculatorMode.OFFLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/speculator/output",
         vllm_endpoint="http://vllm-svc:8000/v1",
         hidden_states_path="pvc://shared/offline_output/hidden_states",
@@ -2200,7 +2200,7 @@ def test_offline_requires_hidden_states_path():
         SpeculativeDecodingTrainer(
             verifier_model="pvc://shared/speculator/models/Qwen3-8B",
             mode=SpeculatorMode.OFFLINE,
-            dataset_name="sharegpt",
+            dataset_name="ultrachat",
             output_dir="pvc://shared/speculator/output",
             vllm_endpoint="http://vllm-svc:8000/v1",
             training_resources={"nvidia.com/gpu": 2},
@@ -2217,7 +2217,7 @@ def test_offline_script_skips_model_arg_with_hidden_states_path():
     trainer = SpeculativeDecodingTrainer(
         verifier_model="pvc://shared/speculator/models/Qwen3-8B",
         mode=SpeculatorMode.OFFLINE,
-        dataset_name="sharegpt",
+        dataset_name="ultrachat",
         output_dir="pvc://shared/speculator/output",
         vllm_endpoint="http://vllm-svc:8000/v1",
         hidden_states_path="pvc://shared/offline_output/hidden_states",
