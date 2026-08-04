@@ -1,10 +1,5 @@
 approvers:
   - astefanutti
-  - szaher
-  - kramaranya
-  - briangallagher
-  - MStokluska
-  - Fiona-Waters
   - efazal
   - ChughShilpa
   - Sridhar1030
@@ -12,3 +7,4 @@ approvers:
 reviewers:
   - hrathina
   - Sridhar1030
+  - JaZeeGH
