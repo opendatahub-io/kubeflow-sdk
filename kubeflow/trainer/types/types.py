@@ -17,7 +17,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from urllib.parse import urlparse
 
 import kubeflow.common.constants as common_constants
 from kubeflow.trainer.constants import constants
@@ -347,12 +346,6 @@ class HuggingFaceDatasetInitializer(BaseInitializer):
 
         if not self.storage_uri.startswith("hf://"):
             raise ValueError(f"storage_uri must start with 'hf://', got {self.storage_uri}")
-
-        if urlparse(self.storage_uri).path == "":
-            raise ValueError(
-                "storage_uri: must have absolute path with 'hf://<user_name>/<dataset_name>', got "
-                f"{self.storage_uri}"
-            )
 
 
 @dataclass
