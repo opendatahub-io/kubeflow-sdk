@@ -274,7 +274,7 @@ class RuntimeTrainer:
 class Runtime:
     name: str
     trainer: RuntimeTrainer
-    kind: RuntimeKind
+    kind: RuntimeKind | None = None
     pretrained_model: str | None = None
 
 
