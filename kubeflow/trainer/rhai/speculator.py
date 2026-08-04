@@ -306,9 +306,10 @@ class SpeculativeDecodingTrainer:
         if self.regenerate_responses and self.mode not in (
             SpeculatorMode.DATA_ONLY,
             SpeculatorMode.OFFLINE,
+            SpeculatorMode.ONLINE,
         ):
             raise ValueError(
-                "regenerate_responses is only supported in DATA_ONLY and OFFLINE modes."
+                "regenerate_responses is only supported in DATA_ONLY, OFFLINE, and ONLINE modes."
             )
 
         if not isinstance(self.epochs, int) or self.epochs < 1:
@@ -660,6 +661,77 @@ def _setup_eagle3_model(
     return model, verifier_config
 
 
+def _regenerate_responses(
+    dataset_name: str,
+    save_path: str,
+    vllm_endpoint: str,
+    max_samples: int | None = None,
+) -> str:
+    """Regenerate dataset responses using the verifier model via vLLM.
+
+    Sends prompts to the vLLM chat completions endpoint to produce on-policy
+    responses, improving draft model alignment with the target model.
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the training script that runs inside the container.
+
+    Args:
+        dataset_name: Original dataset name (maps to regeneration dataset).
+        save_path: Directory to write regenerated JSONL output.
+        vllm_endpoint: vLLM endpoint URL (e.g. ``http://localhost:8234/v1``).
+        max_samples: Maximum number of samples to regenerate.
+
+    Returns:
+        Path to the regenerated JSONL file.
+    """
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    if "_set_phase" in globals():
+        _set_phase("regenerating_responses", 5)  # noqa: F821
+
+    print(f"[Kubeflow] Regenerating responses via vLLM endpoint '{vllm_endpoint}'", flush=True)
+
+    regen_dataset_map = {
+        "sharegpt": "magpie",
+        "magpie": "magpie",
+        "ultrachat": "ultrachat",
+        "gsm8k": "gsm8k",
+    }
+    regen_dataset = regen_dataset_map.get(dataset_name, "magpie")
+    regen_output = str(Path(save_path) / "regenerated_responses.jsonl")
+    chat_endpoint = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/v1/chat/completions"
+
+    regen_script_path = "/tmp/response_regeneration.py"
+    if not os.path.exists(regen_script_path):
+        import base64
+
+        regen_content = base64.b64decode(_REGEN_SCRIPT_B64).decode("utf-8")  # noqa: F821
+        with open(regen_script_path, "w") as f:
+            f.write(regen_content)
+
+    regen_cmd = [
+        sys.executable,
+        regen_script_path,
+        "--endpoint",
+        chat_endpoint,
+        "--dataset",
+        regen_dataset,
+        "--outfile",
+        regen_output,
+    ]
+    if max_samples is not None:
+        regen_cmd.extend(["--limit", str(max_samples)])
+    print(f"[Kubeflow] Regenerating responses using dataset '{regen_dataset}'", flush=True)
+    regen_result = subprocess.run(regen_cmd, capture_output=False)
+    if regen_result.returncode != 0:
+        raise RuntimeError(f"response_regeneration.py exited with code {regen_result.returncode}")
+    print(f"[Kubeflow] Responses saved to {regen_output}", flush=True)
+    return regen_output
+
+
 def _speculator_data_only(
     verifier_model: str,
     dataset_name: str,
@@ -725,53 +797,7 @@ def _speculator_data_only(
     _wait_for_vllm(health, timeout_secs=1200)
 
     if regenerate_responses:
-        from pathlib import Path
-
-        if "_set_phase" in globals():
-            _set_phase("regenerating_responses", 5)  # noqa: F821
-
-        print(
-            f"[Kubeflow] Regenerating responses from verifier model '{verifier_model}'", flush=True
-        )
-
-        regen_dataset_map = {
-            "sharegpt": "magpie",
-            "magpie": "magpie",
-            "ultrachat": "ultrachat",
-            "gsm8k": "gsm8k",
-        }
-        regen_dataset = regen_dataset_map.get(dataset_name, "magpie")
-        regen_output = str(Path(save_path) / "regenerated_responses.jsonl")
-        chat_endpoint = endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/v1/chat/completions"
-
-        regen_script_path = "/tmp/response_regeneration.py"
-        if not os.path.exists(regen_script_path):
-            import base64
-
-            regen_content = base64.b64decode(_REGEN_SCRIPT_B64).decode("utf-8")  # noqa: F821
-            with open(regen_script_path, "w") as f:
-                f.write(regen_content)
-
-        regen_cmd = [
-            sys.executable,
-            regen_script_path,
-            "--endpoint",
-            chat_endpoint,
-            "--dataset",
-            regen_dataset,
-            "--outfile",
-            regen_output,
-        ]
-        if max_samples is not None:
-            regen_cmd.extend(["--limit", str(max_samples)])
-        print(f"[Kubeflow] Regenerating responses using dataset '{regen_dataset}'", flush=True)
-        regen_result = subprocess.run(regen_cmd, capture_output=False)
-        if regen_result.returncode != 0:
-            raise RuntimeError(
-                f"response_regeneration.py exited with code {regen_result.returncode}"
-            )
-        print(f"[Kubeflow] Responses saved to {regen_output}", flush=True)
-        dataset_name = regen_output
+        dataset_name = _regenerate_responses(dataset_name, save_path, endpoint, max_samples)
 
     if "_set_phase" in globals():
         _set_phase("preprocessing", 10)  # noqa: F821
@@ -1045,9 +1071,10 @@ def _speculator_online(
     save_best: bool = False,
     log_freq: int = 1,
     resume_from_checkpoint: bool = False,
+    regenerate_responses: bool = False,
     from_pretrained: str | None = None,
     target_layer_ids: list[int] | None = None,
-    vllm_port: int = 8234,
+    vllm_endpoint: str = "http://localhost:8234/v1",
 ) -> None:
     """Online training function injected into pods via inspect.getsource().
 
@@ -1062,19 +1089,22 @@ def _speculator_online(
     import os
 
     if "_set_phase" in globals():
-        _set_phase("preprocessing", 5)  # noqa: F821
+        _set_phase("waiting_for_vllm", 3)  # noqa: F821
+
+    health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
+    _wait_for_vllm(health)
+
+    if regenerate_responses:
+        dataset_name = _regenerate_responses(dataset_name, output_dir, vllm_endpoint, max_samples)
+
+    if "_set_phase" in globals():
+        _set_phase("preprocessing", 8)  # noqa: F821
 
     data_dir = os.path.join(output_dir, "data")
     _preprocess_dataset(verifier_model, dataset_name, data_dir, total_seq_len, max_samples)
 
     if "_set_phase" in globals():
-        _set_phase("waiting_for_vllm", 8)  # noqa: F821
-
-    health_url = f"http://localhost:{vllm_port}/health"
-    _wait_for_vllm(health_url)
-
-    if "_set_phase" in globals():
-        _set_phase("setting_up_model", 10)  # noqa: F821
+        _set_phase("setting_up_model", 12)  # noqa: F821
 
     from speculators.models.eagle3.data import shift_batch
     from speculators.train.data import ArrowDataset, create_collate_fn
@@ -1107,7 +1137,6 @@ def _speculator_online(
     max_len = total_seq_len
     collate_fn = create_collate_fn(max_len, verifier_config.hidden_size)
     hs_dtype = getattr(torch, hidden_states_dtype)
-    vllm_endpoint = f"http://localhost:{vllm_port}/v1"
 
     train_dataset = ArrowDataset(
         max_len=max_len,
@@ -1224,6 +1253,18 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         script += textwrap.dedent(inspect.getsource(_setup_eagle3_model))
         script += "\n\n"
 
+    needs_regen = needs_data or needs_online
+
+    if needs_regen:
+        import base64
+        from pathlib import Path
+
+        regen_script_path = Path(__file__).parent / "scripts" / "response_regeneration.py"
+        regen_b64 = base64.b64encode(regen_script_path.read_bytes()).decode("ascii")
+        script += f'_REGEN_SCRIPT_B64 = "{regen_b64}"\n\n'
+        script += textwrap.dedent(inspect.getsource(_regenerate_responses))
+        script += "\n\n"
+
     if needs_data:
         import base64
         from pathlib import Path
@@ -1231,11 +1272,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         datagen_script_path = Path(__file__).parent / "scripts" / "data_generation_offline.py"
         datagen_b64 = base64.b64encode(datagen_script_path.read_bytes()).decode("ascii")
 
-        regen_script_path = Path(__file__).parent / "scripts" / "response_regeneration.py"
-        regen_b64 = base64.b64encode(regen_script_path.read_bytes()).decode("ascii")
-
         script += f'_DATAGEN_SCRIPT_B64 = "{datagen_b64}"\n\n'
-        script += f'_REGEN_SCRIPT_B64 = "{regen_b64}"\n\n'
         script += textwrap.dedent(inspect.getsource(_speculator_data_only))
 
     if needs_train:
@@ -1320,8 +1357,6 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f")\n"
     )
 
-    from kubeflow.trainer.rhai.constants import VLLM_SIDECAR_PORT
-
     online_call = (
         f"_speculator_online(\n"
         f"    verifier_model={resolved_verifier_model!r},\n"
@@ -1346,9 +1381,10 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    save_best={cfg.save_best!r},\n"
         f"    log_freq={cfg.log_freq!r},\n"
         f"    resume_from_checkpoint={cfg.resume_from_checkpoint!r},\n"
+        f"    regenerate_responses={trainer.regenerate_responses!r},\n"
         f"    from_pretrained={cfg.from_pretrained!r},\n"
         f"    target_layer_ids={cfg.target_layer_ids!r},\n"
-        f"    vllm_port={VLLM_SIDECAR_PORT!r},\n"
+        f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
         f")\n"
     )
 

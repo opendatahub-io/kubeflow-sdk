@@ -1821,23 +1821,22 @@ def test_online_mode_rejects_vllm_endpoint():
     print("test execution complete")
 
 
-def test_online_mode_rejects_regenerate_responses():
-    """Test that ONLINE mode rejects regenerate_responses."""
-    print("Executing test: ONLINE mode rejects regenerate_responses")
+def test_online_mode_allows_regenerate_responses():
+    """Test that ONLINE mode accepts regenerate_responses."""
+    print("Executing test: ONLINE mode allows regenerate_responses")
 
-    with pytest.raises(
-        ValueError, match="regenerate_responses is only supported in DATA_ONLY and OFFLINE"
-    ):
-        SpeculativeDecodingTrainer(
-            verifier_model="Qwen/Qwen3-8B",
-            mode=SpeculatorMode.ONLINE,
-            dataset_name="sharegpt",
-            output_dir="pvc://test-pvc/output",
-            regenerate_responses=True,
-            training_resources={"nvidia.com/gpu": 2},
-            vllm_resources={"nvidia.com/gpu": 1},
-            config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
-        )
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="sharegpt",
+        output_dir="pvc://test-pvc/output",
+        regenerate_responses=True,
+        training_resources={"nvidia.com/gpu": 2},
+        vllm_resources={"nvidia.com/gpu": 1},
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    )
+
+    assert trainer.regenerate_responses is True
 
     print("test execution complete")
 
@@ -1903,7 +1902,7 @@ def test_online_renders_correct_script():
     assert "verifier_model='Qwen/Qwen3-8B'" in script
     assert "dataset_name='sharegpt'" in script
     assert "output_dir='/mnt/kubeflow-checkpoints/output'" in script
-    assert "vllm_port=8234" in script
+    assert "vllm_endpoint='http://localhost:8234/v1'" in script
 
     print("test execution complete")
 
@@ -1948,7 +1947,7 @@ def test_online_script_no_datagen_embedded():
     script = _render_speculator_training_script(trainer)
 
     assert "_DATAGEN_SCRIPT_B64" not in script
-    assert "_REGEN_SCRIPT_B64" not in script
+    assert "_REGEN_SCRIPT_B64" in script
 
     print("test execution complete")
 
