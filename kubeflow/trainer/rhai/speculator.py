@@ -701,6 +701,7 @@ def _regenerate_responses(
         "gsm8k": "gsm8k",
     }
     regen_dataset = regen_dataset_map.get(dataset_name, "magpie")
+    os.makedirs(save_path, exist_ok=True)
     regen_output = str(Path(save_path) / "regenerated_responses.jsonl")
     chat_endpoint = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/v1/chat/completions"
 
