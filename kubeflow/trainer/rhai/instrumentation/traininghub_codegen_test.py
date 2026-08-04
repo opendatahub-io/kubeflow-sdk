@@ -61,11 +61,44 @@ class TestRenderDictLiteral:
     def test_render_dict_literal(self, test_case: TestCase) -> None:
         print(f"Running test: {test_case.name}")
         if test_case.expected_status == FAILED:
-            with pytest.raises((ValueError, Exception)):
+            with pytest.raises(ValueError):
                 _render_dict_literal(test_case.config["func_args"], test_case.config["indent"])
         else:
             result = _render_dict_literal(test_case.config["func_args"], test_case.config["indent"])
             assert result == test_case.expected_output
+
+    def test_non_string_key_raises(self) -> None:
+        """Keys must be plain strings — a custom hashable key could inject via __repr__."""
+        with pytest.raises(ValueError, match="must be str"):
+            _render_dict_literal({("a",): "value"}, "    ")
+
+    def test_stateful_repr_cannot_inject(self) -> None:
+        """A __repr__ that mutates between calls must not reach the rendered output.
+
+        The attack pairs a stateful __repr__ (safe literal during validation,
+        executable expression during rendering) with an __eq__ that always claims
+        equality so the literal_eval round-trip check passes. The fix renders the
+        single validated repr, so the injection string can never appear.
+        """
+
+        class StatefulRepr:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def __repr__(self) -> str:
+                self.calls += 1
+                # Safe literal on first call (validation), injection afterwards
+                return "'safe'" if self.calls == 1 else "__import__('os').system('id')"
+
+            def __eq__(self, other: object) -> bool:
+                return True
+
+            def __hash__(self) -> int:
+                return 0
+
+        result = _render_dict_literal({"key": StatefulRepr()}, "    ")
+        assert "__import__" not in result
+        assert "'safe'" in result
 
 
 class TestRenderAlgorithmWrapper:

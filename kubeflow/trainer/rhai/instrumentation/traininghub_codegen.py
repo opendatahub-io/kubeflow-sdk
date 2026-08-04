@@ -14,8 +14,14 @@ def _render_dict_literal(func_args: dict, indent: str) -> str:
 
     lines: list[str] = []
     for key, value in func_args.items():
+        if not isinstance(key, str):
+            raise ValueError(f"func_args key {key!r} of type {type(key).__name__} must be str")
+        # Render repr exactly once and validate that rendering — a stateful __repr__
+        # must not be able to return a safe literal during validation and an
+        # executable expression during rendering (CWE-94).
+        rendered_value = repr(value)
         try:
-            if ast.literal_eval(repr(value)) != value:
+            if ast.literal_eval(rendered_value) != value:
                 raise ValueError(
                     f"func_args[{key!r}] value type {type(value).__name__} is not repr-safe"
                 )
@@ -23,7 +29,7 @@ def _render_dict_literal(func_args: dict, indent: str) -> str:
             raise ValueError(
                 f"func_args[{key!r}] value type {type(value).__name__} is not repr-safe"
             ) from e
-        lines.append(f"{indent}{key!r}: {value!r},")
+        lines.append(f"{indent}{key!r}: {rendered_value},")
     return "\n".join(lines)
 
 
@@ -81,12 +87,15 @@ def _render_algorithm_wrapper(algorithm_metadata: dict, func_args: dict | None) 
                 )
                 return
 
-            # Read final metrics from rank 0 file
+            # Read final metrics from rank 0 file (keep only the last line to
+            # avoid loading the whole JSONL history into memory)
             metrics = None
             with open(metrics_file, 'r') as f:
-                lines = f.readlines()
-                if lines:
-                    metrics = json.loads(lines[-1])
+                last_line = None
+                for line in f:
+                    last_line = line
+                if last_line is not None:
+                    metrics = json.loads(last_line)
                 else:
                     print(
                         f"[Kubeflow] WARNING: Metrics file is empty: {{metrics_file_rank0}}",

@@ -259,9 +259,10 @@ def _create_training_hub_progression_instrumentation(
                         capture_output=True,
                         text=True,
                         check=True,
+                        timeout=2,
                     )
                     last_line = result.stdout.strip()
-                except subprocess.CalledProcessError:
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                     return {}
 
                 if last_line:

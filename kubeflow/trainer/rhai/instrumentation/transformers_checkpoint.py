@@ -102,6 +102,30 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
             _log("SIGTERM received, checkpoint will be saved at next safe point")
             self.checkpoint_requested = True
 
+        def _call_save_checkpoint(self):
+            """Invoke Trainer._save_checkpoint across Transformers signature variants.
+
+            The method is private Transformers API and has changed shape between
+            releases (e.g. the `metrics` parameter was removed). Passing only the
+            parameters the installed version accepts avoids a TypeError that the
+            surrounding blanket except would otherwise swallow as a "completed"
+            checkpoint.
+            """
+            import inspect
+
+            save_checkpoint = self.trainer._save_checkpoint
+            try:
+                params = inspect.signature(save_checkpoint).parameters
+            except (TypeError, ValueError):
+                save_checkpoint(self.trainer.model, trial=None)
+                return
+            kwargs = {}
+            if "trial" in params:
+                kwargs["trial"] = None
+            if "metrics" in params:
+                kwargs["metrics"] = None
+            save_checkpoint(self.trainer.model, **kwargs)
+
         def _save_jit_checkpoint(self):
             """Execute checkpoint, saving model state and training artifacts."""
             self.checkpoint_requested = False
@@ -152,11 +176,11 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                         param.record_stream(self.checkpoint_stream)
 
                     with torch.cuda.stream(self.checkpoint_stream):
-                        self.trainer._save_checkpoint(self.trainer.model, trial=None)
+                        self._call_save_checkpoint()
                     self.checkpoint_stream.synchronize()
                 else:
                     # Fallback if no CUDA stream
-                    self.trainer._save_checkpoint(self.trainer.model, trial=None)
+                    self._call_save_checkpoint()
 
                 if os.path.exists(sentinel_file):
                     try:
@@ -358,6 +382,13 @@ def _create_checkpoint_instrumentation(checkpoint_config: dict) -> tuple:
                 name="KubeflowCheckpointUploader",
             )
             self._upload_thread.start()
+            # Transformers skips on_train_end when the training loop raises, which
+            # would leave this non-daemon thread polling forever and hang interpreter
+            # shutdown. atexit guarantees the shutdown event is set on any exit path;
+            # shutdown_upload_worker is idempotent so a second call is harmless.
+            import atexit
+
+            atexit.register(self.shutdown_upload_worker)
             _log("Background upload worker started")
 
         def _upload_worker_loop(self) -> None:
