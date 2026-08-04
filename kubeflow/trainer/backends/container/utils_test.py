@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Copyright The Kubeflow Authors.
+=======
+# Copyright 2025 The Kubeflow Authors.
+>>>>>>> upstream/main
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+<<<<<<< HEAD
 """Unit tests for Container backend utility functions."""
 
 from unittest.mock import MagicMock, patch
@@ -33,11 +38,18 @@ from kubeflow.trainer.backends.container.utils import (
     get_training_script_code,
     maybe_pull_image,
 )
+=======
+import pytest
+
+from kubeflow.common.constants import UNKNOWN
+from kubeflow.trainer.backends.container import utils as container_utils
+>>>>>>> upstream/main
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 from kubeflow.trainer.types import types
 
 
+<<<<<<< HEAD
 # -------------------------------------------------------
 # create_workdir
 # -------------------------------------------------------
@@ -61,12 +73,17 @@ def test_create_workdir(tmp_path):
 def _sample_train_func():
     x = 1 + 1
     return x
+=======
+def simple_train_func():
+    print("Training...")
+>>>>>>> upstream/main
 
 
 @pytest.mark.parametrize(
     "test_case",
     [
         TestCase(
+<<<<<<< HEAD
             name="training script without func_args",
             expected_status=SUCCESS,
             config={"func_args": None},
@@ -149,32 +166,88 @@ def test_build_environment(test_case: TestCase):
         ),
         TestCase(
             name="pip install without packages",
+=======
+            name="no packages returns empty string",
+>>>>>>> upstream/main
             expected_status=SUCCESS,
             config={"packages": None},
             expected_output="",
         ),
         TestCase(
+<<<<<<< HEAD
             name="pip install with index urls",
             expected_status=SUCCESS,
             config={
                 "packages": ["transformers"],
+=======
+            name="single package with defaults",
+            expected_status=SUCCESS,
+            config={"packages": ["torchvision"]},
+            expected_output=(
+                "if PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_BREAK_SYSTEM_PACKAGES=1"
+                " python -m pip install --no-warn-script-location"
+                " --index-url https://pypi.org/simple "
+                " --user torchvision >/tmp/pip_install.log 2>&1; then"
+                ' echo "Successfully installed Python packages (user): torchvision";'
+                " elif PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_BREAK_SYSTEM_PACKAGES=1"
+                " python -m pip install --no-warn-script-location"
+                " --index-url https://pypi.org/simple "
+                " torchvision >>/tmp/pip_install.log 2>&1; then"
+                ' echo "Successfully installed Python packages (system-wide): torchvision";'
+                " else"
+                ' echo "ERROR: Failed to install Python packages: torchvision" >&2;'
+                " cat /tmp/pip_install.log >&2; exit 1;"
+                " fi && "
+            ),
+        ),
+        TestCase(
+            name="multiple packages with custom index",
+            expected_status=SUCCESS,
+            config={
+                "packages": ["torchvision", "transformers[torch]"],
+>>>>>>> upstream/main
                 "pip_index_urls": [
                     "https://pypi.org/simple",
                     "https://download.pytorch.org/whl/cpu",
                 ],
             },
             expected_output=(
+<<<<<<< HEAD
                 "PIP_DISABLE_PIP_VERSION_CHECK=1 pip install "
                 "--no-warn-script-location "
                 "--index-url https://pypi.org/simple "
                 "--extra-index-url https://download.pytorch.org/whl/cpu "
                 '"transformers" && '
+=======
+                "if PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_BREAK_SYSTEM_PACKAGES=1"
+                " python -m pip install --no-warn-script-location"
+                " --index-url https://pypi.org/simple"
+                " --extra-index-url https://download.pytorch.org/whl/cpu"
+                " --user torchvision 'transformers[torch]'"
+                " >/tmp/pip_install.log 2>&1; then"
+                ' echo "Successfully installed Python packages (user):'
+                " torchvision 'transformers[torch]'\";"
+                " elif PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_BREAK_SYSTEM_PACKAGES=1"
+                " python -m pip install --no-warn-script-location"
+                " --index-url https://pypi.org/simple"
+                " --extra-index-url https://download.pytorch.org/whl/cpu"
+                " torchvision 'transformers[torch]'"
+                " >>/tmp/pip_install.log 2>&1; then"
+                ' echo "Successfully installed Python packages (system-wide):'
+                " torchvision 'transformers[torch]'\";"
+                " else"
+                ' echo "ERROR: Failed to install Python packages:'
+                " torchvision 'transformers[torch]'\" >&2;"
+                " cat /tmp/pip_install.log >&2; exit 1;"
+                " fi && "
+>>>>>>> upstream/main
             ),
         ),
     ],
 )
 def test_build_pip_install_cmd(test_case: TestCase):
     """Test pip install command generation."""
+<<<<<<< HEAD
     print(f"Executing test: {test_case.name}")
 
     kwargs = {"func": _sample_train_func, "packages_to_install": test_case.config["packages"]}
@@ -191,10 +264,31 @@ def test_build_pip_install_cmd(test_case: TestCase):
 # -------------------------------------------------------
 # container_status_to_trainjob_status
 # -------------------------------------------------------
+=======
+    print("Executing test:", test_case.name)
+    try:
+        trainer = types.CustomTrainer(
+            func=simple_train_func,
+            packages_to_install=test_case.config.get("packages"),
+            pip_index_urls=test_case.config.get("pip_index_urls"),
+        )
+        result = container_utils.build_pip_install_cmd(trainer)
+
+        assert test_case.expected_status == SUCCESS
+        assert result == test_case.expected_output
+
+    except Exception as e:
+        assert test_case.expected_status == FAILED
+        assert type(e) is test_case.expected_error
+    print("test execution complete")
+
+
+>>>>>>> upstream/main
 @pytest.mark.parametrize(
     "test_case",
     [
         TestCase(
+<<<<<<< HEAD
             name="running container",
             expected_status=SUCCESS,
             config={"status": "running", "exit_code": 0},
@@ -288,11 +382,53 @@ def test_container_status_to_trainjob_status(test_case: TestCase):
                     constants.TRAINJOB_COMPLETE,
                 ],
             },
+=======
+            name="empty list is not complete",
+            expected_status=SUCCESS,
+            config={"statuses": []},
+            expected_output=UNKNOWN,
+        ),
+        TestCase(
+            name="all unknown is not complete",
+            expected_status=SUCCESS,
+            config={"statuses": [UNKNOWN, UNKNOWN]},
+            expected_output=UNKNOWN,
+        ),
+        TestCase(
+            name="all complete is complete",
+            expected_status=SUCCESS,
+            config={"statuses": [constants.TRAINJOB_COMPLETE, constants.TRAINJOB_COMPLETE]},
+            expected_output=constants.TRAINJOB_COMPLETE,
+        ),
+        TestCase(
+            name="complete with unknown is complete",
+            expected_status=SUCCESS,
+            config={"statuses": [constants.TRAINJOB_COMPLETE, UNKNOWN]},
+            expected_output=constants.TRAINJOB_COMPLETE,
+        ),
+        TestCase(
+            name="failed takes precedence",
+            expected_status=SUCCESS,
+            config={"statuses": [constants.TRAINJOB_COMPLETE, constants.TRAINJOB_FAILED]},
+            expected_output=constants.TRAINJOB_FAILED,
+        ),
+        TestCase(
+            name="running takes precedence over complete",
+            expected_status=SUCCESS,
+            config={"statuses": [constants.TRAINJOB_RUNNING, constants.TRAINJOB_COMPLETE]},
+            expected_output=constants.TRAINJOB_RUNNING,
+        ),
+        TestCase(
+            name="created with unknown is created",
+            expected_status=SUCCESS,
+            config={"statuses": [constants.TRAINJOB_CREATED, UNKNOWN]},
+>>>>>>> upstream/main
             expected_output=constants.TRAINJOB_CREATED,
         ),
     ],
 )
 def test_aggregate_status_from_containers(test_case: TestCase):
+<<<<<<< HEAD
     """Test aggregation of multiple container statuses."""
     print(f"Executing test: {test_case.name}")
 
@@ -555,4 +691,10 @@ def test_get_model_initializer(test_case: TestCase):
         assert result.env["OUTPUT_PATH"] == test_case.expected_output["env_output_path"]
         assert result.image == cfg.model_initializer_image
 
+=======
+    """Test aggregation of container statuses into a TrainJob status."""
+    print("Executing test:", test_case.name)
+    result = container_utils.aggregate_status_from_containers(test_case.config["statuses"])
+    assert result == test_case.expected_output
+>>>>>>> upstream/main
     print("test execution complete")

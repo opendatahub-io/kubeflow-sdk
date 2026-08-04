@@ -277,6 +277,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps"]
     verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+<<<<<<< HEAD
+=======
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+>>>>>>> upstream/main
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -302,6 +308,12 @@ rules:
   - apiGroups: ["sparkoperator.k8s.io"]
     resources: ["sparkconnects", "sparkconnects/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+<<<<<<< HEAD
+=======
+  - apiGroups: ["sparkoperator.k8s.io"]
+    resources: ["sparkapplications", "sparkapplications/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+>>>>>>> upstream/main
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

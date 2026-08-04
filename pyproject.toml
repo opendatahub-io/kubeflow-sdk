@@ -26,8 +26,9 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-  "kubernetes>=27.2.0",
+  "kubernetes>=27.2.0,<36.0.0",       # 36.0.0 has multiple regressions; see kubernetes-client/python#2592, #2596
   "pydantic>=2.10.0",
+<<<<<<< HEAD
   "kubeflow-trainer-api>=2.0.0",
   "kubeflow-katib-api>=0.19.0",
   "structlog>=24.1.0",
@@ -54,7 +55,26 @@ spark = [
 ]
 hub = [
   "model-registry>=0.3.6",
+=======
+  "requests>=2.25.0",
+  "kubeflow-trainer-api>=2.2.0,<2.3",
+  "kubeflow-katib-api>=0.19.0,<0.20",
 ]
+
+[project.optional-dependencies]
+docker = ["docker>=6.1.3"]
+podman = ["podman>=5.6.0"]
+spark = [
+  # pyspark-connect is Apache Spark Python API with Spark Connect by default
+  # Match major.minor of pyspark-connect to Spark constants declared in kubeflow.spark.backends.kubernetes.constants
+  # Ensure pyspark-connect and the spark image align with the Spark version used in the Spark operator image
+  # https://github.com/kubeflow/spark-operator/blob/master/Dockerfile#L17
+  "pyspark-connect==4.2.0",
+  "kubeflow-spark-api>=2.4.0,<2.5",
+>>>>>>> upstream/main
+]
+hub = ["model-registry>=0.3.14,<0.4"]
+pipelines = ["kfp[kubernetes]>=2.17.0,<2.18"]
 
 [dependency-groups]
 docs = [
@@ -65,7 +85,10 @@ docs = [
   "myst-parser>=3.0",
   "sphinx-design>=0.6",
 ]
+# These dependencies are only needed in E2E tests with Papermill.
+notebooks = ["papermill>=2.6.0", "ipykernel>=6.29.5"]
 dev = [
+<<<<<<< HEAD
   "kubeflow[hub,spark]",
   "pytest>=7.0",
   "pytest-mock>=3.10",
@@ -77,6 +100,16 @@ dev = [
   "pre-commit>=4.2.0",
   "PyGithub>=2.7.0",
   "git-cliff>=2.11.0",
+=======
+  "kubeflow[docker,hub,pipelines,spark]",
+  "pytest>=7.0",
+  "pytest-mock>=3.10",
+  "coverage>=7.0",
+  { include-group = "notebooks" },
+  "ruff>=0.12.2",
+  "pre-commit>=4.2.0",
+  "PyGithub>=2.7.0",
+>>>>>>> upstream/main
   "setuptools>=80.9.0",
   "ty>=0.0.11",
 ]
@@ -91,6 +124,13 @@ path = "kubeflow/__init__.py"
 
 [tool.uv]
 package = true
+# Local development resolves the Kubeflow API packages from upstream `master` so contributors test
+# against unreleased changes. These overrides are not part of the published wheel metadata
+override-dependencies = [
+  "kubeflow-trainer-api @ git+https://github.com/kubeflow/trainer.git@master#subdirectory=api/python_api",
+  "kubeflow-katib-api @ git+https://github.com/kubeflow/katib.git@master#subdirectory=api/python_api",
+  "kubeflow-spark-api @ git+https://github.com/kubeflow/spark-operator.git@master#subdirectory=api/python_api",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -143,8 +183,13 @@ select = [
 ]
 
 ignore = [
+<<<<<<< HEAD
   "B006",  # mutable-argument-default
   "E501",  # Embedded HTML/SVG has long lines
+=======
+  "B006", # mutable-argument-default
+  "E501", # Embedded HTML/SVG has long lines
+>>>>>>> upstream/main
 ]
 
 
@@ -162,9 +207,13 @@ markers = [
   "timeout: marks tests with timeout limit",
   "options: marks tests for Spark options pattern",
 ]
+<<<<<<< HEAD
 filterwarnings = [
   "ignore::pydantic.warnings.PydanticDeprecatedSince20",
 ]
+=======
+filterwarnings = ["ignore::pydantic.warnings.PydanticDeprecatedSince20"]
+>>>>>>> upstream/main
 
 [tool.ty.environment]
 python-version = "3.10"

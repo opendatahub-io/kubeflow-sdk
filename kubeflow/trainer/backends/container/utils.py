@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
+import shlex
 
 from kubeflow.common.constants import UNKNOWN
 from kubeflow.trainer.constants import constants
@@ -89,6 +90,10 @@ def build_pip_install_cmd(trainer: types.CustomTrainer) -> str:
     """
     Build pip install command for packages.
 
+    Generates a shell snippet that installs packages with retry logic and
+    fallback from per-user to system-wide installation, matching the resilience
+    of the Kubernetes backend's install script.
+
     Args:
         trainer: CustomTrainer configuration.
 
@@ -100,12 +105,21 @@ def build_pip_install_cmd(trainer: types.CustomTrainer) -> str:
         return ""
 
     index_urls = trainer.pip_index_urls or list(constants.DEFAULT_PIP_INDEX_URLS)
-    main_idx = index_urls[0]
-    extras = " ".join(f"--extra-index-url {u}" for u in index_urls[1:])
-    quoted = " ".join(f'"{p}"' for p in pkgs)
+    main_idx = shlex.quote(index_urls[0])
+    extras = " ".join(f"--extra-index-url {shlex.quote(u)}" for u in index_urls[1:])
+    quoted = " ".join(shlex.quote(p) for p in pkgs)
+    pip_env = "PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_BREAK_SYSTEM_PACKAGES=1"
+    pip_base = f"python -m pip install --no-warn-script-location --index-url {main_idx} {extras}"
+    log_file = "/tmp/pip_install.log"
     return (
-        "PIP_DISABLE_PIP_VERSION_CHECK=1 pip install --no-warn-script-location "
-        f"--index-url {main_idx} {extras} {quoted} && "
+        f"if {pip_env} {pip_base} --user {quoted} >{log_file} 2>&1; then "
+        f'echo "Successfully installed Python packages (user): {quoted}"; '
+        f"elif {pip_env} {pip_base} {quoted} >>{log_file} 2>&1; then "
+        f'echo "Successfully installed Python packages (system-wide): {quoted}"; '
+        f"else "
+        f'echo "ERROR: Failed to install Python packages: {quoted}" >&2; '
+        f"cat {log_file} >&2; exit 1; "
+        f"fi && "
     )
 
 
@@ -144,7 +158,8 @@ def aggregate_status_from_containers(container_statuses: list[str]) -> str:
         return constants.TRAINJOB_FAILED
     if constants.TRAINJOB_RUNNING in container_statuses:
         return constants.TRAINJOB_RUNNING
-    if all(s == constants.TRAINJOB_COMPLETE for s in container_statuses if s != UNKNOWN):
+    known_statuses = [s for s in container_statuses if s != UNKNOWN]
+    if known_statuses and all(s == constants.TRAINJOB_COMPLETE for s in known_statuses):
         return constants.TRAINJOB_COMPLETE
     if any(s == constants.TRAINJOB_CREATED for s in container_statuses):
         return constants.TRAINJOB_CREATED

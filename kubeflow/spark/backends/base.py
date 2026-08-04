@@ -17,17 +17,43 @@
 import abc
 from collections.abc import Iterator
 
+<<<<<<< HEAD
 from kubeflow.spark.types.types import Driver, Executor, SparkConnectInfo
+=======
+from pyspark.sql import SparkSession
+
+from kubeflow.spark.types.types import (
+    Driver,
+    Executor,
+    FileJob,
+    FuncJob,
+    SparkConnectInfo,
+    SparkJob,
+    SparkJobStatus,
+)
+>>>>>>> upstream/main
 
 
 class RuntimeBackend(abc.ABC):
     """Abstract base class for Spark backends.
 
+<<<<<<< HEAD
     All Spark backends must implement these methods to manage SparkConnect sessions.
     """
 
     @abc.abstractmethod
     def connect(
+=======
+    All Spark backends must implement these methods to manage SparkConnect sessions and Spark batch jobs.
+    """
+
+    # ------------------------------------------------------------------
+    # Spark Connect sessions
+    # ------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def create_and_connect(
+>>>>>>> upstream/main
         self,
         num_executors: int | None = None,
         resources_per_executor: dict[str, str] | None = None,
@@ -35,7 +61,13 @@ class RuntimeBackend(abc.ABC):
         driver: Driver | None = None,
         executor: Executor | None = None,
         options: list | None = None,
+<<<<<<< HEAD
     ) -> SparkConnectInfo:
+=======
+        timeout: int = 300,
+        connect_timeout: int = 120,
+    ) -> SparkSession:
+>>>>>>> upstream/main
         """Create a new SparkConnect session (INTERNAL USE ONLY).
 
         This is an internal method used by SparkClient.connect().
@@ -48,9 +80,17 @@ class RuntimeBackend(abc.ABC):
             driver: Driver configuration.
             executor: Executor configuration.
             options: List of configuration options (use Name option for custom name).
+<<<<<<< HEAD
 
         Returns:
             SparkConnectInfo with session details (may be in PROVISIONING state).
+=======
+            timeout: Maximum time in seconds to wait for the session to become ready.
+            connect_timeout: Maximum time in seconds to establish the Spark Connect session.
+
+        Returns:
+            Connected SparkSession.
+>>>>>>> upstream/main
 
         Raises:
             TimeoutError: If the creation request times out.
@@ -101,6 +141,7 @@ class RuntimeBackend(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
+<<<<<<< HEAD
     def _wait_for_session_ready(
         self,
         name: str,
@@ -129,6 +170,8 @@ class RuntimeBackend(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
+=======
+>>>>>>> upstream/main
     def get_session_logs(
         self,
         name: str,
@@ -148,3 +191,113 @@ class RuntimeBackend(abc.ABC):
             RuntimeError: If the session/pod is not found or reading fails.
         """
         raise NotImplementedError()
+<<<<<<< HEAD
+=======
+
+    # ------------------------------------------------------------------
+    # Spark batch jobs
+    # ------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def submit_job(
+        self,
+        job: FileJob | FuncJob,
+        num_executors: int | None = None,
+        resources_per_executor: dict[str, str] | None = None,
+    ) -> SparkJob:
+        """Submit a Spark batch job.
+
+        Args:
+            job: Spark application to execute.
+            num_executors: Number of executor instances.
+            resources_per_executor: Resource requirements for each executor.
+
+        Returns:
+            Submitted Spark job information.
+        """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def get_job(
+        self,
+        name: str,
+    ) -> SparkJob:
+        """Get a Spark job.
+
+        Args:
+            name: Name of the Spark job.
+
+        Returns:
+            Spark job information.
+        """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def list_jobs(
+        self,
+        status: set[SparkJobStatus] | None = None,
+    ) -> list[SparkJob]:
+        """List Spark jobs.
+
+        Args:
+            status: Optional set of Spark job statuses used to filter results.
+
+        Returns:
+            List of Spark jobs.
+        """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def delete_job(
+        self,
+        name: str,
+    ) -> None:
+        """Delete a Spark job.
+
+        Args:
+            name: Name of the Spark job to delete.
+        """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def wait_for_job_status(
+        self,
+        name: str,
+        status: set[SparkJobStatus] = {SparkJobStatus.COMPLETED},
+        timeout: int = 600,
+        polling_interval: int = 2,
+    ) -> SparkJob:
+        """Wait for a Spark job to reach one of the desired statuses.
+
+        Args:
+            name: Name of the Spark job.
+            status: Optional set of target Spark job statuses.
+                Defaults to ``{SparkJobStatus.COMPLETED}``.
+            timeout: Maximum time in seconds to wait.
+            polling_interval: Time in seconds between status checks.
+
+        Returns:
+            Spark job information after reaching one of the desired statuses.
+
+        Raises:
+            TimeoutError: If the timeout is exceeded before reaching the target status.
+        """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def get_job_logs(
+        self,
+        name: str,
+        follow: bool = False,
+    ) -> Iterator[str]:
+        """Get logs from a Spark job.
+
+        Args:
+            name: Name of the Spark job.
+            follow: Whether to stream logs in real time.
+
+        Returns:
+            Iterator over log lines.
+        """
+        raise NotImplementedError()
+>>>>>>> upstream/main

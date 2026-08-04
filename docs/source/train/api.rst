@@ -23,6 +23,33 @@ Trainers
    :members:
    :show-inheritance:
 
+Initializers
+------------
+
+.. autoclass:: kubeflow.trainer.Initializer
+   :members:
+   :show-inheritance:
+
+.. autoclass:: kubeflow.trainer.HuggingFaceDatasetInitializer
+   :members:
+   :show-inheritance:
+
+.. autoclass:: kubeflow.trainer.S3DatasetInitializer
+   :members:
+   :show-inheritance:
+
+.. autoclass:: kubeflow.trainer.DataCacheInitializer
+   :members:
+   :show-inheritance:
+
+.. autoclass:: kubeflow.trainer.HuggingFaceModelInitializer
+   :members:
+   :show-inheritance:
+
+.. autoclass:: kubeflow.trainer.S3ModelInitializer
+   :members:
+   :show-inheritance:
+
 Backend Configurations
 ----------------------
 
@@ -37,3 +64,8 @@ Backend Configurations
 .. autoclass:: kubeflow.trainer.ContainerBackendConfig
    :members:
    :show-inheritance:
+
+Utilities
+---------
+
+.. autofunction:: kubeflow.trainer.backends.kubernetes.utils.update_trainjob_status

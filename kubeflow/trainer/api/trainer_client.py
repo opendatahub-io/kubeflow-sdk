@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterator
 import logging
 
 from kubeflow.common.types import KubernetesBackendConfig
+import kubeflow.common.utils as common_utils
 from kubeflow.trainer.backends.container.backend import ContainerBackend
 from kubeflow.trainer.backends.container.types import ContainerBackendConfig
 from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
@@ -64,10 +65,13 @@ class TrainerClient:
             raise ValueError(f"Invalid backend config '{backend_config}'")
 
     def list_runtimes(self) -> list[types.Runtime]:
-        """List of the available runtimes.
+        """List of the available runtimes, preferring namespaced over cluster-scoped for duplicates.
 
         Returns:
-            A list of available training runtimes. If no runtimes exist, an empty list is returned.
+            A list of training runtimes from both namespace-scoped and
+            cluster-scoped resources. If duplicates exist, the
+            namespace-scoped runtime is preferred. Returns an empty list
+            if no runtimes are found.
 
         Raises:
             TimeoutError: Timeout to list runtimes.
@@ -82,11 +86,17 @@ class TrainerClient:
             name: Name of the runtime.
 
         Returns:
+<<<<<<< HEAD
             A runtime object.
 
         Raises:
             TimeoutError: Timeout to get a runtime.
             RuntimeError: Failed to get a runtime.
+=======
+            A runtime object. If both namespace-scoped and
+            cluster-scoped runtimes exist with the same name, the
+            namespace-scoped runtime is returned.
+>>>>>>> upstream/main
         """
         return self.backend.get_runtime(name=name)
 
@@ -111,7 +121,10 @@ class TrainerClient:
         trainer: types.CustomTrainer
         | types.CustomTrainerContainer
         | types.BuiltinTrainer
+<<<<<<< HEAD
         | RHAITrainer
+=======
+>>>>>>> upstream/main
         | None = None,
         options: list | None = None,
     ) -> str:
@@ -160,7 +173,7 @@ class TrainerClient:
             runtime: Reference to one of the existing runtimes.
 
         Returns:
-            List of created TrainJobs. If no TrainJob exist, an empty list is returned.
+            List of created TrainJobs. If no TrainJobs exist, an empty list is returned.
 
         Raises:
             TimeoutError: Timeout to list TrainJobs.
@@ -169,7 +182,7 @@ class TrainerClient:
         return self.backend.list_jobs(runtime=runtime)
 
     def get_job(self, name: str) -> types.TrainJob:
-        """Get the TrainJob object
+        """Get the TrainJob object.
 
         Args:
             name: Name of the TrainJob.
@@ -262,6 +275,8 @@ class TrainerClient:
             RuntimeError: Failed to get TrainJob or TrainJob reaches unexpected Failed status.
             TimeoutError: Timeout to wait for TrainJob status.
         """
+        common_utils.validate_wait_for_job_status(polling_interval, timeout)
+
         return self.backend.wait_for_job_status(
             name=name,
             status=status,
