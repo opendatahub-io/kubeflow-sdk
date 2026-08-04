@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kubeflow.trainer.rhai.traininghub_codegen import (
+from kubeflow.trainer.rhai.instrumentation.traininghub_codegen import (
     _get_command_from_runtime,
     _render_algorithm_wrapper,
     _render_dict_literal,

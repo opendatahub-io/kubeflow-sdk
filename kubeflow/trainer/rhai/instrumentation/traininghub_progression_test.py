@@ -18,7 +18,7 @@ import inspect
 
 import pytest
 
-from kubeflow.trainer.rhai.traininghub_progression_instrumentation import (
+from kubeflow.trainer.rhai.instrumentation.traininghub_progression import (
     _create_training_hub_progression_instrumentation,
 )
 

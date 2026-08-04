@@ -18,7 +18,7 @@ import inspect
 
 import pytest
 
-from kubeflow.trainer.rhai.transformers_progression_instrumentation import (
+from kubeflow.trainer.rhai.instrumentation.transformers_progression import (
     _create_progression_instrumentation,
 )
 

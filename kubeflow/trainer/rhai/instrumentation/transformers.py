@@ -18,10 +18,10 @@
 import inspect
 import textwrap
 
-from kubeflow.trainer.rhai.transformers_checkpoint_instrumentation import (
+from kubeflow.trainer.rhai.instrumentation.transformers_checkpoint import (
     _create_checkpoint_instrumentation,
 )
-from kubeflow.trainer.rhai.transformers_progression_instrumentation import (
+from kubeflow.trainer.rhai.instrumentation.transformers_progression import (
     _create_progression_instrumentation,
 )
 

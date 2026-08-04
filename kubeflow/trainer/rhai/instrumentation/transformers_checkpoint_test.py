@@ -18,7 +18,7 @@ import inspect
 
 import pytest
 
-from kubeflow.trainer.rhai.transformers_checkpoint_instrumentation import (
+from kubeflow.trainer.rhai.instrumentation.transformers_checkpoint import (
     _create_checkpoint_instrumentation,
 )
 

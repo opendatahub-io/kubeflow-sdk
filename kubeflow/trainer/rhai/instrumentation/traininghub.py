@@ -3,7 +3,7 @@
 import inspect
 import textwrap
 
-from kubeflow.trainer.rhai.traininghub_progression_instrumentation import (
+from kubeflow.trainer.rhai.instrumentation.traininghub_progression import (
     _create_training_hub_progression_instrumentation,
 )
 
@@ -75,7 +75,7 @@ print("[Kubeflow] Training Hub progression tracking enabled", flush=True)
 
 
 # Re-exports for backward compatibility
-from kubeflow.trainer.rhai.traininghub_codegen import (  # noqa: E402, F401
+from kubeflow.trainer.rhai.instrumentation.traininghub_codegen import (  # noqa: E402, F401
     _get_command_from_runtime,
     _render_algorithm_wrapper,
     _render_dict_literal,

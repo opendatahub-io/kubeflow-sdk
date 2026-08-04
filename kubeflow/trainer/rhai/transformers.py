@@ -347,7 +347,7 @@ def _build_checkpoint_code(trainer: TransformersTrainer) -> tuple[str, str]:
 
 
 # Re-exports for backward compatibility
-from kubeflow.trainer.rhai.transformers_instrumentation import (  # noqa: E402, F401
+from kubeflow.trainer.rhai.instrumentation.transformers import (  # noqa: E402, F401
     _create_checkpoint_instrumentation,
     _create_progression_instrumentation,
     get_jit_checkpoint_injection_code,

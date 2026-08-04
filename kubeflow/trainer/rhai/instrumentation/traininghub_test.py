@@ -16,7 +16,7 @@
 
 import pytest
 
-from kubeflow.trainer.rhai.traininghub_instrumentation import (
+from kubeflow.trainer.rhai.instrumentation.traininghub import (
     _render_algorithm_wrapper,
     _render_user_func_code,
     get_training_hub_instrumentation_wrapper,
