@@ -140,12 +140,17 @@ def _resolve_executor_resources(
     """Resolve executor configuration.
 
     Args:
-        executor: Executor configuration.
-        num_executors: Number of executor instances.
-        resources_per_executor: Resource requirements.
+        executor:
+            Executor configuration.
+
+        num_executors:
+            Number of executor instances.
+
+        resources_per_executor:
+            Resource requirements.
 
     Returns:
-        Tuple containing (instances, cores, memory).
+        Tuple containing ``(instances, cores, memory)``.
 
     Raises:
         ValueError:
@@ -332,6 +337,33 @@ def apply_options(
         option(resource, backend)
 
 
+def _validate_spark_conf(
+    spark_conf: dict[str, str] | None,
+) -> None:
+    """Validate Spark configuration.
+
+    Args:
+        spark_conf:
+            Spark configuration properties.
+
+    Raises:
+        ValueError:
+            If ``spark_conf`` is not a dictionary of string keys and values.
+    """
+    if spark_conf is None:
+        return
+
+    if not isinstance(spark_conf, dict):
+        raise ValueError("spark_conf must be a dictionary.")
+
+    for key, value in spark_conf.items():
+        if not isinstance(key, str):
+            raise ValueError("All spark_conf keys must be strings.")
+
+        if not isinstance(value, str):
+            raise ValueError("All spark_conf values must be strings.")
+
+
 # ----------------------------------------------------------------------
 # Spark Connect session utility functions
 # ----------------------------------------------------------------------
@@ -510,6 +542,8 @@ def build_spark_connect_cr(
         ValueError:
             If the provided driver or executor resource configuration is invalid.
     """
+    _validate_spark_conf(spark_conf)
+
     spark_version = spark_version or constants.DEFAULT_SPARK_VERSION
 
     # Build server spec using conversion function
@@ -769,6 +803,7 @@ def get_spark_application_cr_from_file_job(
     resources_per_executor: dict[str, str] | None = None,
     options: list | None = None,
     backend: Any | None = None,
+    spark_conf: dict[str, str] | None = None,
 ) -> models.SparkV1beta2SparkApplication:
     """Build a SparkApplication custom resource for a file-based Spark job.
 
@@ -781,6 +816,7 @@ def get_spark_application_cr_from_file_job(
         resources_per_executor: Resource requirements for each executor.
         options: List of configuration options.
         backend: Backend instance used for option validation.
+        spark_conf: Spark configuration properties.
 
     Returns:
         SparkApplication custom resource model.
@@ -808,6 +844,7 @@ def get_spark_application_cr_from_file_job(
                 num_executors=num_executors,
                 resources_per_executor=resources_per_executor,
             ),
+            spark_conf=spark_conf or None,
         ),
     )
 
@@ -829,6 +866,7 @@ def get_spark_application_cr_from_func_job(
     resources_per_executor: dict[str, str] | None = None,
     options: list | None = None,
     backend: Any | None = None,
+    spark_conf: dict[str, str] | None = None,
 ) -> models.SparkV1beta2SparkApplication:
     """Build a SparkApplication custom resource for a function-based Spark job.
 
@@ -841,6 +879,7 @@ def get_spark_application_cr_from_func_job(
         resources_per_executor: Resource requirements for each executor.
         options: List of configuration options.
         backend: Backend instance used for option validation.
+        spark_conf: Spark configuration properties.
 
     Returns:
         SparkApplication custom resource model.
@@ -850,6 +889,7 @@ def get_spark_application_cr_from_func_job(
             If the provided function is invalid or the executor resource
             configuration is invalid.
     """
+    _validate_spark_conf(spark_conf)
 
     command = get_command_using_spark_func(
         func=func,
@@ -874,6 +914,7 @@ def get_spark_application_cr_from_func_job(
                 num_executors=num_executors,
                 resources_per_executor=resources_per_executor,
             ),
+            spark_conf=spark_conf or None,
         ),
     )
 
