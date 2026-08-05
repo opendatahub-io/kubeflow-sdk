@@ -827,7 +827,18 @@ def _speculator_data_only(
     _wait_for_vllm(health, timeout_secs=1200)
 
     if regenerate_responses:
-        dataset_name = _regenerate_responses(dataset_name, save_path, endpoint, max_samples)
+        if rank == 0:
+            dataset_name = _regenerate_responses(
+                dataset_name, save_path, endpoint, max_samples
+            )
+        if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+            import torch.distributed as dist
+
+            dist.barrier()
+        if rank != 0:
+            regen_output = os.path.join(save_path, "regenerated_responses.jsonl")
+            if os.path.exists(regen_output):
+                dataset_name = regen_output
 
     if "_set_phase" in globals():
         _set_phase("preprocessing", 10)  # noqa: F821
@@ -1124,8 +1135,23 @@ def _speculator_online(
     health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
     _wait_for_vllm(health)
 
+    rank = int(os.environ.get("RANK", 0))
+
     if regenerate_responses:
-        dataset_name = _regenerate_responses(dataset_name, output_dir, vllm_endpoint, max_samples)
+        if rank == 0:
+            dataset_name = _regenerate_responses(
+                dataset_name, output_dir, vllm_endpoint, max_samples
+            )
+        if int(os.environ.get("WORLD_SIZE", 1)) > 1:
+            import torch
+
+            if not torch.distributed.is_initialized():
+                torch.distributed.init_process_group(backend="nccl")
+            torch.distributed.barrier()
+        if rank != 0:
+            regen_output = os.path.join(output_dir, "regenerated_responses.jsonl")
+            if os.path.exists(regen_output):
+                dataset_name = regen_output
 
     if "_set_phase" in globals():
         _set_phase("preprocessing", 8)  # noqa: F821
@@ -1148,8 +1174,6 @@ def _speculator_online(
     if is_distributed and not torch.distributed.is_initialized():
         torch.distributed.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
-
-    rank = int(os.environ.get("RANK", 0))
     model, verifier_config = _setup_eagle3_model(
         verifier_model=verifier_model,
         data_path=data_dir,
