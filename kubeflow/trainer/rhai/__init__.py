@@ -19,14 +19,24 @@ This module provides RHAI trainer types and utilities:
 - TrainingHubTrainer: RHAI Training Hub integration
 """
 
+from kubeflow.trainer.rhai.speculator import (
+    SpeculativeDecodingTrainer,
+    SpeculatorConfig,
+    SpeculatorMode,
+    SpeculatorType,
+)
 from kubeflow.trainer.rhai.traininghub import TrainingHubAlgorithms, TrainingHubTrainer
 from kubeflow.trainer.rhai.transformers import TransformersTrainer
 
 __all__ = (
     "RHAITrainer",
+    "SpeculativeDecodingTrainer",
+    "SpeculatorConfig",
+    "SpeculatorMode",
+    "SpeculatorType",
     "TrainingHubAlgorithms",
     "TrainingHubTrainer",
     "TransformersTrainer",
 )
 
-RHAITrainer = TransformersTrainer | TrainingHubTrainer
+RHAITrainer = TransformersTrainer | TrainingHubTrainer | SpeculativeDecodingTrainer
