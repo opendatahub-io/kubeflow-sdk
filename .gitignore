@@ -4,6 +4,8 @@ __debug_bin
 .idea/
 .DS_Store
 .swp
+*.swp
+*.swo
 *~
 
 # Python cache files
@@ -25,3 +27,18 @@ docs/_build/
 
 # Local E2E: cloned for building Spark Operator image (SPARK_OPERATOR_IMAGE_TAG=local)
 spark-operator/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Python extras
+*$py.class
+*.so
+*.py[cod]
+
+# Virtualenv variants (belt-and-suspenders with .venv/)
+.env
+.venv/
+
