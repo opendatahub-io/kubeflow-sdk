@@ -828,12 +828,12 @@ def _speculator_data_only(
 
     if regenerate_responses:
         if rank == 0:
-            dataset_name = _regenerate_responses(
-                dataset_name, save_path, endpoint, max_samples
-            )
+            dataset_name = _regenerate_responses(dataset_name, save_path, endpoint, max_samples)
         if int(os.environ.get("WORLD_SIZE", "1")) > 1:
             import torch.distributed as dist
 
+            if not dist.is_initialized():
+                dist.init_process_group(backend="nccl")
             dist.barrier()
         if rank != 0:
             regen_output = os.path.join(save_path, "regenerated_responses.jsonl")
