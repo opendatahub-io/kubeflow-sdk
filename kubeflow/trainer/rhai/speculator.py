@@ -158,6 +158,10 @@ class SpeculativeDecodingTrainer:
             preprocessing. Only supported in DATA_ONLY and OFFLINE modes (default: False).
         vllm_endpoint: URL of user-managed vLLM endpoint for hidden state extraction.
             Required for OFFLINE mode. Example: ``"http://vllm-verifier-svc:8000/v1"``.
+        vllm_readiness_timeout: Maximum time in seconds to wait for the vLLM server
+            to become ready. The server may take longer for large models that require
+            downloading or loading into GPU memory. Increase this value if your model
+            is large (default: 3600).
         enable_progression_tracking: Enable progression tracking (default: True).
         metrics_port: HTTP server port for metrics endpoint (default: 28080).
         metrics_poll_interval_seconds: How often controller polls metrics (default: 30).
@@ -186,6 +190,7 @@ class SpeculativeDecodingTrainer:
     output_dir: str | None = None
     regenerate_responses: bool = False
     vllm_endpoint: str | None = None
+    vllm_readiness_timeout: int = 3600
 
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
@@ -554,31 +559,36 @@ class SpeculativeDecodingTrainer:
             )
 
 
-def _wait_for_vllm(health_url: str, timeout_secs: int = 600) -> None:
+def _wait_for_vllm(health_url: str, timeout_secs: int = 3600) -> None:
     """Wait for vLLM endpoint to become ready. Shared helper injected via inspect.getsource().
 
     This function is NOT called directly in the SDK. It is extracted as source
     code and injected into the script that runs inside the container.
     """
-    import sys
     import time
     import urllib.error
     import urllib.request
 
     start = time.time()
     print(
-        f"[Kubeflow] Waiting for vLLM sidecar at {health_url} (timeout={timeout_secs}s)",
+        f"[Kubeflow] Waiting for vLLM server at {health_url} (timeout={timeout_secs}s)",
         flush=True,
     )
     while time.time() - start < timeout_secs:
         try:
             urllib.request.urlopen(health_url, timeout=5)
-            print("[Kubeflow] vLLM sidecar is ready", flush=True)
+            print("[Kubeflow] vLLM server is ready", flush=True)
             break
         except (urllib.error.URLError, OSError):
-            time.sleep(5)
+            time.sleep(30)
     else:
-        sys.exit(f"vLLM endpoint not reachable within {timeout_secs}s")
+        raise RuntimeError(
+            f"[Kubeflow] vLLM server at {health_url} did not become ready within "
+            f"{timeout_secs}s ({timeout_secs // 60} minutes). This can happen when "
+            f"the model is large and takes longer to download or load into GPU "
+            f"memory. To increase the timeout, set vllm_readiness_timeout in "
+            f"SpeculativeDecodingTrainer (current: {timeout_secs}s)."
+        )
 
 
 def _preprocess_dataset(
@@ -772,6 +782,7 @@ def _speculator_data_only(
     concurrency: int = 4,
     regenerate_responses: bool = False,
     hidden_states_path: str | None = None,
+    vllm_readiness_timeout: int = 3600,
 ) -> None:
     """Data extraction function injected into pods via inspect.getsource().
 
@@ -824,7 +835,7 @@ def _speculator_data_only(
     endpoint = vllm_endpoint
     print(f"[Kubeflow] Using vLLM endpoint: {endpoint}", flush=True)
     health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
-    _wait_for_vllm(health, timeout_secs=1200)
+    _wait_for_vllm(health, timeout_secs=vllm_readiness_timeout)
 
     if regenerate_responses:
         if rank == 0:
@@ -1116,6 +1127,7 @@ def _speculator_online(
     from_pretrained: str | None = None,
     target_layer_ids: list[int] | None = None,
     vllm_endpoint: str = "http://localhost:8234/v1",
+    vllm_readiness_timeout: int = 3600,
 ) -> None:
     """Online training function injected into pods via inspect.getsource().
 
@@ -1133,7 +1145,7 @@ def _speculator_online(
         _set_phase("waiting_for_vllm", 3)  # noqa: F821
 
     health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
-    _wait_for_vllm(health)
+    _wait_for_vllm(health, timeout_secs=vllm_readiness_timeout)
 
     rank = int(os.environ.get("RANK", 0))
 
@@ -1390,6 +1402,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    concurrency={cfg.datagen_concurrency!r},\n"
         f"    regenerate_responses={trainer.regenerate_responses!r},\n"
         f"    hidden_states_path={offline_hs_path!r},\n"
+        f"    vllm_readiness_timeout={trainer.vllm_readiness_timeout!r},\n"
         f")\n"
     )
 
@@ -1450,6 +1463,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    from_pretrained={cfg.from_pretrained!r},\n"
         f"    target_layer_ids={cfg.target_layer_ids!r},\n"
         f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
+        f"    vllm_readiness_timeout={trainer.vllm_readiness_timeout!r},\n"
         f")\n"
     )
 

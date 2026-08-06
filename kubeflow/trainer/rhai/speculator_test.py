@@ -1380,8 +1380,8 @@ def test_data_only_script_contains_vllm_health_check():
     compile(script, "<test>", "exec")
 
     assert "/health" in script
-    assert "vLLM sidecar is ready" in script
-    assert "vLLM endpoint not reachable" in script
+    assert "vLLM server is ready" in script
+    assert "did not become ready within" in script
 
     print("test execution complete")
 
@@ -1969,7 +1969,7 @@ def test_online_script_contains_vllm_health_check():
     script = _render_speculator_training_script(trainer)
 
     assert "health" in script
-    assert "vLLM sidecar is ready" in script
+    assert "vLLM server is ready" in script
 
     print("test execution complete")
 
@@ -2229,5 +2229,51 @@ def test_offline_script_skips_model_arg_with_hidden_states_path():
 
     assert "if not hidden_states_path:" in script
     assert '"--hidden-states-dir"' in script
+
+    print("test execution complete")
+
+
+def test_vllm_readiness_timeout_default():
+    """Test that script contains default vllm_readiness_timeout=3600."""
+    print("Executing test: default vllm_readiness_timeout")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
+        dataset_name="ultrachat",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
+
+    assert "vllm_readiness_timeout=3600" in script
+
+    print("test execution complete")
+
+
+def test_vllm_readiness_timeout_custom_value():
+    """Test that custom vllm_readiness_timeout renders correctly."""
+    print("Executing test: custom vllm_readiness_timeout")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
+        dataset_name="ultrachat",
+        output_dir="pvc://test-pvc/output",
+        vllm_readiness_timeout=7200,
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
+
+    assert "vllm_readiness_timeout=7200" in script
+    assert "vllm_readiness_timeout=3600" not in script
 
     print("test execution complete")
