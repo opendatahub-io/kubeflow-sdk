@@ -262,6 +262,35 @@ def parse_output_dir_uri(output_dir: str | None) -> tuple[str | None, dict | Non
     return output_dir, None
 
 
+RUNTIME_PATCH_MANAGER = "trainer.kubeflow.org/kubeflow-sdk"
+
+
+def _get_pod_spec_from_runtime_patch(patch: dict) -> dict:
+    """Navigate into a RuntimePatch dict and return the pod spec for the 'node' replicatedJob.
+
+    Creates intermediate dicts as needed. Returns the innermost pod spec dict
+    where volumes and containers live.
+    """
+    runtime_spec = patch.setdefault("trainingRuntimeSpec", {})
+    template = runtime_spec.setdefault("template", {})
+    jobset_spec = template.setdefault("spec", {})
+    replicated_jobs = jobset_spec.setdefault("replicatedJobs", [])
+
+    node_rj = None
+    for rj in replicated_jobs:
+        if rj.get("name") == constants.NODE:
+            node_rj = rj
+            break
+    if node_rj is None:
+        node_rj = {"name": constants.NODE}
+        replicated_jobs.append(node_rj)
+
+    job_template = node_rj.setdefault("template", {})
+    job_spec = job_template.setdefault("spec", {})
+    pod_template = job_spec.setdefault("template", {})
+    return pod_template.setdefault("spec", {})
+
+
 def apply_output_dir_uri_to_pod_overrides(
     output_dir: str,
     runtime_patches: list | None,
@@ -280,76 +309,56 @@ def apply_output_dir_uri_to_pod_overrides(
     """
     resolved_output_dir, volume_mount_specs = parse_output_dir_uri(output_dir)
 
-    # If no volume mounting needed, return as-is
     if volume_mount_specs is None:
         return resolved_output_dir, runtime_patches or []
 
-    # Initialize runtime_patches as list if needed
     if runtime_patches is None:
         runtime_patches = []
 
-    # Find existing override for node target job, or create new one
-    node_override = None
-    for override in runtime_patches:
-        target_jobs = override.get("targetJobs", [])
-        if any(job.get("name") == constants.NODE for job in target_jobs):
-            node_override = override
+    # Find an existing RuntimePatch owned by the SDK, or create a new one.
+    sdk_patch = None
+    for patch in runtime_patches:
+        if patch.get("manager") == RUNTIME_PATCH_MANAGER:
+            sdk_patch = patch
             break
 
-    if node_override is None:
-        # Create new override targeting the node job
-        node_override = {"targetJobs": [{"name": constants.NODE}], "spec": {}}
-        runtime_patches.append(node_override)
+    if sdk_patch is None:
+        sdk_patch = {"manager": RUNTIME_PATCH_MANAGER}
+        runtime_patches.append(sdk_patch)
 
-    # Ensure spec dict exists
-    if "spec" not in node_override:
-        node_override["spec"] = {}
+    pod_spec = _get_pod_spec_from_runtime_patch(sdk_patch)
 
-    spec_dict = node_override["spec"]
-
-    # Add volume to spec (only if not already present)
-    if "volumes" not in spec_dict:
-        spec_dict["volumes"] = []
-
-    # Check if volume with the same name already exists
+    # Add volume (only if not already present)
+    volumes = pod_spec.setdefault("volumes", [])
     volume_name = volume_mount_specs["volume"]["name"]
-    if any(vol.get("name") == volume_name for vol in spec_dict["volumes"]):
+    if any(vol.get("name") == volume_name for vol in volumes):
         raise ValueError(
             f"Volume name conflict: A volume with name '{volume_name}' already exists in "
             f"runtime_patches. This name is reserved by Kubeflow SDK for "
             f"checkpoint storage. Please rename your existing volume to a different name."
         )
-    spec_dict["volumes"].append(volume_mount_specs["volume"])
+    volumes.append(volume_mount_specs["volume"])
 
     # Add volumeMount to the trainer container
-    if "containers" not in spec_dict:
-        spec_dict["containers"] = []
-
-    # Find the trainer container in containers list
-    trainer_container_dict = None
-    for container_dict in spec_dict["containers"]:
-        if container_dict.get("name") == constants.NODE:
-            trainer_container_dict = container_dict
+    containers = pod_spec.setdefault("containers", [])
+    trainer_container = None
+    for c in containers:
+        if c.get("name") == constants.NODE:
+            trainer_container = c
             break
+    if trainer_container is None:
+        trainer_container = {"name": constants.NODE}
+        containers.append(trainer_container)
 
-    if trainer_container_dict is None:
-        # Create new container override for trainer
-        trainer_container_dict = {"name": constants.NODE, "volumeMounts": []}
-        spec_dict["containers"].append(trainer_container_dict)
-
-    # Add volumeMount to trainer container (only if not already present)
-    if "volumeMounts" not in trainer_container_dict:
-        trainer_container_dict["volumeMounts"] = []
-
-    # Check if volumeMount with the same name already exists
+    volume_mounts = trainer_container.setdefault("volumeMounts", [])
     volume_mount_name = volume_mount_specs["volumeMount"]["name"]
-    if any(vm.get("name") == volume_mount_name for vm in trainer_container_dict["volumeMounts"]):
+    if any(vm.get("name") == volume_mount_name for vm in volume_mounts):
         raise ValueError(
             f"VolumeMount name conflict: A volumeMount with name '{volume_mount_name}' already "
             f"exists in runtime_patches. This name is reserved by Kubeflow SDK for "
             f"checkpoint storage. Please rename your existing volumeMount to a different name."
         )
-    trainer_container_dict["volumeMounts"].append(volume_mount_specs["volumeMount"])
+    volume_mounts.append(volume_mount_specs["volumeMount"])
 
     return resolved_output_dir, runtime_patches
 
