@@ -584,9 +584,11 @@ def _wait_for_vllm(health_url: str, timeout_secs: int = 3600) -> None:
     else:
         raise RuntimeError(
             f"[Kubeflow] vLLM server at {health_url} did not become ready within "
-            f"{timeout_secs}s ({timeout_secs // 60} minutes). This can happen when "
+            f"{timeout_secs}s ({timeout_secs // 60} minutes). Common causes: "
             f"the model is large and takes longer to download or load into GPU "
-            f"memory. To increase the timeout, set vllm_readiness_timeout in "
+            f"memory, the vLLM server failed to start, or there is a configuration "
+            f"error. Check the vLLM container logs for details. To increase the "
+            f"timeout, set vllm_readiness_timeout in "
             f"SpeculativeDecodingTrainer (current: {timeout_secs}s)."
         )
 
