@@ -1189,8 +1189,13 @@ def _speculator_online(
     )
 
     max_len = total_seq_len
-    collate_fn = create_collate_fn(max_len, verifier_config.hidden_size)
     hs_dtype = getattr(torch, hidden_states_dtype)
+    collate_fn = create_collate_fn(
+        max_len,
+        verifier_config.hidden_size,
+        num_target_layers=len(target_layer_ids),
+        dtype=hs_dtype,
+    )
 
     train_dataset = ArrowDataset(
         max_len=max_len,
@@ -1368,6 +1373,12 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     offline_hs_path = resolved_hidden_states if trainer.mode == SpeculatorMode.OFFLINE else None
 
+    offline_train_hs_path = (
+        f"{resolved_output_dir}/hidden_states"
+        if trainer.mode == SpeculatorMode.OFFLINE
+        else resolved_hidden_states
+    )
+
     data_call = (
         f"_speculator_data_only(\n"
         f"    verifier_model={resolved_verifier_model!r},\n"
@@ -1386,7 +1397,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"_speculator_train_only(\n"
         f"    verifier_model={resolved_verifier_model!r},\n"
         f"    data_path={resolved_data_path!r},\n"
-        f"    hidden_states_path={resolved_hidden_states!r},\n"
+        f"    hidden_states_path={offline_train_hs_path!r},\n"
         f"    save_path={resolved_output_dir!r},\n"
         f"    epochs={trainer.epochs!r},\n"
         f"    lr={trainer.lr!r},\n"
