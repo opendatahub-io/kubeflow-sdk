@@ -36,7 +36,7 @@ class SpeculatorMode(Enum):
     Args:
         TRAIN_ONLY: Train draft model from pre-extracted hidden states on PVC.
         DATA_ONLY: Extract hidden states from verifier model via managed vLLM sidecar.
-        OFFLINE: Extract hidden states via user-managed vLLM endpoint, then train.
+        OFFLINE: Extract hidden states via self-managed vLLM endpoint, then train.
         ONLINE: Online training with a custom runtime image that includes all dependencies.
     """
 
@@ -156,7 +156,7 @@ class SpeculativeDecodingTrainer:
         regenerate_responses: When True, send dataset prompts to the verifier model
             and use its responses instead of the original dataset responses before
             preprocessing. Only supported in DATA_ONLY and OFFLINE modes (default: False).
-        vllm_endpoint: URL of user-managed vLLM endpoint for hidden state extraction.
+        vllm_endpoint: URL of self-managed vLLM endpoint for hidden state extraction.
             Required for OFFLINE mode. Example: ``"http://vllm-verifier-svc:8000/v1"``.
         vllm_readiness_timeout_minutes: Maximum time in minutes to wait for the vLLM
             server to become ready. The server may take longer for large models that
@@ -295,7 +295,7 @@ class SpeculativeDecodingTrainer:
         ):
             raise ValueError(
                 "verifier_model must be a PVC URI (pvc://<name>/<path>) for OFFLINE mode. "
-                "The user-managed vLLM instance already has the model on shared storage, "
+                "The self-managed vLLM instance already has the model on shared storage, "
                 "so the training pod reads it from the same PVC."
             )
 
