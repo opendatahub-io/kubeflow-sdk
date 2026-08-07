@@ -36,7 +36,7 @@ class SpeculatorMode(Enum):
     Args:
         TRAIN_ONLY: Train draft model from pre-extracted hidden states on PVC.
         DATA_ONLY: Extract hidden states from verifier model via managed vLLM sidecar.
-        OFFLINE: Extract hidden states via user-managed vLLM endpoint, then train.
+        OFFLINE: Extract hidden states via self-managed vLLM endpoint, then train.
         ONLINE: Online training with a custom runtime image that includes all dependencies.
     """
 
@@ -155,7 +155,14 @@ class SpeculativeDecodingTrainer:
             (pvc://<name>/<path>). The SDK auto-mounts the volume and resolves the path.
         regenerate_responses: When True, send dataset prompts to the verifier model
             and use its responses instead of the original dataset responses before
-            preprocessing. Only supported in DATA_ONLY mode (default: False).
+            preprocessing. Only supported in DATA_ONLY and OFFLINE modes (default: False).
+        vllm_endpoint: URL of self-managed vLLM endpoint for hidden state extraction.
+            Required for OFFLINE mode. Optional for DATA_ONLY mode (skips sidecar).
+            Example: ``"http://vllm-verifier-svc:8000/v1"``.
+        vllm_readiness_timeout_minutes: Maximum time in minutes to wait for the vLLM
+            server to become ready. The server may take longer for large models that
+            require downloading or loading into GPU memory. Increase this value if your
+            model is large. Must be at least 1 (default: 60).
         enable_progression_tracking: Enable progression tracking (default: True).
         metrics_port: HTTP server port for metrics endpoint (default: 28080).
         metrics_poll_interval_seconds: How often controller polls metrics (default: 30).
@@ -183,6 +190,8 @@ class SpeculativeDecodingTrainer:
     env: dict[str, str] | None = None
     output_dir: str | None = None
     regenerate_responses: bool = False
+    vllm_endpoint: str | None = None
+    vllm_readiness_timeout_minutes: int = 60
 
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
@@ -193,6 +202,8 @@ class SpeculativeDecodingTrainer:
         supported_modes = {
             SpeculatorMode.TRAIN_ONLY,
             SpeculatorMode.DATA_ONLY,
+            SpeculatorMode.OFFLINE,
+            SpeculatorMode.ONLINE,
         }
         if self.mode not in supported_modes:
             raise NotImplementedError(
@@ -206,14 +217,19 @@ class SpeculativeDecodingTrainer:
                 f"Currently only '{SpeculatorType.EAGLE3.value}' is supported."
             )
 
-        if self.mode == SpeculatorMode.TRAIN_ONLY and not self.hidden_states_path:
+        _uses_external_vllm = self.vllm_endpoint is not None
+
+        if (
+            self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
+            or (self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm)
+        ) and not self.hidden_states_path:
             raise ValueError(
-                "hidden_states_path is required for TRAIN_ONLY mode. "
-                "Provide a PVC URI (pvc://<name>/<path>) to the pre-extracted hidden states."
+                f"hidden_states_path is required for {self.mode.name} mode. "
+                "Provide a PVC URI (pvc://<name>/<path>)."
             )
 
         if (
-            self.mode == SpeculatorMode.TRAIN_ONLY
+            self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
             and self.hidden_states_path
             and not self.hidden_states_path.startswith(PVC_URI_SCHEME)
         ):
@@ -246,9 +262,12 @@ class SpeculativeDecodingTrainer:
                 "to exchange hidden states."
             )
 
-        if self.mode == SpeculatorMode.DATA_ONLY and not self.dataset_name:
+        if (
+            self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.OFFLINE, SpeculatorMode.ONLINE)
+            and not self.dataset_name
+        ):
             raise ValueError(
-                "dataset_name is required for DATA_ONLY mode. "
+                f"dataset_name is required for {self.mode.name} mode. "
                 "Provide a built-in name ('magpie', 'ultrachat', 'gsm8k') or "
                 "a PVC URI to a .json/.jsonl file (e.g. 'pvc://shared/data/custom.jsonl')."
             )
@@ -274,16 +293,78 @@ class SpeculativeDecodingTrainer:
                 f"got {self.dataset_name!r}."
             )
 
+        if (
+            self.mode == SpeculatorMode.OFFLINE
+            or (self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm)
+        ) and not self.verifier_model.startswith(PVC_URI_SCHEME):
+            raise ValueError(
+                f"verifier_model must be a PVC URI (pvc://<name>/<path>) for "
+                f"{self.mode.name} mode with a self-managed vLLM endpoint. "
+                "The self-managed vLLM instance already has the model on shared storage, "
+                "so the training pod reads it from the same PVC."
+            )
+
+        if self.mode == SpeculatorMode.OFFLINE or (
+            self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm
+        ):
+            cfg = self.config or SpeculatorConfig()
+            if cfg.target_layer_ids is None:
+                raise ValueError(
+                    f"config.target_layer_ids is required for {self.mode.name} mode "
+                    f"with a self-managed vLLM endpoint. "
+                    "Provide the layer IDs matching your vLLM configuration via "
+                    "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n]). "
+                    "See https://docs.vllm.ai/projects/speculators/en/latest/cli/launch_vllm/#basic-usage"
+                )
+
+        if self.mode == SpeculatorMode.OFFLINE and not self.vllm_endpoint:
+            raise ValueError(
+                "vllm_endpoint is required for OFFLINE mode. "
+                "Provide the URL of your self-managed vLLM endpoint "
+                "(e.g. 'http://vllm-svc:8000/v1')."
+            )
+
+        if self.vllm_endpoint is not None and self.mode not in (
+            SpeculatorMode.OFFLINE,
+            SpeculatorMode.DATA_ONLY,
+        ):
+            raise ValueError(
+                "vllm_endpoint (self-managed vLLM server) is only supported in "
+                "OFFLINE and DATA_ONLY modes."
+            )
+
+        if (
+            self.mode == SpeculatorMode.DATA_ONLY
+            and _uses_external_vllm
+            and self.vllm_resources is not None
+        ):
+            raise ValueError(
+                "vllm_resources cannot be used with vllm_endpoint in DATA_ONLY mode. "
+                "The self-managed vLLM server's resources are configured externally."
+            )
+
         if self.max_samples is not None:
-            if self.mode != SpeculatorMode.DATA_ONLY:
-                raise ValueError("max_samples is only supported in DATA_ONLY mode.")
+            if self.mode not in (
+                SpeculatorMode.DATA_ONLY,
+                SpeculatorMode.OFFLINE,
+                SpeculatorMode.ONLINE,
+            ):
+                raise ValueError(
+                    "max_samples is only supported in DATA_ONLY, OFFLINE, and ONLINE modes."
+                )
             if not isinstance(self.max_samples, int) or self.max_samples < 1:
                 raise ValueError(
                     f"max_samples must be a positive integer, got {self.max_samples!r}."
                 )
 
-        if self.regenerate_responses and self.mode != SpeculatorMode.DATA_ONLY:
-            raise ValueError("regenerate_responses is only supported in DATA_ONLY mode.")
+        if self.regenerate_responses and self.mode not in (
+            SpeculatorMode.DATA_ONLY,
+            SpeculatorMode.OFFLINE,
+            SpeculatorMode.ONLINE,
+        ):
+            raise ValueError(
+                "regenerate_responses is only supported in DATA_ONLY, OFFLINE, and ONLINE modes."
+            )
 
         _regen_supported_datasets = ("magpie", "ultrachat", "gsm8k")
         if self.regenerate_responses and self.dataset_name not in _regen_supported_datasets:
@@ -308,19 +389,22 @@ class SpeculativeDecodingTrainer:
                 f"total_seq_len must be a positive integer, got {self.total_seq_len!r}."
             )
 
-        if self.mode == SpeculatorMode.TRAIN_ONLY and (
+        if self.mode != SpeculatorMode.DATA_ONLY and (
             not isinstance(self.training_resources, dict) or not self.training_resources
         ):
             raise ValueError(
-                "training_resources is required for TRAIN_ONLY mode. "
+                f"training_resources is required for {self.mode.value} mode. "
                 "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
             )
 
-        if self.mode == SpeculatorMode.DATA_ONLY and (
+        _needs_sidecar = self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE)
+        if self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm:
+            _needs_sidecar = False
+        if _needs_sidecar and (
             not isinstance(self.vllm_resources, dict) or not self.vllm_resources
         ):
             raise ValueError(
-                "vllm_resources is required for DATA_ONLY mode. "
+                f"vllm_resources is required for {self.mode.value} mode. "
                 "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
             )
 
@@ -376,6 +460,17 @@ class SpeculativeDecodingTrainer:
                 "config.from_pretrained is not yet supported. "
                 "Eagle3DraftModel.from_training_args() does not implement checkpoint "
                 "resumption from a pretrained draft model."
+            )
+
+        if not isinstance(self.vllm_readiness_timeout_minutes, int):
+            raise ValueError(
+                f"vllm_readiness_timeout_minutes must be an integer, "
+                f"got {type(self.vllm_readiness_timeout_minutes).__name__}"
+            )
+        if self.vllm_readiness_timeout_minutes < 1:
+            raise ValueError(
+                f"vllm_readiness_timeout_minutes must be at least 1, "
+                f"got {self.vllm_readiness_timeout_minutes}"
             )
 
         if not isinstance(self.metrics_port, int):
@@ -447,7 +542,11 @@ class SpeculativeDecodingTrainer:
                 f"('magpie', 'ultrachat', 'gsm8k') are supported."
             )
 
-        if self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.TRAIN_ONLY):
+        if self.mode in (
+            SpeculatorMode.DATA_ONLY,
+            SpeculatorMode.TRAIN_ONLY,
+            SpeculatorMode.ONLINE,
+        ):
             cfg = self.config or SpeculatorConfig()
             if self.verifier_model.startswith(PVC_URI_SCHEME):
                 if cfg.target_layer_ids is None:
@@ -455,7 +554,8 @@ class SpeculativeDecodingTrainer:
                         "config.target_layer_ids is required when verifier_model is a "
                         "PVC URI. The SDK cannot read the model config from the PVC to "
                         "auto-detect layers. Provide target_layer_ids explicitly via "
-                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n])."
+                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n]). "
+                        "See https://docs.vllm.ai/projects/speculators/en/latest/cli/launch_vllm/#basic-usage"
                     )
             else:
                 if cfg.target_layer_ids is None:
@@ -500,6 +600,221 @@ class SpeculativeDecodingTrainer:
             )
 
 
+def _wait_for_vllm(health_url: str, timeout_minutes: int = 60) -> None:
+    """Wait for vLLM endpoint to become ready. Shared helper injected via inspect.getsource().
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the script that runs inside the container.
+    """
+    import time
+    import urllib.error
+    import urllib.request
+
+    timeout_secs = timeout_minutes * 60
+    start = time.time()
+    print(
+        f"[Kubeflow] Waiting for vLLM server at {health_url} (timeout={timeout_minutes}m)",
+        flush=True,
+    )
+    while time.time() - start < timeout_secs:
+        try:
+            urllib.request.urlopen(health_url, timeout=5)
+            print("[Kubeflow] vLLM server is ready", flush=True)
+            break
+        except (urllib.error.URLError, OSError):
+            time.sleep(30)
+    else:
+        raise RuntimeError(
+            f"[Kubeflow] vLLM server at {health_url} did not become ready within "
+            f"{timeout_minutes} minutes. Common causes: the model is large and takes "
+            f"longer to download or load into GPU memory, the vLLM server failed to "
+            f"start, or there is a configuration error. Check the vLLM container logs "
+            f"for details. To increase the timeout, set vllm_readiness_timeout_minutes "
+            f"in SpeculativeDecodingTrainer (current: {timeout_minutes}m)."
+        )
+
+
+def _preprocess_dataset(
+    verifier_model: str,
+    dataset_name: str,
+    data_dir: str,
+    total_seq_len: int,
+    max_samples: int | None = None,
+) -> int:
+    """Preprocess dataset and save to disk. Shared helper injected via inspect.getsource().
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the script that runs inside the container.
+
+    Returns:
+        Number of samples in the preprocessed dataset.
+    """
+    import os
+
+    from speculators.data_generation.preprocessing import load_and_preprocess_dataset
+
+    os.makedirs(data_dir, exist_ok=True)
+
+    print(
+        f"[Kubeflow] Preprocessing dataset '{dataset_name}' (seq_len={total_seq_len})", flush=True
+    )
+
+    token_freq_path = os.path.join(data_dir, "token_freq.pt")
+    preprocess_kwargs = {
+        "target_model_path": verifier_model,
+        "train_data_paths": [dataset_name],
+        "seq_length": total_seq_len,
+        "token_freq_path": token_freq_path,
+    }
+    if max_samples is not None:
+        preprocess_kwargs["max_samples"] = max_samples
+    dataset, processor = load_and_preprocess_dataset(**preprocess_kwargs)
+    dataset.save_to_disk(data_dir)
+    print(
+        f"[Kubeflow] Saved preprocessed dataset to {data_dir} ({len(dataset)} samples)", flush=True
+    )
+    return len(dataset)
+
+
+def _setup_eagle3_model(
+    verifier_model: str,
+    data_path: str,
+    draft_vocab_size: int | None = None,
+    num_layers: int = 1,
+    ttt_steps: int = 3,
+    norm_before_residual: bool = True,
+    norm_before_fc: bool = False,
+    embed_requires_grad: bool = False,
+    target_layer_ids: list[int] | None = None,
+    is_distributed: bool = False,
+    rank: int = 0,
+):
+    """Build Eagle3 draft model with vocab mappings. Shared helper injected via inspect.getsource().
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the script that runs inside the container.
+
+    Returns:
+        Tuple of (model, verifier_config).
+    """
+    import os
+    from pathlib import Path
+
+    import numpy as np
+    from speculators.models.eagle3.core import Eagle3DraftModel
+    from speculators.train.vocab_mapping import build_vocab_mappings_from_distribution
+    import torch
+    from transformers import AutoConfig
+
+    verifier_config = AutoConfig.from_pretrained(verifier_model, token=os.environ.get("HF_TOKEN"))
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+    target_vocab_size = verifier_config.vocab_size
+
+    d2t_path = Path(data_path) / "d2t.npy"
+    t2d_path = Path(data_path) / "t2d.npy"
+
+    if not (d2t_path.exists() and t2d_path.exists()) and rank == 0:
+        resolved_draft_vocab = draft_vocab_size or min(8192, target_vocab_size)
+        token_freq_path = Path(data_path) / "token_freq.pt"
+        token_freq_dict = torch.load(str(token_freq_path), weights_only=True)
+        d2t, t2d = build_vocab_mappings_from_distribution(
+            token_freq_dict=token_freq_dict,
+            draft_vocab_size=resolved_draft_vocab,
+            target_vocab_size=target_vocab_size,
+        )
+        np.save(str(d2t_path), d2t.cpu().numpy())
+        np.save(str(t2d_path), t2d.cpu().numpy())
+    if is_distributed:
+        torch.distributed.barrier()
+
+    d2t = torch.from_numpy(np.load(str(d2t_path)))
+    t2d = torch.from_numpy(np.load(str(t2d_path)))
+    resolved_draft_vocab = len(d2t)
+
+    from_training_kwargs = {
+        "draft_vocab_size": resolved_draft_vocab,
+        "num_layers": num_layers,
+        "norm_before_residual": norm_before_residual,
+        "norm_before_fc": norm_before_fc,
+        "embed_requires_grad": embed_requires_grad,
+        "ttt_steps": ttt_steps,
+        "verifier_name_or_path": verifier_model,
+        "d2t": d2t,
+        "t2d": t2d,
+    }
+    if target_layer_ids is not None:
+        from_training_kwargs["target_layer_ids"] = target_layer_ids
+    model = Eagle3DraftModel.from_training_args(verifier_config, **from_training_kwargs)
+
+    return model, verifier_config
+
+
+def _regenerate_responses(
+    dataset_name: str,
+    save_path: str,
+    vllm_endpoint: str,
+    max_samples: int | None = None,
+) -> str:
+    """Regenerate dataset responses using the verifier model via vLLM.
+
+    Sends prompts to the vLLM chat completions endpoint to produce on-policy
+    responses, improving draft model alignment with the target model.
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the training script that runs inside the container.
+
+    Args:
+        dataset_name: Original dataset name (maps to regeneration dataset).
+        save_path: Directory to write regenerated JSONL output.
+        vllm_endpoint: vLLM endpoint URL (e.g. ``http://localhost:8234/v1``).
+        max_samples: Maximum number of samples to regenerate.
+
+    Returns:
+        Path to the regenerated JSONL file.
+    """
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    if "_set_phase" in globals():
+        _set_phase("regenerating_responses", 5)  # noqa: F821
+
+    print(f"[Kubeflow] Regenerating responses via vLLM endpoint '{vllm_endpoint}'", flush=True)
+
+    os.makedirs(save_path, exist_ok=True)
+    regen_output = str(Path(save_path) / "regenerated_responses.jsonl")
+    chat_endpoint = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/v1/chat/completions"
+
+    regen_script_path = "/tmp/response_regeneration.py"
+    if not os.path.exists(regen_script_path):
+        import base64
+
+        regen_content = base64.b64decode(_REGEN_SCRIPT_B64).decode("utf-8")  # noqa: F821
+        with open(regen_script_path, "w") as f:
+            f.write(regen_content)
+
+    regen_cmd = [
+        sys.executable,
+        regen_script_path,
+        "--endpoint",
+        chat_endpoint,
+        "--dataset",
+        dataset_name,
+        "--outfile",
+        regen_output,
+    ]
+    if max_samples is not None:
+        regen_cmd.extend(["--limit", str(max_samples)])
+    print(f"[Kubeflow] Regenerating responses using dataset '{dataset_name}'", flush=True)
+    regen_result = subprocess.run(regen_cmd, capture_output=False)
+    if regen_result.returncode != 0:
+        raise RuntimeError(f"response_regeneration.py exited with code {regen_result.returncode}")
+    print(f"[Kubeflow] Responses saved to {regen_output}", flush=True)
+    return regen_output
+
+
 def _speculator_data_only(
     verifier_model: str,
     dataset_name: str,
@@ -509,6 +824,8 @@ def _speculator_data_only(
     vllm_endpoint: str = "http://localhost:8234/v1",
     concurrency: int = 4,
     regenerate_responses: bool = False,
+    hidden_states_path: str | None = None,
+    vllm_readiness_timeout_minutes: int = 60,
 ) -> None:
     """Data extraction function injected into pods via inspect.getsource().
 
@@ -522,11 +839,6 @@ def _speculator_data_only(
     import os
     import subprocess
     import sys
-    import time
-    import urllib.error
-    import urllib.request
-
-    from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 
     hidden_states_dir = os.path.join(save_path, "hidden_states")
     os.makedirs(save_path, exist_ok=True)
@@ -566,85 +878,31 @@ def _speculator_data_only(
     endpoint = vllm_endpoint
     print(f"[Kubeflow] Using vLLM endpoint: {endpoint}", flush=True)
     health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
-    timeout_secs = 1200
-    start = time.time()
-    print(f"[Kubeflow] Waiting for vLLM sidecar at {health} (timeout={timeout_secs}s)", flush=True)
-    while time.time() - start < timeout_secs:
-        try:
-            urllib.request.urlopen(health, timeout=5)
-            print("[Kubeflow] vLLM sidecar is ready", flush=True)
-            break
-        except (urllib.error.URLError, OSError):
-            time.sleep(5)
-    else:
-        sys.exit(f"vLLM endpoint not reachable within {timeout_secs}s")
+    _wait_for_vllm(health, timeout_minutes=vllm_readiness_timeout_minutes)
 
     if regenerate_responses:
-        from pathlib import Path
+        if rank == 0:
+            dataset_name = _regenerate_responses(dataset_name, save_path, endpoint, max_samples)
+        if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+            import torch.distributed as dist
 
-        if "_set_phase" in globals():
-            _set_phase("regenerating_responses", 5)  # noqa: F821
-
-        print(
-            f"[Kubeflow] Regenerating responses from verifier model '{verifier_model}'", flush=True
-        )
-
-        regen_output = str(Path(save_path) / "regenerated_responses.jsonl")
-        chat_endpoint = endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/v1/chat/completions"
-
-        regen_script_path = "/tmp/response_regeneration.py"
-        if not os.path.exists(regen_script_path):
-            import base64
-
-            regen_content = base64.b64decode(_REGEN_SCRIPT_B64).decode("utf-8")  # noqa: F821
-            with open(regen_script_path, "w") as f:
-                f.write(regen_content)
-
-        regen_cmd = [
-            sys.executable,
-            regen_script_path,
-            "--endpoint",
-            chat_endpoint,
-            "--dataset",
-            dataset_name,
-            "--outfile",
-            regen_output,
-        ]
-        if max_samples is not None:
-            regen_cmd.extend(["--limit", str(max_samples)])
-        print(f"[Kubeflow] Regenerating responses using dataset '{dataset_name}'", flush=True)
-        regen_result = subprocess.run(regen_cmd, capture_output=False)
-        if regen_result.returncode != 0:
-            raise RuntimeError(
-                f"response_regeneration.py exited with code {regen_result.returncode}"
-            )
-        print(f"[Kubeflow] Responses saved to {regen_output}", flush=True)
-        dataset_name = regen_output
+            if not dist.is_initialized():
+                dist.init_process_group(backend="nccl")
+            dist.barrier()
+        if rank != 0:
+            regen_output = os.path.join(save_path, "regenerated_responses.jsonl")
+            if os.path.exists(regen_output):
+                dataset_name = regen_output
 
     if "_set_phase" in globals():
         _set_phase("preprocessing", 10)  # noqa: F821
 
-    print(
-        f"[Kubeflow] Preprocessing dataset '{dataset_name}' (seq_len={total_seq_len})", flush=True
-    )
-
-    token_freq_path = os.path.join(save_path, "token_freq.pt")
-    preprocess_kwargs = {
-        "target_model_path": verifier_model,
-        "train_data_paths": [dataset_name],
-        "seq_length": total_seq_len,
-        "token_freq_path": token_freq_path,
-    }
-    if max_samples is not None:
-        preprocess_kwargs["max_samples"] = max_samples
-    dataset, processor = load_and_preprocess_dataset(**preprocess_kwargs)
-    dataset.save_to_disk(save_path)
-    print(
-        f"[Kubeflow] Saved preprocessed dataset to {save_path} ({len(dataset)} samples)", flush=True
+    num_samples = _preprocess_dataset(
+        verifier_model, dataset_name, save_path, total_seq_len, max_samples
     )
 
     if "_start_data_progress_server" in globals():
-        _start_data_progress_server(hidden_states_dir, len(dataset))  # noqa: F821
+        _start_data_progress_server(hidden_states_dir, num_samples)  # noqa: F821
 
     if "_set_phase" in globals():
         _set_phase("extracting", 15)  # noqa: F821
@@ -666,8 +924,6 @@ def _speculator_data_only(
     datagen_cmd = [
         sys.executable,
         script_path,
-        "--model",
-        verifier_model,
         "--preprocessed-data",
         save_path,
         "--endpoint",
@@ -681,6 +937,10 @@ def _speculator_data_only(
         "--rank",
         str(rank),
     ]
+    if not hidden_states_path:
+        datagen_cmd.extend(["--model", verifier_model])
+    if hidden_states_path:
+        datagen_cmd.extend(["--hidden-states-dir", hidden_states_path])
     if max_samples is not None:
         datagen_cmd.extend(["--max-samples", str(max_samples)])
     print(
@@ -743,13 +1003,9 @@ def _speculator_train_only(
     """
     import contextlib
     import os
-    from pathlib import Path
-
-    import numpy as np
 
     if "_set_phase" in globals():
         _set_phase("initializing", 0)  # noqa: F821
-    from speculators.models.eagle3.core import Eagle3DraftModel
     from speculators.models.eagle3.data import shift_batch
     from speculators.train.data import ArrowDataset, create_collate_fn
     from speculators.train.distributed_batch_sampler import (
@@ -757,10 +1013,8 @@ def _speculator_train_only(
     )
     from speculators.train.noise_transforms import AddUniformNoise
     from speculators.train.trainer import Trainer, TrainerConfig
-    from speculators.train.vocab_mapping import build_vocab_mappings_from_distribution
     import torch
     from torch.utils.data import DataLoader
-    from transformers import AutoConfig
 
     rank = int(os.environ.get("RANK", "0"))
     marker_name = f"{EXTRACTION_INCOMPLETE_MARKER}.rank-{rank}"  # noqa: F821
@@ -778,46 +1032,19 @@ def _speculator_train_only(
         torch.distributed.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
 
-    verifier_config = AutoConfig.from_pretrained(verifier_model, token=os.environ.get("HF_TOKEN"))
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
-    target_vocab_size = verifier_config.vocab_size
-
-    d2t_path = Path(data_path) / "d2t.npy"
-    t2d_path = Path(data_path) / "t2d.npy"
-
-    if not (d2t_path.exists() and t2d_path.exists()) and rank == 0:
-        resolved_draft_vocab = draft_vocab_size or min(8192, target_vocab_size)
-        token_freq_path = Path(data_path) / "token_freq.pt"
-        token_freq_dict = torch.load(str(token_freq_path), weights_only=True)
-        d2t, t2d = build_vocab_mappings_from_distribution(
-            token_freq_dict=token_freq_dict,
-            draft_vocab_size=resolved_draft_vocab,
-            target_vocab_size=target_vocab_size,
-        )
-        np.save(str(d2t_path), d2t.cpu().numpy())
-        np.save(str(t2d_path), t2d.cpu().numpy())
-    if is_distributed:
-        torch.distributed.barrier()
-
-    d2t = torch.from_numpy(np.load(str(d2t_path)))
-    t2d = torch.from_numpy(np.load(str(t2d_path)))
-    resolved_draft_vocab = len(d2t)
-
-    from_training_kwargs = {
-        "draft_vocab_size": resolved_draft_vocab,
-        "num_layers": num_layers,
-        "norm_before_residual": norm_before_residual,
-        "norm_before_fc": norm_before_fc,
-        "embed_requires_grad": embed_requires_grad,
-        "ttt_steps": ttt_steps,
-        "verifier_name_or_path": verifier_model,
-        "d2t": d2t,
-        "t2d": t2d,
-    }
-    if target_layer_ids is not None:
-        from_training_kwargs["target_layer_ids"] = target_layer_ids
-    model = Eagle3DraftModel.from_training_args(verifier_config, **from_training_kwargs)
+    model, verifier_config = _setup_eagle3_model(
+        verifier_model=verifier_model,
+        data_path=data_path,
+        draft_vocab_size=draft_vocab_size,
+        num_layers=num_layers,
+        ttt_steps=ttt_steps,
+        norm_before_residual=norm_before_residual,
+        norm_before_fc=norm_before_fc,
+        embed_requires_grad=embed_requires_grad,
+        target_layer_ids=target_layer_ids,
+        is_distributed=is_distributed,
+        rank=rank,
+    )
 
     max_len = total_seq_len
     hs_dtype = getattr(torch, hidden_states_dtype)
@@ -892,6 +1119,8 @@ def _speculator_train_only(
     )
 
     if resume_from_checkpoint and rank == 0:
+        from pathlib import Path
+
         interrupted_path = Path(save_path) / "interrupted"
         if interrupted_path.exists():
             import shutil
@@ -914,12 +1143,189 @@ def _speculator_train_only(
         _set_phase("complete", 100)  # noqa: F821
 
 
+def _speculator_online(
+    verifier_model: str,
+    dataset_name: str,
+    output_dir: str,
+    epochs: int,
+    lr: float,
+    total_seq_len: int,
+    draft_vocab_size: int | None = None,
+    max_samples: int | None = None,
+    hidden_states_dtype: str = "bfloat16",
+    num_layers: int = 1,
+    ttt_steps: int = 3,
+    norm_before_residual: bool = True,
+    norm_before_fc: bool = False,
+    embed_requires_grad: bool = False,
+    scheduler_type: str = "linear",
+    scheduler_warmup_steps: int | None = None,
+    scheduler_total_steps: int | None = None,
+    scheduler_num_cosine_cycles: float = 0.5,
+    checkpoint_freq: float = 1.0,
+    save_best: bool = False,
+    log_freq: int = 1,
+    resume_from_checkpoint: bool = False,
+    regenerate_responses: bool = False,
+    from_pretrained: str | None = None,
+    target_layer_ids: list[int] | None = None,
+    vllm_endpoint: str = "http://localhost:8234/v1",
+    vllm_readiness_timeout_minutes: int = 60,
+) -> None:
+    """Online training function injected into pods via inspect.getsource().
+
+    Combines preprocessing, vLLM sidecar wait, model setup, and training
+    in a single function. Hidden states are generated on-the-fly from the
+    vLLM sidecar and deleted after use (not saved to disk).
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the training script that runs inside the container.
+    """
+    import contextlib
+    import os
+
+    if "_set_phase" in globals():
+        _set_phase("waiting_for_vllm", 3)  # noqa: F821
+
+    health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
+    _wait_for_vllm(health, timeout_minutes=vllm_readiness_timeout_minutes)
+
+    rank = int(os.environ.get("RANK", 0))
+
+    if regenerate_responses:
+        if rank == 0:
+            dataset_name = _regenerate_responses(
+                dataset_name, output_dir, vllm_endpoint, max_samples
+            )
+        if int(os.environ.get("WORLD_SIZE", 1)) > 1:
+            import torch
+
+            if not torch.distributed.is_initialized():
+                torch.distributed.init_process_group(backend="nccl")
+            torch.distributed.barrier()
+        if rank != 0:
+            regen_output = os.path.join(output_dir, "regenerated_responses.jsonl")
+            if os.path.exists(regen_output):
+                dataset_name = regen_output
+
+    if "_set_phase" in globals():
+        _set_phase("preprocessing", 8)  # noqa: F821
+
+    data_dir = os.path.join(output_dir, "data")
+    _preprocess_dataset(verifier_model, dataset_name, data_dir, total_seq_len, max_samples)
+
+    if "_set_phase" in globals():
+        _set_phase("setting_up_model", 12)  # noqa: F821
+
+    from speculators.models.eagle3.data import shift_batch
+    from speculators.train.data import ArrowDataset, create_collate_fn
+    from speculators.train.trainer import Trainer, TrainerConfig
+    import torch
+    from torch.utils.data import DataLoader
+    from torch.utils.data.distributed import DistributedSampler
+
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
+    if is_distributed and not torch.distributed.is_initialized():
+        torch.distributed.init_process_group(backend="nccl")
+        torch.cuda.set_device(local_rank)
+    model, verifier_config = _setup_eagle3_model(
+        verifier_model=verifier_model,
+        data_path=data_dir,
+        draft_vocab_size=draft_vocab_size,
+        num_layers=num_layers,
+        ttt_steps=ttt_steps,
+        norm_before_residual=norm_before_residual,
+        norm_before_fc=norm_before_fc,
+        embed_requires_grad=embed_requires_grad,
+        target_layer_ids=target_layer_ids,
+        is_distributed=is_distributed,
+        rank=rank,
+    )
+
+    max_len = total_seq_len
+    hs_dtype = getattr(torch, hidden_states_dtype)
+    collate_fn = create_collate_fn(
+        max_len,
+        verifier_config.hidden_size,
+        num_target_layers=len(target_layer_ids),
+        dtype=hs_dtype,
+    )
+
+    train_dataset = ArrowDataset(
+        max_len=max_len,
+        datapath=data_dir,
+        on_missing="generate",
+        vllm_endpoint=vllm_endpoint,
+        split_ratio=0.9,
+        hidden_states_dtype=hs_dtype,
+    )
+
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    rank = int(os.environ.get("RANK", 0))
+
+    sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=1,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    with contextlib.suppress(NameError):
+        _set_steps_per_epoch(len(train_loader))  # noqa: F821
+
+    config = TrainerConfig(
+        lr=lr,
+        num_epochs=epochs,
+        save_path=output_dir,
+        resume_from_checkpoint=resume_from_checkpoint,
+        is_distributed=is_distributed,
+        local_rank=local_rank,
+        train_call_kwargs={"shift_fn": shift_batch},
+        val_call_kwargs={"shift_fn": shift_batch},
+        scheduler_type=scheduler_type,
+        scheduler_warmup_steps=scheduler_warmup_steps,
+        scheduler_total_steps=scheduler_total_steps,
+        scheduler_num_cosine_cycles=scheduler_num_cosine_cycles,
+        checkpoint_freq=checkpoint_freq,
+        save_best=save_best,
+        hidden_states_dtype=hs_dtype,
+        log_freq=log_freq,
+    )
+
+    if resume_from_checkpoint and rank == 0:
+        from pathlib import Path
+
+        interrupted_path = Path(output_dir) / "interrupted"
+        if interrupted_path.exists():
+            import shutil
+
+            shutil.rmtree(str(interrupted_path))
+            print(
+                f"[Kubeflow] Removed interrupted checkpoint at {interrupted_path}",
+                flush=True,
+            )
+    if resume_from_checkpoint and is_distributed:
+        torch.distributed.barrier()
+
+    if "_set_phase" in globals():
+        _set_phase("training", 15)  # noqa: F821
+
+    trainer = Trainer(model, config, train_loader)
+    trainer.run_training()
+
+    if "_set_phase" in globals():
+        _set_phase("complete", 100)  # noqa: F821
+
+
 def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> str:
     """Generate a training script via inspect.getsource().
 
     Builds the script by composing shared pieces based on what each mode needs:
     - DATA_ONLY: data extraction only
     - TRAIN_ONLY: training only
+    - OFFLINE: data extraction then training (both calls sequentially)
 
     Args:
         trainer: SpeculativeDecodingTrainer configuration.
@@ -934,14 +1340,57 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
 
-    needs_data = trainer.mode == SpeculatorMode.DATA_ONLY
-    needs_train = trainer.mode == SpeculatorMode.TRAIN_ONLY
+    needs_data = trainer.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.OFFLINE)
+    needs_train = trainer.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
 
     cfg = trainer.config or SpeculatorConfig()
 
     from kubeflow.trainer.rhai.constants import EXTRACTION_INCOMPLETE_MARKER
 
-    script = f"EXTRACTION_INCOMPLETE_MARKER = {EXTRACTION_INCOMPLETE_MARKER!r}\n\n"
+    script = (
+        "import logging\n"
+        "import os\n"
+        "_speculators_logger = logging.getLogger('speculators')\n"
+        "_speculators_logger.setLevel(logging.INFO)\n"
+        "if not _speculators_logger.handlers:\n"
+        "    _handler = logging.StreamHandler()\n"
+        "    class _Rank0Filter(logging.Filter):\n"
+        "        def filter(self, record):\n"
+        "            return int(os.environ.get('LOCAL_RANK', 0)) == 0\n"
+        "    _handler.addFilter(_Rank0Filter())\n"
+        "    _speculators_logger.addHandler(_handler)\n\n"
+        f"EXTRACTION_INCOMPLETE_MARKER = {EXTRACTION_INCOMPLETE_MARKER!r}\n\n"
+    )
+
+    needs_online = trainer.mode == SpeculatorMode.ONLINE
+
+    needs_vllm_helper = needs_data or needs_online
+    needs_preprocess_helper = needs_data or needs_online
+    needs_model_helper = needs_train or needs_online
+
+    if needs_vllm_helper:
+        script += textwrap.dedent(inspect.getsource(_wait_for_vllm))
+        script += "\n\n"
+
+    if needs_preprocess_helper:
+        script += textwrap.dedent(inspect.getsource(_preprocess_dataset))
+        script += "\n\n"
+
+    if needs_model_helper:
+        script += textwrap.dedent(inspect.getsource(_setup_eagle3_model))
+        script += "\n\n"
+
+    needs_regen = needs_data or needs_online
+
+    if needs_regen:
+        import base64
+        from pathlib import Path
+
+        regen_script_path = Path(__file__).parent / "scripts" / "response_regeneration.py"
+        regen_b64 = base64.b64encode(regen_script_path.read_bytes()).decode("ascii")
+        script += f'_REGEN_SCRIPT_B64 = "{regen_b64}"\n\n'
+        script += textwrap.dedent(inspect.getsource(_regenerate_responses))
+        script += "\n\n"
 
     if needs_data:
         import base64
@@ -950,15 +1399,14 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         datagen_script_path = Path(__file__).parent / "scripts" / "data_generation_offline.py"
         datagen_b64 = base64.b64encode(datagen_script_path.read_bytes()).decode("ascii")
 
-        regen_script_path = Path(__file__).parent / "scripts" / "response_regeneration.py"
-        regen_b64 = base64.b64encode(regen_script_path.read_bytes()).decode("ascii")
-
         script += f'_DATAGEN_SCRIPT_B64 = "{datagen_b64}"\n\n'
-        script += f'_REGEN_SCRIPT_B64 = "{regen_b64}"\n\n'
         script += textwrap.dedent(inspect.getsource(_speculator_data_only))
 
     if needs_train:
         script += textwrap.dedent(inspect.getsource(_speculator_train_only))
+
+    if needs_online:
+        script += textwrap.dedent(inspect.getsource(_speculator_online))
 
     if trainer.verifier_model.startswith(PVC_URI_SCHEME):
         resolved_verifier_model, _ = parse_output_dir_uri(trainer.verifier_model)
@@ -972,15 +1420,30 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     if trainer.hidden_states_path and trainer.hidden_states_path.startswith(PVC_URI_SCHEME):
         resolved_hidden_states, _ = parse_output_dir_uri(trainer.hidden_states_path)
-    else:
+    elif trainer.hidden_states_path:
         resolved_hidden_states = trainer.hidden_states_path
+    else:
+        resolved_hidden_states = resolved_output_dir
 
     if trainer.data_path and trainer.data_path.startswith(PVC_URI_SCHEME):
         resolved_data_path, _ = parse_output_dir_uri(trainer.data_path)
-    else:
+    elif trainer.data_path:
         resolved_data_path = trainer.data_path
+    else:
+        resolved_data_path = resolved_output_dir
 
     from kubeflow.trainer.rhai.constants import VLLM_SIDECAR_ENDPOINT
+
+    _uses_external_vllm = trainer.vllm_endpoint is not None
+    data_vllm_endpoint = trainer.vllm_endpoint if _uses_external_vllm else VLLM_SIDECAR_ENDPOINT
+
+    offline_hs_path = resolved_hidden_states if _uses_external_vllm else None
+
+    offline_train_hs_path = (
+        f"{resolved_output_dir}/hidden_states"
+        if trainer.mode == SpeculatorMode.OFFLINE
+        else resolved_hidden_states
+    )
 
     data_call = (
         f"_speculator_data_only(\n"
@@ -989,9 +1452,11 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    save_path={resolved_output_dir!r},\n"
         f"    total_seq_len={trainer.total_seq_len!r},\n"
         f"    max_samples={trainer.max_samples!r},\n"
-        f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
+        f"    vllm_endpoint={data_vllm_endpoint!r},\n"
         f"    concurrency={cfg.datagen_concurrency!r},\n"
         f"    regenerate_responses={trainer.regenerate_responses!r},\n"
+        f"    hidden_states_path={offline_hs_path!r},\n"
+        f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
         f")\n"
     )
 
@@ -999,7 +1464,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"_speculator_train_only(\n"
         f"    verifier_model={resolved_verifier_model!r},\n"
         f"    data_path={resolved_data_path!r},\n"
-        f"    hidden_states_path={resolved_hidden_states!r},\n"
+        f"    hidden_states_path={offline_train_hs_path!r},\n"
         f"    save_path={resolved_output_dir!r},\n"
         f"    epochs={trainer.epochs!r},\n"
         f"    lr={trainer.lr!r},\n"
@@ -1024,11 +1489,50 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f")\n"
     )
 
+    online_call = (
+        f"_speculator_online(\n"
+        f"    verifier_model={resolved_verifier_model!r},\n"
+        f"    dataset_name={resolved_dataset_name!r},\n"
+        f"    output_dir={resolved_output_dir!r},\n"
+        f"    epochs={trainer.epochs!r},\n"
+        f"    lr={trainer.lr!r},\n"
+        f"    total_seq_len={trainer.total_seq_len!r},\n"
+        f"    draft_vocab_size={trainer.draft_vocab_size!r},\n"
+        f"    max_samples={trainer.max_samples!r},\n"
+        f"    hidden_states_dtype={cfg.hidden_states_dtype!r},\n"
+        f"    num_layers={cfg.num_layers!r},\n"
+        f"    ttt_steps={cfg.ttt_steps!r},\n"
+        f"    norm_before_residual={cfg.norm_before_residual!r},\n"
+        f"    norm_before_fc={cfg.norm_before_fc!r},\n"
+        f"    embed_requires_grad={cfg.embed_requires_grad!r},\n"
+        f"    scheduler_type={cfg.scheduler_type!r},\n"
+        f"    scheduler_warmup_steps={cfg.scheduler_warmup_steps!r},\n"
+        f"    scheduler_total_steps={cfg.scheduler_total_steps!r},\n"
+        f"    scheduler_num_cosine_cycles={cfg.scheduler_num_cosine_cycles!r},\n"
+        f"    checkpoint_freq={cfg.checkpoint_freq!r},\n"
+        f"    save_best={cfg.save_best!r},\n"
+        f"    log_freq={cfg.log_freq!r},\n"
+        f"    resume_from_checkpoint={cfg.resume_from_checkpoint!r},\n"
+        f"    regenerate_responses={trainer.regenerate_responses!r},\n"
+        f"    from_pretrained={cfg.from_pretrained!r},\n"
+        f"    target_layer_ids={cfg.target_layer_ids!r},\n"
+        f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
+        f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
+        f")\n"
+    )
+
     if trainer.mode == SpeculatorMode.DATA_ONLY:
         script += f"\n{data_call}"
 
     elif trainer.mode == SpeculatorMode.TRAIN_ONLY:
         script += f"\n{train_call}"
+
+    elif trainer.mode == SpeculatorMode.OFFLINE:
+        script += f"\n{data_call}"
+        script += f"\n{train_call}"
+
+    elif trainer.mode == SpeculatorMode.ONLINE:
+        script += f"\n{online_call}"
 
     return script
 
@@ -1133,12 +1637,19 @@ def _create_speculator_progression_instrumentation(
 
         def _get_progress(self):
             if mode == "data_only":
-                return self._data_progress()
+                return self._data_progress(scale=100, offset=0)
             elif mode == "train_only":
-                return self._training_progress()
+                return self._training_progress(scale=100, offset=0)
+            elif mode == "offline":
+                if not _training_started:
+                    return self._data_progress(scale=50, offset=0)
+                else:
+                    return self._training_progress(scale=50, offset=50)
+            elif mode == "online":
+                return self._training_progress(scale=100, offset=0)
             return self._empty_response()
 
-        def _data_progress(self):
+        def _data_progress(self, scale, offset):
             if _hidden_states_dir is None or _total_samples <= 0:
                 return self._empty_response()
 
@@ -1153,7 +1664,9 @@ def _create_speculator_progression_instrumentation(
             except FileNotFoundError:
                 count = 0
 
-            progress_pct = max(int(count / _total_samples * 100), _phase_floor_pct)
+            raw_pct = count / _total_samples * 100
+            progress_pct = min(offset + scale, offset + int(raw_pct * scale / 100))
+            progress_pct = max(progress_pct, _phase_floor_pct)
 
             estimated_remaining = None
             if _data_start_time and count > 0:
@@ -1177,13 +1690,13 @@ def _create_speculator_progression_instrumentation(
                 "evalMetrics": None,
             }
 
-        def _training_progress(self):
+        def _training_progress(self, scale, offset):
             with _metrics_lock:
                 metrics_snapshot = dict(_latest_metrics)
 
             if not metrics_snapshot:
                 response = self._empty_response()
-                response["progressPercentage"] = _phase_floor_pct
+                response["progressPercentage"] = max(offset, _phase_floor_pct)
                 return response
 
             global_step = metrics_snapshot.get("global_step", _last_global_step)
@@ -1192,7 +1705,7 @@ def _create_speculator_progression_instrumentation(
             val_metrics = metrics_snapshot.get("val", {})
 
             total_steps = None
-            progress_pct = 0
+            progress_pct = offset
             estimated_remaining = None
 
             if _steps_per_epoch and _steps_per_epoch > 0:
@@ -1200,7 +1713,9 @@ def _create_speculator_progression_instrumentation(
                 if total_steps > 0:
                     step_in_epoch = global_step % _steps_per_epoch
                     completed_steps = min(epoch * _steps_per_epoch + step_in_epoch + 1, total_steps)
-                    progress_pct = max(int(completed_steps / total_steps * 100), _phase_floor_pct)
+                    raw_pct = completed_steps / total_steps * 100
+                    progress_pct = min(offset + scale, offset + int(raw_pct * scale / 100))
+                    progress_pct = max(progress_pct, _phase_floor_pct)
 
                     if _train_start_time and completed_steps > 0:
                         elapsed = time.time() - _train_start_time
@@ -1314,7 +1829,7 @@ def _create_speculator_progression_instrumentation(
                         )
 
     def apply_progression_tracking():
-        if mode == "train_only":
+        if mode in ("train_only", "offline", "online"):
             handler = MetricsHandler()
             metrics_logger = logging.getLogger("speculators.metrics")
             metrics_logger.setLevel(logging.INFO)
@@ -1523,15 +2038,16 @@ def apply_speculator_sidecar_overrides(
     if trainer.env and "HF_TOKEN" in trainer.env:
         sidecar_env.append({"name": "HF_TOKEN", "value": trainer.env["HF_TOKEN"]})
 
-    sidecar_resources = {k: str(v) for k, v in trainer.vllm_resources.items()}
     sidecar_override = {
         "name": VLLM_SIDECAR_CONTAINER_NAME,
         "env": sidecar_env,
-        "resources": {
+    }
+    if trainer.vllm_resources:
+        sidecar_resources = {k: str(v) for k, v in trainer.vllm_resources.items()}
+        sidecar_override["resources"] = {
             "limits": sidecar_resources,
             "requests": sidecar_resources,
-        },
-    }
+        }
     if trainer.output_dir.startswith(PVC_URI_SCHEME):
         sidecar_override["volumeMounts"] = [
             {
