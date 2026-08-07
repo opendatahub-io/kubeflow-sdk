@@ -1806,7 +1806,9 @@ def test_online_mode_rejects_vllm_endpoint():
     """Test that ONLINE mode rejects vllm_endpoint (uses sidecar instead)."""
     print("Executing test: ONLINE mode rejects vllm_endpoint")
 
-    with pytest.raises(ValueError, match="vllm_endpoint is only supported in OFFLINE mode"):
+    with pytest.raises(
+        ValueError, match="vllm_endpoint.*is only supported in OFFLINE and DATA_ONLY"
+    ):
         SpeculativeDecodingTrainer(
             verifier_model="Qwen/Qwen3-8B",
             mode=SpeculatorMode.ONLINE,
@@ -2275,5 +2277,140 @@ def test_vllm_readiness_timeout_minutes_custom_value():
 
     assert "vllm_readiness_timeout_minutes=120" in script
     assert "vllm_readiness_timeout_minutes=60" not in script
+
+    print("test execution complete")
+
+
+def test_data_only_with_vllm_endpoint_valid():
+    """Test that DATA_ONLY accepts vllm_endpoint with required params."""
+    print("Executing test: DATA_ONLY with vllm_endpoint valid")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="pvc://shared/models/Qwen3-8B",
+        mode=SpeculatorMode.DATA_ONLY,
+        dataset_name="ultrachat",
+        output_dir="pvc://shared/output",
+        vllm_endpoint="http://vllm-svc:8000/v1",
+        hidden_states_path="pvc://shared/output/hidden_states",
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
+    )
+
+    assert trainer.vllm_endpoint == "http://vllm-svc:8000/v1"
+
+    print("test execution complete")
+
+
+def test_data_only_with_vllm_endpoint_requires_hidden_states_path():
+    """Test that DATA_ONLY with vllm_endpoint requires hidden_states_path."""
+    print("Executing test: DATA_ONLY vllm_endpoint requires hidden_states_path")
+
+    with pytest.raises(ValueError, match="hidden_states_path is required"):
+        SpeculativeDecodingTrainer(
+            verifier_model="pvc://shared/models/Qwen3-8B",
+            mode=SpeculatorMode.DATA_ONLY,
+            dataset_name="ultrachat",
+            output_dir="pvc://shared/output",
+            vllm_endpoint="http://vllm-svc:8000/v1",
+            config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
+        )
+
+    print("test execution complete")
+
+
+def test_data_only_with_vllm_endpoint_requires_pvc_verifier_model():
+    """Test that DATA_ONLY with vllm_endpoint requires PVC verifier_model."""
+    print("Executing test: DATA_ONLY vllm_endpoint requires PVC verifier_model")
+
+    with pytest.raises(ValueError, match="verifier_model must be a PVC URI"):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.DATA_ONLY,
+            dataset_name="ultrachat",
+            output_dir="pvc://shared/output",
+            vllm_endpoint="http://vllm-svc:8000/v1",
+            hidden_states_path="pvc://shared/output/hidden_states",
+            config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
+        )
+
+    print("test execution complete")
+
+
+def test_data_only_with_vllm_endpoint_requires_target_layer_ids():
+    """Test that DATA_ONLY with vllm_endpoint requires target_layer_ids."""
+    print("Executing test: DATA_ONLY vllm_endpoint requires target_layer_ids")
+
+    with pytest.raises(ValueError, match="config.target_layer_ids is required"):
+        SpeculativeDecodingTrainer(
+            verifier_model="pvc://shared/models/Qwen3-8B",
+            mode=SpeculatorMode.DATA_ONLY,
+            dataset_name="ultrachat",
+            output_dir="pvc://shared/output",
+            vllm_endpoint="http://vllm-svc:8000/v1",
+            hidden_states_path="pvc://shared/output/hidden_states",
+        )
+
+    print("test execution complete")
+
+
+def test_data_only_with_vllm_endpoint_rejects_vllm_resources():
+    """Test that DATA_ONLY with vllm_endpoint rejects vllm_resources."""
+    print("Executing test: DATA_ONLY vllm_endpoint rejects vllm_resources")
+
+    with pytest.raises(ValueError, match="vllm_resources cannot be used with vllm_endpoint"):
+        SpeculativeDecodingTrainer(
+            verifier_model="pvc://shared/models/Qwen3-8B",
+            mode=SpeculatorMode.DATA_ONLY,
+            dataset_name="ultrachat",
+            output_dir="pvc://shared/output",
+            vllm_endpoint="http://vllm-svc:8000/v1",
+            hidden_states_path="pvc://shared/output/hidden_states",
+            vllm_resources={"nvidia.com/gpu": 1},
+            config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
+        )
+
+    print("test execution complete")
+
+
+def test_data_only_with_vllm_endpoint_script_uses_external_endpoint():
+    """Test that DATA_ONLY with vllm_endpoint renders external endpoint in script."""
+    print("Executing test: DATA_ONLY vllm_endpoint script uses external endpoint")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="pvc://shared/models/Qwen3-8B",
+        mode=SpeculatorMode.DATA_ONLY,
+        dataset_name="ultrachat",
+        output_dir="pvc://shared/output",
+        vllm_endpoint="http://vllm-svc:8000/v1",
+        hidden_states_path="pvc://shared/output/hidden_states",
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
+
+    assert "vllm_endpoint='http://vllm-svc:8000/v1'" in script
+    assert "vllm_endpoint='http://localhost:8234/v1'" not in script
+
+    print("test execution complete")
+
+
+def test_data_only_with_vllm_endpoint_script_has_hidden_states_path():
+    """Test that DATA_ONLY with vllm_endpoint passes hidden_states_path in script."""
+    print("Executing test: DATA_ONLY vllm_endpoint script has hidden_states_path")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="pvc://shared/models/Qwen3-8B",
+        mode=SpeculatorMode.DATA_ONLY,
+        dataset_name="ultrachat",
+        output_dir="pvc://shared/output",
+        vllm_endpoint="http://vllm-svc:8000/v1",
+        hidden_states_path="pvc://shared/output/hidden_states",
+        config=SpeculatorConfig(target_layer_ids=[2, 18, 33, 35]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
+
+    assert "hidden_states_path='/mnt/kubeflow-checkpoints/output/hidden_states'" in script
 
     print("test execution complete")

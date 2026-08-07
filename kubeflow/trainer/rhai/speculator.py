@@ -157,7 +157,8 @@ class SpeculativeDecodingTrainer:
             and use its responses instead of the original dataset responses before
             preprocessing. Only supported in DATA_ONLY and OFFLINE modes (default: False).
         vllm_endpoint: URL of self-managed vLLM endpoint for hidden state extraction.
-            Required for OFFLINE mode. Example: ``"http://vllm-verifier-svc:8000/v1"``.
+            Required for OFFLINE mode. Optional for DATA_ONLY mode (skips sidecar).
+            Example: ``"http://vllm-verifier-svc:8000/v1"``.
         vllm_readiness_timeout_minutes: Maximum time in minutes to wait for the vLLM
             server to become ready. The server may take longer for large models that
             require downloading or loading into GPU memory. Increase this value if your
@@ -216,10 +217,12 @@ class SpeculativeDecodingTrainer:
                 f"Currently only '{SpeculatorType.EAGLE3.value}' is supported."
             )
 
+        _uses_external_vllm = self.vllm_endpoint is not None
+
         if (
             self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
-            and not self.hidden_states_path
-        ):
+            or (self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm)
+        ) and not self.hidden_states_path:
             raise ValueError(
                 f"hidden_states_path is required for {self.mode.name} mode. "
                 "Provide a PVC URI (pvc://<name>/<path>)."
@@ -290,32 +293,55 @@ class SpeculativeDecodingTrainer:
                 f"got {self.dataset_name!r}."
             )
 
-        if self.mode == SpeculatorMode.OFFLINE and not self.verifier_model.startswith(
-            PVC_URI_SCHEME
-        ):
+        if (
+            self.mode == SpeculatorMode.OFFLINE
+            or (self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm)
+        ) and not self.verifier_model.startswith(PVC_URI_SCHEME):
             raise ValueError(
-                "verifier_model must be a PVC URI (pvc://<name>/<path>) for OFFLINE mode. "
+                f"verifier_model must be a PVC URI (pvc://<name>/<path>) for "
+                f"{self.mode.name} mode with a self-managed vLLM endpoint. "
                 "The self-managed vLLM instance already has the model on shared storage, "
                 "so the training pod reads it from the same PVC."
             )
 
-        if self.mode == SpeculatorMode.OFFLINE:
+        if self.mode == SpeculatorMode.OFFLINE or (
+            self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm
+        ):
             cfg = self.config or SpeculatorConfig()
             if cfg.target_layer_ids is None:
                 raise ValueError(
-                    "config.target_layer_ids is required for OFFLINE mode. "
+                    f"config.target_layer_ids is required for {self.mode.name} mode "
+                    f"with a self-managed vLLM endpoint. "
                     "Provide the layer IDs matching your vLLM configuration via "
-                    "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n])."
+                    "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n]). "
+                    "See https://docs.vllm.ai/projects/speculators/en/latest/cli/launch_vllm/#basic-usage"
                 )
 
         if self.mode == SpeculatorMode.OFFLINE and not self.vllm_endpoint:
             raise ValueError(
                 "vllm_endpoint is required for OFFLINE mode. "
-                "Provide the URL of your vLLM endpoint (e.g. 'http://vllm-svc:8000/v1')."
+                "Provide the URL of your self-managed vLLM endpoint "
+                "(e.g. 'http://vllm-svc:8000/v1')."
             )
 
-        if self.vllm_endpoint is not None and self.mode != SpeculatorMode.OFFLINE:
-            raise ValueError("vllm_endpoint is only supported in OFFLINE mode.")
+        if self.vllm_endpoint is not None and self.mode not in (
+            SpeculatorMode.OFFLINE,
+            SpeculatorMode.DATA_ONLY,
+        ):
+            raise ValueError(
+                "vllm_endpoint (self-managed vLLM server) is only supported in "
+                "OFFLINE and DATA_ONLY modes."
+            )
+
+        if (
+            self.mode == SpeculatorMode.DATA_ONLY
+            and _uses_external_vllm
+            and self.vllm_resources is not None
+        ):
+            raise ValueError(
+                "vllm_resources cannot be used with vllm_endpoint in DATA_ONLY mode. "
+                "The self-managed vLLM server's resources are configured externally."
+            )
 
         if self.max_samples is not None:
             if self.mode not in (
@@ -371,7 +397,10 @@ class SpeculativeDecodingTrainer:
                 "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
             )
 
-        if self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE) and (
+        _needs_sidecar = self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE)
+        if self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm:
+            _needs_sidecar = False
+        if _needs_sidecar and (
             not isinstance(self.vllm_resources, dict) or not self.vllm_resources
         ):
             raise ValueError(
@@ -525,7 +554,8 @@ class SpeculativeDecodingTrainer:
                         "config.target_layer_ids is required when verifier_model is a "
                         "PVC URI. The SDK cannot read the model config from the PVC to "
                         "auto-detect layers. Provide target_layer_ids explicitly via "
-                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n])."
+                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n]). "
+                        "See https://docs.vllm.ai/projects/speculators/en/latest/cli/launch_vllm/#basic-usage"
                     )
             else:
                 if cfg.target_layer_ids is None:
@@ -1391,12 +1421,10 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     from kubeflow.trainer.rhai.constants import VLLM_SIDECAR_ENDPOINT
 
-    if trainer.mode == SpeculatorMode.OFFLINE:
-        data_vllm_endpoint = trainer.vllm_endpoint
-    else:
-        data_vllm_endpoint = VLLM_SIDECAR_ENDPOINT
+    _uses_external_vllm = trainer.vllm_endpoint is not None
+    data_vllm_endpoint = trainer.vllm_endpoint if _uses_external_vllm else VLLM_SIDECAR_ENDPOINT
 
-    offline_hs_path = resolved_hidden_states if trainer.mode == SpeculatorMode.OFFLINE else None
+    offline_hs_path = resolved_hidden_states if _uses_external_vllm else None
 
     offline_train_hs_path = (
         f"{resolved_output_dir}/hidden_states"
