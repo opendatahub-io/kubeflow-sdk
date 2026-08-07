@@ -1349,10 +1349,16 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     script = (
         "import logging\n"
+        "import os\n"
         "_speculators_logger = logging.getLogger('speculators')\n"
         "_speculators_logger.setLevel(logging.INFO)\n"
         "if not _speculators_logger.handlers:\n"
-        "    _speculators_logger.addHandler(logging.StreamHandler())\n\n"
+        "    _handler = logging.StreamHandler()\n"
+        "    class _Rank0Filter(logging.Filter):\n"
+        "        def filter(self, record):\n"
+        "            return int(os.environ.get('LOCAL_RANK', 0)) == 0\n"
+        "    _handler.addFilter(_Rank0Filter())\n"
+        "    _speculators_logger.addHandler(_handler)\n\n"
         f"EXTRACTION_INCOMPLETE_MARKER = {EXTRACTION_INCOMPLETE_MARKER!r}\n\n"
     )
 
