@@ -1347,7 +1347,14 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     from kubeflow.trainer.rhai.constants import EXTRACTION_INCOMPLETE_MARKER
 
-    script = f"EXTRACTION_INCOMPLETE_MARKER = {EXTRACTION_INCOMPLETE_MARKER!r}\n\n"
+    script = (
+        "import logging\n"
+        "_speculators_logger = logging.getLogger('speculators')\n"
+        "_speculators_logger.setLevel(logging.INFO)\n"
+        "if not _speculators_logger.handlers:\n"
+        "    _speculators_logger.addHandler(logging.StreamHandler())\n\n"
+        f"EXTRACTION_INCOMPLETE_MARKER = {EXTRACTION_INCOMPLETE_MARKER!r}\n\n"
+    )
 
     needs_online = trainer.mode == SpeculatorMode.ONLINE
 
