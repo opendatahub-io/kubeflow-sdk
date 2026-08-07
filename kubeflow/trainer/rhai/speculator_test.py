@@ -2233,9 +2233,9 @@ def test_offline_script_skips_model_arg_with_hidden_states_path():
     print("test execution complete")
 
 
-def test_vllm_readiness_timeout_default():
-    """Test that script contains default vllm_readiness_timeout=3600."""
-    print("Executing test: default vllm_readiness_timeout")
+def test_vllm_readiness_timeout_minutes_default():
+    """Test that script contains default vllm_readiness_timeout_minutes=60."""
+    print("Executing test: default vllm_readiness_timeout_minutes")
 
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
@@ -2250,14 +2250,14 @@ def test_vllm_readiness_timeout_default():
     script = _render_speculator_training_script(trainer)
     compile(script, "<test>", "exec")
 
-    assert "vllm_readiness_timeout=3600" in script
+    assert "vllm_readiness_timeout_minutes=60" in script
 
     print("test execution complete")
 
 
-def test_vllm_readiness_timeout_custom_value():
-    """Test that custom vllm_readiness_timeout renders correctly."""
-    print("Executing test: custom vllm_readiness_timeout")
+def test_vllm_readiness_timeout_minutes_custom_value():
+    """Test that custom vllm_readiness_timeout_minutes renders correctly."""
+    print("Executing test: custom vllm_readiness_timeout_minutes")
 
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
@@ -2266,14 +2266,14 @@ def test_vllm_readiness_timeout_custom_value():
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
-        vllm_readiness_timeout=7200,
+        vllm_readiness_timeout_minutes=120,
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     script = _render_speculator_training_script(trainer)
     compile(script, "<test>", "exec")
 
-    assert "vllm_readiness_timeout=7200" in script
-    assert "vllm_readiness_timeout=3600" not in script
+    assert "vllm_readiness_timeout_minutes=120" in script
+    assert "vllm_readiness_timeout_minutes=60" not in script
 
     print("test execution complete")
