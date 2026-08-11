@@ -878,9 +878,11 @@ def _speculator_data_only(
     if "_set_phase" in globals():
         _set_phase("checking_vllm", 5)  # noqa: F821
 
-    endpoint = vllm_endpoint
+    endpoint = vllm_endpoint.rstrip("/")
+    if not endpoint.endswith("/v1"):
+        endpoint += "/v1"
     print(f"[Kubeflow] Using vLLM endpoint: {endpoint}", flush=True)
-    health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
+    health = endpoint.rsplit("/v1", 1)[0] + "/health"
     _wait_for_vllm(health, timeout_minutes=vllm_readiness_timeout_minutes)
 
     if regenerate_responses:
