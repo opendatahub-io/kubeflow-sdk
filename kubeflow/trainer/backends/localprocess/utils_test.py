@@ -359,7 +359,9 @@ def test_get_command_using_train_func(test_case: TestCase, tmp_path: Path):
     train_job_name = "test-job"
 
     if test_case.config.get("no_trainer"):
-        runtime = types.Runtime(name="test", trainer=None)
+        runtime = types.Runtime(
+            name="test", kind=types.RuntimeKind.CLUSTER_TRAINING_RUNTIME, trainer=None
+        )
         with pytest.raises(test_case.expected_error):
             get_command_using_train_func(
                 runtime=runtime,
@@ -375,7 +377,9 @@ def test_get_command_using_train_func(test_case: TestCase, tmp_path: Path):
             image="local",
         )
         rt.set_command(("python",))
-        runtime = types.Runtime(name="test", trainer=rt)
+        runtime = types.Runtime(
+            name="test", kind=types.RuntimeKind.CLUSTER_TRAINING_RUNTIME, trainer=rt
+        )
         with pytest.raises(test_case.expected_error):
             get_command_using_train_func(
                 runtime=runtime,
@@ -391,7 +395,9 @@ def test_get_command_using_train_func(test_case: TestCase, tmp_path: Path):
             image="local",
         )
         rt.set_command(("python",))
-        runtime = types.Runtime(name="test", trainer=rt)
+        runtime = types.Runtime(
+            name="test", kind=types.RuntimeKind.CLUSTER_TRAINING_RUNTIME, trainer=rt
+        )
         result = get_command_using_train_func(
             runtime=runtime,
             train_func=_sample_train_func,
@@ -476,7 +482,9 @@ def test_get_local_train_job_script(test_case: TestCase, tmp_path: Path):
             image="local",
         )
         base_rt.set_command(("python",))
-        runtime = types.Runtime(name="test", trainer=base_rt)
+        runtime = types.Runtime(
+            name="test", kind=types.RuntimeKind.CLUSTER_TRAINING_RUNTIME, trainer=base_rt
+        )
         trainer = types.CustomTrainer(
             func=_sample_train_func,
             packages_to_install=["numpy"],
@@ -502,7 +510,9 @@ def test_get_local_train_job_script(test_case: TestCase, tmp_path: Path):
             packages=["torch"],
         )
         rt.set_command(("python",))
-        runtime = types.Runtime(name="test", trainer=rt)
+        runtime = types.Runtime(
+            name="test", kind=types.RuntimeKind.CLUSTER_TRAINING_RUNTIME, trainer=rt
+        )
         trainer = types.CustomTrainer(
             func=_sample_train_func,
             packages_to_install=["numpy"],

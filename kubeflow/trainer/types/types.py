@@ -17,7 +17,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from urllib.parse import urlparse
 
 import kubeflow.common.constants as common_constants
 from kubeflow.trainer.constants import constants
@@ -88,6 +87,12 @@ class CustomTrainerContainer:
     num_nodes: int | None = None
     resources_per_node: dict | None = None
     env: dict[str, str] | None = None
+
+
+# The Kind name for the ClusterTrainingRuntime, TrainingRuntime.
+class RuntimeKind(Enum):
+    CLUSTER_TRAINING_RUNTIME = "ClusterTrainingRuntime"
+    TRAINING_RUNTIME = "TrainingRuntime"
 
 
 # TODO(Electronic-Waste): Add more loss functions.
@@ -200,7 +205,7 @@ class TorchTuneConfig:
         batch_size (`Optional[int]`):
             The number of samples processed before updating model weights.
         epochs (`Optional[int]`):
-            The number of samples processed before updating model weights.
+            The number of complete passes over the training dataset.
         loss (`Optional[Loss]`): The loss algorithm we use to fine-tune the LLM,
             e.g. `torchtune.modules.loss.CEWithChunkedOutputLoss`.
         num_nodes (`Optional[int]`): The number of nodes to use for training.
@@ -269,6 +274,7 @@ class RuntimeTrainer:
 class Runtime:
     name: str
     trainer: RuntimeTrainer
+    kind: RuntimeKind | None = None
     pretrained_model: str | None = None
 
 
@@ -327,7 +333,7 @@ class HuggingFaceDatasetInitializer(BaseInitializer):
     """Configuration for downloading datasets from HuggingFace Hub.
 
     Args:
-        storage_uri (`str`): The HuggingFace Hub model identifier in the format 'hf://username/repo_name'.
+        storage_uri (`str`): The HuggingFace Hub dataset identifier.
         ignore_patterns (`Optional[list[str]]`): List of file patterns to ignore during download.
         access_token (`Optional[str]`): HuggingFace Hub access token for private datasets.
     """
@@ -341,19 +347,13 @@ class HuggingFaceDatasetInitializer(BaseInitializer):
         if not self.storage_uri.startswith("hf://"):
             raise ValueError(f"storage_uri must start with 'hf://', got {self.storage_uri}")
 
-        if urlparse(self.storage_uri).path == "":
-            raise ValueError(
-                "storage_uri: must have absolute path with 'hf://<user_name>/<dataset_name>', got "
-                f"{self.storage_uri}"
-            )
-
 
 @dataclass
 class S3DatasetInitializer(BaseInitializer):
     """Configuration for downloading datasets from S3-compatible storage.
 
     Args:
-        storage_uri (`str`): The S3 URI for the model in the format 's3://bucket-name/path/to/model'.
+        storage_uri (`str`): The S3 URI for the dataset in the format 's3://bucket-name/path/to/dataset'.
         ignore_patterns (`Optional[list[str]]`): List of file patterns to ignore during download.
         endpoint (`Optional[str]`): Custom S3 endpoint URL.
         access_key_id (`Optional[str]`): Access key for authentication.
@@ -427,7 +427,7 @@ class HuggingFaceModelInitializer(BaseInitializer):
     """Configuration for downloading models from HuggingFace Hub.
 
     Args:
-        storage_uri (`str`): The HuggingFace Hub model identifier in the format 'hf://username/repo_name'.
+        storage_uri (`str`): The HuggingFace Hub model identifier.
         ignore_patterns (`Optional[list[str]]`): List of file patterns to ignore during download.
         access_token (`Optional[str]`): HuggingFace Hub access token.
     """
@@ -451,7 +451,7 @@ class S3ModelInitializer(BaseInitializer):
     Args:
         storage_uri (`str`): The S3 URI for the model in the format 's3://bucket-name/path/to/model'.
         ignore_patterns (`Optional[list[str]]`): List of file patterns to ignore during download.
-            Defaults to `['*.msgpack', '*.h5', '*.bin', '.pt', '.pth']`.
+            Defaults to `['*.msgpack', '*.h5', '*.bin', '*.pt', '*.pth']`.
         endpoint (`Optional[str]`): Custom S3 endpoint URL.
         access_key_id (`Optional[str]`): Access key for authentication.
         secret_access_key (`Optional[str]`): Secret key for authentication.

@@ -938,6 +938,11 @@ def test_wait_for_job_status(container_backend, test_case):
 
     except Exception as e:
         assert type(e) is test_case.expected_error
+        if test_case.name == "job fails":
+            msg = str(e)
+            assert f"TrainJob {job_name} is Failed" in msg
+            assert "exit_code=1" in msg
+            assert "Last logs:" in msg
     print("test execution complete")
 
 
@@ -1111,7 +1116,7 @@ def test_create_adapter_error_message_format():
     """Test that error message includes attempted connections."""
     cfg = ContainerBackendConfig(container_runtime="docker")
 
-    docker_adapter = "kubeflow.trainer.backends.container.adapters.docker.DockerClientAdapter"
+    docker_adapter = "kubeflow.trainer.backends.container.backend.DockerClientAdapter"
     with patch(docker_adapter) as mock_docker:
         mock_docker.side_effect = Exception("Connection failed")
 
@@ -1122,3 +1127,6 @@ def test_create_adapter_error_message_format():
         error_msg = str(exc_info.value)
         assert "Could not connect" in error_msg
         assert "tried:" in error_msg
+        # Guard the patch target: the failure must come from the mocked adapter, not from
+        # a genuinely unavailable Docker daemon.
+        assert mock_docker.called

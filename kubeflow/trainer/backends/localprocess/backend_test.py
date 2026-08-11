@@ -31,8 +31,7 @@ from kubeflow.trainer.options import (
     Annotations,
     Labels,
     Name,
-    PodTemplateOverride,
-    PodTemplateOverrides,
+    RuntimePatch,
 )
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 from kubeflow.trainer.types import types
@@ -156,6 +155,7 @@ def test_get_runtime(local_backend, test_case):
                         num_nodes=1,
                         image=LOCAL_RUNTIME_IMAGE,
                     ),
+                    kind=types.RuntimeKind.TRAINING_RUNTIME,
                 ),
             },
         ),
@@ -171,6 +171,7 @@ def test_get_runtime(local_backend, test_case):
                         num_nodes=1,
                         image=LOCAL_RUNTIME_IMAGE,
                     ),
+                    kind=types.RuntimeKind.TRAINING_RUNTIME,
                 ),
             },
             expected_error=ValueError,
@@ -205,6 +206,7 @@ def test_get_runtime_packages(local_backend, test_case):
                         num_nodes=1,
                         image=LOCAL_RUNTIME_IMAGE,
                     ),
+                    kind=types.RuntimeKind.TRAINING_RUNTIME,
                 ),
                 "trainer": types.CustomTrainer(
                     func=dummy_training_function,
@@ -225,6 +227,7 @@ def test_get_runtime_packages(local_backend, test_case):
                         num_nodes=1,
                         image=LOCAL_RUNTIME_IMAGE,
                     ),
+                    kind=types.RuntimeKind.TRAINING_RUNTIME,
                 ),
                 "trainer": types.CustomTrainer(
                     func=dummy_training_function,
@@ -246,6 +249,7 @@ def test_get_runtime_packages(local_backend, test_case):
                         num_nodes=1,
                         image=LOCAL_RUNTIME_IMAGE,
                     ),
+                    kind=types.RuntimeKind.TRAINING_RUNTIME,
                 ),
                 "trainer": types.CustomTrainer(
                     func=dummy_training_function,
@@ -266,6 +270,7 @@ def test_get_runtime_packages(local_backend, test_case):
                         num_nodes=1,
                         image=LOCAL_RUNTIME_IMAGE,
                     ),
+                    kind=types.RuntimeKind.TRAINING_RUNTIME,
                 ),
                 "trainer": types.CustomTrainer(
                     func=dummy_training_function,
@@ -286,17 +291,12 @@ def test_get_runtime_packages(local_backend, test_case):
                         num_nodes=1,
                         image=LOCAL_RUNTIME_IMAGE,
                     ),
+                    kind=types.RuntimeKind.TRAINING_RUNTIME,
                 ),
                 "trainer": types.CustomTrainer(
                     func=dummy_training_function,
                 ),
-                "options": [
-                    PodTemplateOverrides(
-                        PodTemplateOverride(
-                            target_jobs=["node"],
-                        )
-                    )
-                ],
+                "options": [RuntimePatch()],
             },
             expected_error=ValueError,
         ),
@@ -324,6 +324,7 @@ def test_get_runtime_packages(local_backend, test_case):
                         num_nodes=1,
                         image=LOCAL_RUNTIME_IMAGE,
                     ),
+                    kind=types.RuntimeKind.TRAINING_RUNTIME,
                 ),
                 "trainer": None,
             },
@@ -437,18 +438,40 @@ def test_get_job_logs(local_backend, test_case):
         TestCase(
             name="wait_for_nonexistent_job",
             expected_status=FAILED,
-            config={"job_name": "nonexistent-job"},
+            config={"name": "nonexistent-job"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="polling_interval greater than timeout raises ValueError",
+            expected_status=FAILED,
+            config={"name": BASIC_TRAIN_JOB_NAME, "timeout": 1, "polling_interval": 2},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="polling_interval equal to timeout raises ValueError",
+            expected_status=FAILED,
+            config={"name": BASIC_TRAIN_JOB_NAME, "timeout": 10, "polling_interval": 10},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="zero polling_interval raises ValueError",
+            expected_status=FAILED,
+            config={"name": BASIC_TRAIN_JOB_NAME, "timeout": 10, "polling_interval": 0},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="negative polling_interval raises ValueError",
+            expected_status=FAILED,
+            config={"name": BASIC_TRAIN_JOB_NAME, "timeout": 10, "polling_interval": -1},
             expected_error=ValueError,
         ),
     ],
 )
 def test_wait_for_job_status(local_backend, test_case):
     """Test LocalProcessBackend.wait_for_job_status()."""
-    job_name = test_case.config.get("job_name")
-
     if test_case.expected_status == FAILED:
         with pytest.raises(test_case.expected_error):
-            local_backend.wait_for_job_status(job_name)
+            local_backend.wait_for_job_status(**test_case.config)
 
 
 @pytest.mark.parametrize(
@@ -485,6 +508,7 @@ def test_name_option_sets_job_name(local_backend, mock_train_environment):
             framework="torch",
             image=LOCAL_RUNTIME_IMAGE,
         ),
+        kind=types.RuntimeKind.TRAINING_RUNTIME,
     )
 
     trainer = types.CustomTrainer(func=dummy_func)

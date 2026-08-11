@@ -35,7 +35,7 @@ from kubeflow.optimizer.types.search_types import (
     Distribution as SearchDistribution,
 )
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
-from kubeflow.trainer.types.types import Runtime, RuntimeTrainer, TrainerType, TrainJob
+from kubeflow.trainer.types.types import Runtime, RuntimeKind, RuntimeTrainer, TrainerType, TrainJob
 
 # --- Direction enum ---
 
@@ -177,6 +177,7 @@ def _make_trainjob(name: str = "test-job", status: str = common_constants.UNKNOW
             framework="torch",
             image="test:latest",
         ),
+        kind=RuntimeKind.CLUSTER_TRAINING_RUNTIME,
     )
     return TrainJob(
         name=name,
