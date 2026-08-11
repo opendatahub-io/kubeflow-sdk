@@ -17,12 +17,14 @@
 import pytest
 
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai.instrumentation.speculator_progression import (
+    _create_speculator_progression_instrumentation,
+)
 from kubeflow.trainer.rhai.speculator import (
     SpeculativeDecodingTrainer,
     SpeculatorConfig,
     SpeculatorMode,
     SpeculatorType,
-    _create_speculator_progression_instrumentation,
     _render_speculator_training_script,
     apply_speculator_sidecar_overrides,
     get_trainer_cr_from_speculator_trainer,
