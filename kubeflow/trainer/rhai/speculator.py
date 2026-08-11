@@ -1968,26 +1968,30 @@ def _get_command_from_runtime(
 
 def apply_speculator_sidecar_overrides(
     trainer: SpeculativeDecodingTrainer,
-    pod_template_overrides: list,
+    runtime_patches: list,
 ) -> list:
-    """Configure the vLLM sidecar init container via pod template overrides.
+    """Configure the vLLM sidecar init container via runtime patches.
 
     Sets environment variables, PVC volume mount, and GPU resources on the
     ``vllm-sidecar`` init container defined in the ClusterTrainingRuntime.
 
     Args:
         trainer: SpeculativeDecodingTrainer with model path, GPU settings, and output_dir.
-        pod_template_overrides: Existing pod template overrides list (mutated in place).
+        runtime_patches: Existing runtime patches list (mutated in place).
 
     Returns:
-        Updated pod_template_overrides list.
+        Updated runtime_patches list.
     """
     from kubeflow.trainer.rhai.constants import (
         CHECKPOINT_MOUNT_PATH,
         CHECKPOINT_VOLUME_NAME,
         VLLM_SIDECAR_CONTAINER_NAME,
     )
-    from kubeflow.trainer.rhai.utils import parse_output_dir_uri
+    from kubeflow.trainer.rhai.utils import (
+        RUNTIME_PATCH_MANAGER,
+        _get_pod_spec_from_runtime_patch,
+        parse_output_dir_uri,
+    )
 
     if trainer.output_dir.startswith(PVC_URI_SCHEME):
         resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
@@ -1995,23 +1999,19 @@ def apply_speculator_sidecar_overrides(
         resolved_output_dir = trainer.output_dir
     hs_path = f"{resolved_output_dir}/hidden_states"
 
-    node_override = None
-    for override in pod_template_overrides:
-        target_jobs = override.get("targetJobs", [])
-        if any(job.get("name") == constants.NODE for job in target_jobs):
-            node_override = override
+    sdk_patch = None
+    for patch in runtime_patches:
+        if patch.get("manager") == RUNTIME_PATCH_MANAGER:
+            sdk_patch = patch
             break
 
-    if node_override is None:
-        node_override = {"targetJobs": [{"name": constants.NODE}], "spec": {}}
-        pod_template_overrides.append(node_override)
+    if sdk_patch is None:
+        sdk_patch = {"manager": RUNTIME_PATCH_MANAGER}
+        runtime_patches.append(sdk_patch)
 
-    if "spec" not in node_override:
-        node_override["spec"] = {}
-    spec_dict = node_override["spec"]
+    pod_spec = _get_pod_spec_from_runtime_patch(sdk_patch)
 
-    if "initContainers" not in spec_dict:
-        spec_dict["initContainers"] = []
+    init_containers = pod_spec.setdefault("initContainers", [])
 
     if trainer.verifier_model.startswith(PVC_URI_SCHEME):
         resolved_verifier, _ = parse_output_dir_uri(trainer.verifier_model)
@@ -2056,9 +2056,9 @@ def apply_speculator_sidecar_overrides(
                 "readOnly": False,
             }
         ]
-    spec_dict["initContainers"].append(sidecar_override)
+    init_containers.append(sidecar_override)
 
-    return pod_template_overrides
+    return runtime_patches
 
 
 def get_trainer_cr_from_speculator_trainer(

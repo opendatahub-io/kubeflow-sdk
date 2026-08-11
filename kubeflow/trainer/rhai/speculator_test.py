@@ -1427,10 +1427,13 @@ def test_apply_speculator_sidecar_overrides():
     result = apply_speculator_sidecar_overrides(trainer, [])
 
     assert len(result) == 1
-    override = result[0]
-    assert override["targetJobs"] == [{"name": "node"}]
+    sdk_patch = result[0]
+    assert sdk_patch["manager"] == "trainer.kubeflow.org/kubeflow-sdk"
 
-    init_containers = override["spec"]["initContainers"]
+    pod_spec = sdk_patch["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+        "template"
+    ]["spec"]["template"]["spec"]
+    init_containers = pod_spec["initContainers"]
     assert len(init_containers) == 1
 
     sidecar = init_containers[0]
@@ -1469,19 +1472,44 @@ def test_apply_speculator_sidecar_overrides_preserves_existing():
 
     existing = [
         {
-            "targetJobs": [{"name": "node"}],
-            "spec": {
-                "volumes": [
-                    {"name": "checkpoint-storage", "persistentVolumeClaim": {"claimName": "shared"}}
-                ],
-                "containers": [
-                    {
-                        "name": "node",
-                        "volumeMounts": [
-                            {"name": "checkpoint-storage", "mountPath": "/mnt/kubeflow-checkpoints"}
-                        ],
+            "manager": "trainer.kubeflow.org/kubeflow-sdk",
+            "trainingRuntimeSpec": {
+                "template": {
+                    "spec": {
+                        "replicatedJobs": [
+                            {
+                                "name": "node",
+                                "template": {
+                                    "spec": {
+                                        "template": {
+                                            "spec": {
+                                                "volumes": [
+                                                    {
+                                                        "name": "checkpoint-storage",
+                                                        "persistentVolumeClaim": {
+                                                            "claimName": "shared"
+                                                        },
+                                                    }
+                                                ],
+                                                "containers": [
+                                                    {
+                                                        "name": "node",
+                                                        "volumeMounts": [
+                                                            {
+                                                                "name": "checkpoint-storage",
+                                                                "mountPath": "/mnt/kubeflow-checkpoints",
+                                                            }
+                                                        ],
+                                                    }
+                                                ],
+                                            }
+                                        }
+                                    }
+                                },
+                            }
+                        ]
                     }
-                ],
+                }
             },
         }
     ]
@@ -1489,11 +1517,13 @@ def test_apply_speculator_sidecar_overrides_preserves_existing():
     result = apply_speculator_sidecar_overrides(trainer, existing)
 
     assert len(result) == 1
-    spec = result[0]["spec"]
-    assert len(spec["volumes"]) == 1
-    assert len(spec["containers"]) == 1
-    assert len(spec["initContainers"]) == 1
-    assert spec["initContainers"][0]["name"] == "vllm-sidecar"
+    pod_spec = result[0]["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+        "template"
+    ]["spec"]["template"]["spec"]
+    assert len(pod_spec["volumes"]) == 1
+    assert len(pod_spec["containers"]) == 1
+    assert len(pod_spec["initContainers"]) == 1
+    assert pod_spec["initContainers"][0]["name"] == "vllm-sidecar"
 
     print("test execution complete")
 
@@ -1636,7 +1666,10 @@ def test_sidecar_overrides_resolves_pvc_verifier_model():
 
     result = apply_speculator_sidecar_overrides(trainer, [])
 
-    sidecar = result[0]["spec"]["initContainers"][0]
+    pod_spec = result[0]["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+        "template"
+    ]["spec"]["template"]["spec"]
+    sidecar = pod_spec["initContainers"][0]
     env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
     assert env_dict["SPECULATOR_VERIFIER_MODEL"] == "/mnt/kubeflow-checkpoints/models/Qwen3-8B"
 
@@ -1659,7 +1692,10 @@ def test_sidecar_overrides_passes_target_layer_ids():
 
     result = apply_speculator_sidecar_overrides(trainer, [])
 
-    sidecar = result[0]["spec"]["initContainers"][0]
+    pod_spec = result[0]["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+        "template"
+    ]["spec"]["template"]["spec"]
+    sidecar = pod_spec["initContainers"][0]
     env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
     assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
 
@@ -2101,7 +2137,10 @@ def test_online_sidecar_overrides():
 
     result = apply_speculator_sidecar_overrides(trainer, [])
 
-    sidecar = result[0]["spec"]["initContainers"][0]
+    pod_spec = result[0]["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+        "template"
+    ]["spec"]["template"]["spec"]
+    sidecar = pod_spec["initContainers"][0]
     env_dict = {e["name"]: e["value"] for e in sidecar["env"]}
 
     assert env_dict["SPECULATOR_VERIFIER_MODEL"] == "Qwen/Qwen3-8B"
