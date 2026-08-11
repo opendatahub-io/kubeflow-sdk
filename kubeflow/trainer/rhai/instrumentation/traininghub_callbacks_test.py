@@ -51,12 +51,36 @@ class EarlyStopCallback(TrainingHubCallback):
             print("Early stop threshold reached")
 
 
-def test_validate_callbacks_accepts_classes_and_instances():
-    """validate_callbacks accepts callback classes and instances."""
-    print("Executing test: validate_callbacks accepts classes and instances")
+class NotACallback:
+    """Module-level non-callback class for validation tests."""
+
+    def on_log(self, context: TrainingHubContext) -> None:
+        print("not a callback")
+
+
+_CALLBACK_THRESHOLD = 0.01
+
+
+class CallbackWithModuleDependency(TrainingHubCallback):
+    """Callback that references a module-level constant."""
+
+    def on_log(self, context: TrainingHubContext) -> None:
+        if context.loss and context.loss < _CALLBACK_THRESHOLD:
+            print("threshold reached")
+
+
+class CallbackWithUnknownHook(TrainingHubCallback):
+    """Callback that defines a hook not in the unified 9."""
+
+    def on_prediction_step(self, context: TrainingHubContext) -> None:
+        print("prediction step")
+
+
+def test_validate_callbacks_accepts_callback_classes():
+    """validate_callbacks accepts callback classes."""
+    print("Executing test: validate_callbacks accepts callback classes")
 
     validate_callbacks([LoggingCallback])
-    validate_callbacks([LoggingCallback()])
     validate_callbacks(None)
 
     print("test execution complete")
@@ -76,6 +100,36 @@ def test_validate_callbacks_accepts_classes_and_instances():
             expected_status=FAILED,
             config={"callbacks": ["not-a-callback"]},
             expected_error=TypeError,
+        ),
+        TestCase(
+            name="callbacks reject instances",
+            expected_status=FAILED,
+            config={"callbacks": [LoggingCallback()]},
+            expected_error=TypeError,
+        ),
+        TestCase(
+            name="callbacks reject non-callback classes",
+            expected_status=FAILED,
+            config={"callbacks": [NotACallback]},
+            expected_error=TypeError,
+        ),
+        TestCase(
+            name="callbacks reject duplicate class names",
+            expected_status=FAILED,
+            config={"callbacks": [LoggingCallback, LoggingCallback]},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="callbacks reject module-level dependencies",
+            expected_status=FAILED,
+            config={"callbacks": [CallbackWithModuleDependency]},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="callbacks reject unsupported hooks",
+            expected_status=FAILED,
+            config={"callbacks": [CallbackWithUnknownHook]},
+            expected_error=ValueError,
         ),
     ],
 )
@@ -123,14 +177,42 @@ def test_build_callback_injection_code_multiple_callbacks():
     print("test execution complete")
 
 
-def test_build_callback_injection_code_accepts_instance():
-    """Passing an instance serializes its class instead."""
-    print("Executing test: callback instance serializes class")
+def test_generated_callback_injection_code_executes():
+    """Generated pod preamble defines and instantiates callbacks without NameError."""
+    print("Executing test: generated callback injection code executes")
 
-    code = build_training_hub_callback_injection_code([LoggingCallback()])
+    import sys
+    import types
 
-    assert "class LoggingCallback" in code
-    assert "LoggingCallback()" in code
+    training_hub = types.ModuleType("training_hub")
+
+    class _TrainingHubCallback:
+        pass
+
+    class _TrainingHubContext:
+        pass
+
+    def _noop_api(**kwargs: object) -> None:
+        return None
+
+    training_hub.TrainingHubCallback = _TrainingHubCallback
+    training_hub.TrainingHubContext = _TrainingHubContext
+    training_hub.sft = _noop_api
+    training_hub.osft = _noop_api
+    training_hub.lora_sft = _noop_api
+    training_hub.lora_grpo = _noop_api
+
+    code = build_training_hub_callback_injection_code([LoggingCallback])
+    namespace: dict[str, object] = {}
+    sys.modules["training_hub"] = training_hub
+    try:
+        exec(code, namespace)  # noqa: S102
+    finally:
+        sys.modules.pop("training_hub", None)
+
+    callbacks = namespace["_KUBEFLOW_HUB_CALLBACKS"]
+    assert len(callbacks) == 1
+    assert callbacks[0].__class__.__name__ == "LoggingCallback"
 
     print("test execution complete")
 

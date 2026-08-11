@@ -37,7 +37,7 @@ class TrainingHubTrainer:
         enable_progression_tracking: Enable file-based progress tracking with HTTP server.
         metrics_port: HTTP server port for metrics endpoint.
         metrics_poll_interval_seconds: How often controller polls metrics endpoint.
-        callbacks: Optional list of Training Hub callback classes or instances.
+        callbacks: Optional list of Training Hub callback classes.
             Classes are serialized into the training pod and passed to training_hub
             APIs (sft, osft, lora_sft, lora_grpo). Define callbacks at module level
             so inspect.getsource can serialize them.
