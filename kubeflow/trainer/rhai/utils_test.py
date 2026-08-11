@@ -666,8 +666,15 @@ def test_speculator_same_pvc_deduplicates_mount():
 
     all_volumes = []
     for override in result_overrides:
-        for vol in override.get("spec", {}).get("volumes", []):
-            all_volumes.append(vol.get("name"))
+        for rj in (
+            override.get("trainingRuntimeSpec", {})
+            .get("template", {})
+            .get("spec", {})
+            .get("replicatedJobs", [])
+        ):
+            pod_spec = rj.get("template", {}).get("spec", {}).get("template", {}).get("spec", {})
+            for vol in pod_spec.get("volumes", []):
+                all_volumes.append(vol.get("name"))
 
     expected = {
         "resolved_dir": None,
@@ -776,8 +783,15 @@ def test_speculator_pvc_and_direct_path_no_conflict():
 
     all_volumes = []
     for override in result_overrides:
-        for vol in override.get("spec", {}).get("volumes", []):
-            all_volumes.append(vol.get("name"))
+        for rj in (
+            override.get("trainingRuntimeSpec", {})
+            .get("template", {})
+            .get("spec", {})
+            .get("replicatedJobs", [])
+        ):
+            pod_spec = rj.get("template", {}).get("spec", {}).get("template", {}).get("spec", {})
+            for vol in pod_spec.get("volumes", []):
+                all_volumes.append(vol.get("name"))
 
     expected = {
         "resolved_dir": None,
