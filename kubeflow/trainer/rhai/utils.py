@@ -1,4 +1,3 @@
-import logging
 import os
 import re
 from urllib.parse import urlparse
@@ -7,6 +6,7 @@ from kubeflow_trainer_api import models
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
+from kubeflow.common.structured_logging import get_logger
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import (
     RHAITrainer,
@@ -22,7 +22,7 @@ from kubeflow.trainer.rhai.constants import (
 )
 from kubeflow.trainer.types import types
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def is_primary_pod() -> bool:
@@ -270,96 +270,105 @@ def parse_output_dir_uri(output_dir: str | None) -> tuple[str | None, dict | Non
     return output_dir, None
 
 
+RUNTIME_PATCH_MANAGER = "trainer.kubeflow.org/kubeflow-sdk"
+
+
+def _get_pod_spec_from_runtime_patch(patch: dict) -> dict:
+    """Navigate into a RuntimePatch dict and return the pod spec for the 'node' replicatedJob.
+
+    Creates intermediate dicts as needed. Returns the innermost pod spec dict
+    where volumes and containers live.
+    """
+    runtime_spec = patch.setdefault("trainingRuntimeSpec", {})
+    template = runtime_spec.setdefault("template", {})
+    jobset_spec = template.setdefault("spec", {})
+    replicated_jobs = jobset_spec.setdefault("replicatedJobs", [])
+
+    node_rj = None
+    for rj in replicated_jobs:
+        if rj.get("name") == constants.NODE:
+            node_rj = rj
+            break
+    if node_rj is None:
+        node_rj = {"name": constants.NODE}
+        replicated_jobs.append(node_rj)
+
+    job_template = node_rj.setdefault("template", {})
+    job_spec = job_template.setdefault("spec", {})
+    pod_template = job_spec.setdefault("template", {})
+    return pod_template.setdefault("spec", {})
+
+
 def apply_output_dir_uri_to_pod_overrides(
     output_dir: str,
-    pod_template_overrides: list | None,
+    runtime_patches: list | None,
 ) -> tuple[str, list]:
     """
-    Process output_dir URI and apply volume mounting to pod template overrides.
+    Process output_dir URI and apply volume mounting to runtime patches.
 
     Handles both PVC URIs (mounts PVC) and S3 URIs (mounts ephemeral staging volume).
 
     Args:
         output_dir: Output directory URI (pvc://, s3://, or local path).
-        pod_template_overrides: Existing pod template overrides list.
+        runtime_patches: Existing runtime patches list.
 
     Returns:
-        Tuple of (resolved_output_dir, updated_pod_template_overrides).
+        Tuple of (resolved_output_dir, updated_runtime_patches).
     """
     resolved_output_dir, volume_mount_specs = parse_output_dir_uri(output_dir)
 
-    # If no volume mounting needed, return as-is
     if volume_mount_specs is None:
-        return resolved_output_dir, pod_template_overrides or []
+        return resolved_output_dir, runtime_patches or []
 
-    # Initialize pod_template_overrides as list if needed
-    if pod_template_overrides is None:
-        pod_template_overrides = []
+    if runtime_patches is None:
+        runtime_patches = []
 
-    # Find existing override for node target job, or create new one
-    node_override = None
-    for override in pod_template_overrides:
-        target_jobs = override.get("targetJobs", [])
-        if any(job.get("name") == constants.NODE for job in target_jobs):
-            node_override = override
+    # Find an existing RuntimePatch owned by the SDK, or create a new one.
+    sdk_patch = None
+    for patch in runtime_patches:
+        if patch.get("manager") == RUNTIME_PATCH_MANAGER:
+            sdk_patch = patch
             break
 
-    if node_override is None:
-        # Create new override targeting the node job
-        node_override = {"targetJobs": [{"name": constants.NODE}], "spec": {}}
-        pod_template_overrides.append(node_override)
+    if sdk_patch is None:
+        sdk_patch = {"manager": RUNTIME_PATCH_MANAGER}
+        runtime_patches.append(sdk_patch)
 
-    # Ensure spec dict exists
-    if "spec" not in node_override:
-        node_override["spec"] = {}
+    pod_spec = _get_pod_spec_from_runtime_patch(sdk_patch)
 
-    spec_dict = node_override["spec"]
-
-    # Add volume to spec (only if not already present)
-    if "volumes" not in spec_dict:
-        spec_dict["volumes"] = []
-
-    # Check if volume with the same name already exists
+    # Add volume (only if not already present)
+    volumes = pod_spec.setdefault("volumes", [])
     volume_name = volume_mount_specs["volume"]["name"]
-    if any(vol.get("name") == volume_name for vol in spec_dict["volumes"]):
+    if any(vol.get("name") == volume_name for vol in volumes):
         raise ValueError(
             f"Volume name conflict: A volume with name '{volume_name}' already exists in "
-            f"pod_template_overrides. This name is reserved by Kubeflow SDK for "
+            f"runtime_patches. This name is reserved by Kubeflow SDK for "
             f"checkpoint storage. Please rename your existing volume to a different name."
         )
-    spec_dict["volumes"].append(volume_mount_specs["volume"])
+    volumes.append(volume_mount_specs["volume"])
 
     # Add volumeMount to the trainer container
-    if "containers" not in spec_dict:
-        spec_dict["containers"] = []
-
-    # Find the trainer container in containers list
-    trainer_container_dict = None
-    for container_dict in spec_dict["containers"]:
-        if container_dict.get("name") == constants.NODE:
-            trainer_container_dict = container_dict
+    containers = pod_spec.setdefault("containers", [])
+    trainer_container = None
+    for c in containers:
+        if c.get("name") == constants.NODE:
+            trainer_container = c
             break
+    if trainer_container is None:
+        trainer_container = {"name": constants.NODE}
+        containers.append(trainer_container)
 
-    if trainer_container_dict is None:
-        # Create new container override for trainer
-        trainer_container_dict = {"name": constants.NODE, "volumeMounts": []}
-        spec_dict["containers"].append(trainer_container_dict)
-
-    # Add volumeMount to trainer container (only if not already present)
-    if "volumeMounts" not in trainer_container_dict:
-        trainer_container_dict["volumeMounts"] = []
-
-    # Check if volumeMount with the same name already exists
+    volume_mounts = trainer_container.setdefault("volumeMounts", [])
     volume_mount_name = volume_mount_specs["volumeMount"]["name"]
-    if any(vm.get("name") == volume_mount_name for vm in trainer_container_dict["volumeMounts"]):
+    if any(vm.get("name") == volume_mount_name for vm in volume_mounts):
         raise ValueError(
             f"VolumeMount name conflict: A volumeMount with name '{volume_mount_name}' already "
-            f"exists in pod_template_overrides. This name is reserved by Kubeflow SDK for "
+            f"exists in runtime_patches. This name is reserved by Kubeflow SDK for "
             f"checkpoint storage. Please rename your existing volumeMount to a different name."
         )
-    trainer_container_dict["volumeMounts"].append(volume_mount_specs["volumeMount"])
+    volume_mounts.append(volume_mount_specs["volumeMount"])
 
-    return resolved_output_dir, pod_template_overrides
+    return resolved_output_dir, runtime_patches
 
 
 def get_cloud_storage_credential_env_vars(
@@ -475,25 +484,25 @@ def inject_cloud_storage_credentials(
 def setup_rhai_trainer_storage(
     trainer: RHAITrainer,
     trainer_cr: "models.TrainerV1alpha1Trainer",
-    pod_template_overrides: list | None,
+    runtime_patches: list | None,
     core_api: "client.CoreV1Api",
     namespace: str,
 ) -> tuple[str | None, "models.TrainerV1alpha1Trainer", list]:
     """Setup RHAI trainer storage: volume mounts and S3 credentials.
 
     This is a consolidated helper that:
-    1. Parses output_dir URI and applies volume mounting to pod template overrides
+    1. Parses output_dir URI and applies volume mounting to runtime patches
     2. Injects S3 credentials into trainer CR if using S3 output_dir
 
     Args:
         trainer: RHAI trainer instance.
         trainer_cr: Trainer custom resource to inject env vars into.
-        pod_template_overrides: Existing pod template overrides list.
+        runtime_patches: Existing runtime patches list.
         core_api: Kubernetes CoreV1Api client.
         namespace: Namespace for secret validation.
 
     Returns:
-        Tuple of (resolved_output_dir, updated_trainer_cr, updated_pod_template_overrides).
+        Tuple of (resolved_output_dir, updated_trainer_cr, updated_runtime_patches).
     """
     resolved_output_dir = None
 
@@ -513,15 +522,15 @@ def setup_rhai_trainer_storage(
                 f"Multiple different PVCs are not yet supported. "
                 f"Found PVCs: {', '.join(sorted(pvc_names))}. "
                 f"Use the same PVC for all fields, or mount additional PVCs "
-                f"manually via pod_template_overrides."
+                f"manually via runtime_patches."
             )
 
         if pvc_paths:
-            _, pod_template_overrides = apply_output_dir_uri_to_pod_overrides(
-                pvc_paths[0], pod_template_overrides
+            _, runtime_patches = apply_output_dir_uri_to_pod_overrides(
+                pvc_paths[0], runtime_patches
             )
         else:
-            pod_template_overrides = pod_template_overrides or []
+            runtime_patches = runtime_patches or []
 
         _needs_sidecar = trainer.mode in (
             speculator.SpeculatorMode.DATA_ONLY,
@@ -530,18 +539,18 @@ def setup_rhai_trainer_storage(
         if trainer.mode == speculator.SpeculatorMode.DATA_ONLY and trainer.vllm_endpoint:
             _needs_sidecar = False
         if _needs_sidecar:
-            pod_template_overrides = speculator.apply_speculator_sidecar_overrides(
-                trainer, pod_template_overrides
+            runtime_patches = speculator.apply_speculator_sidecar_overrides(
+                trainer, runtime_patches
             )
 
     elif hasattr(trainer, "output_dir") and trainer.output_dir:
-        resolved_output_dir, pod_template_overrides = apply_output_dir_uri_to_pod_overrides(
-            trainer.output_dir, pod_template_overrides
+        resolved_output_dir, runtime_patches = apply_output_dir_uri_to_pod_overrides(
+            trainer.output_dir, runtime_patches
         )
     else:
-        pod_template_overrides = pod_template_overrides or []
+        runtime_patches = runtime_patches or []
 
     # Inject cloud storage credentials if applicable
     trainer_cr = inject_cloud_storage_credentials(trainer, trainer_cr, core_api, namespace)
 
-    return resolved_output_dir, trainer_cr, pod_template_overrides
+    return resolved_output_dir, trainer_cr, runtime_patches

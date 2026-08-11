@@ -18,9 +18,9 @@ from unittest.mock import mock_open, patch
 
 import pytest
 
-from kubeflow.common import constants
-from kubeflow.common.test.common import SUCCESS, TestCase
+from kubeflow.common import constants, utils
 from kubeflow.common.utils import get_default_target_namespace, is_running_in_k8s
+from kubeflow.trainer.test.common import SUCCESS, TestCase
 
 # --------------------------
 # is_running_in_k8s tests
@@ -155,3 +155,60 @@ def test_get_default_target_namespace(test_case: TestCase):
     assert test_case.expected_status == SUCCESS
     assert result == test_case.expected_output
     print("test execution complete")
+
+
+# --------------------------
+# validate_wait_for_job_status tests
+# --------------------------
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid polling_interval and timeout",
+            expected_status=SUCCESS,
+            config={"polling_interval": 2, "timeout": 600},
+        ),
+        TestCase(
+            name="timeout is zero",
+            expected_status=SUCCESS,
+            config={"polling_interval": 2, "timeout": 0},
+            expected_error=ValueError,
+            expected_output="Timeout must be a positive number",
+        ),
+        TestCase(
+            name="polling_interval is zero",
+            expected_status=SUCCESS,
+            config={"polling_interval": 0, "timeout": 600},
+            expected_error=ValueError,
+            expected_output="Polling interval must be a positive number",
+        ),
+        TestCase(
+            name="polling_interval is negative",
+            expected_status=SUCCESS,
+            config={"polling_interval": -5, "timeout": 600},
+            expected_error=ValueError,
+            expected_output="Polling interval must be a positive number",
+        ),
+        TestCase(
+            name="polling_interval equals timeout",
+            expected_status=SUCCESS,
+            config={"polling_interval": 10, "timeout": 10},
+            expected_error=ValueError,
+            expected_output="Polling interval must be strictly less than timeout",
+        ),
+    ],
+)
+def test_validate_wait_for_job_status(test_case):
+    """Test validate_wait_for_job_status across valid and invalid inputs."""
+    print("Executing test:", test_case.name)
+
+    polling_interval = test_case.config["polling_interval"]
+    timeout = test_case.config["timeout"]
+
+    if test_case.expected_error:
+        with pytest.raises(test_case.expected_error, match=test_case.expected_output):
+            utils.validate_wait_for_job_status(polling_interval, timeout)
+    else:
+        utils.validate_wait_for_job_status(polling_interval, timeout)

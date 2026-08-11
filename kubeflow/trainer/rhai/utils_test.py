@@ -17,6 +17,7 @@
 import os
 from unittest.mock import MagicMock, patch
 
+from kubeflow_trainer_api import models
 from kubernetes.client.rest import ApiException
 import pytest
 
@@ -25,6 +26,8 @@ from kubeflow.trainer.rhai.constants import (
     CHECKPOINT_VOLUME_NAME,
 )
 from kubeflow.trainer.rhai.utils import (
+    RUNTIME_PATCH_MANAGER,
+    apply_output_dir_uri_to_pod_overrides,
     get_cloud_storage_credential_env_vars,
     inject_cloud_storage_credentials,
     is_primary_pod,
@@ -481,6 +484,68 @@ def test_inject_cloud_storage_credentials_duplicate_env_var():
     print("test execution complete")
 
 
+def _assert_valid_runtime_patch(patch_dict):
+    """Validate that a patch dict is a valid RuntimePatch by parsing it with the model."""
+    rp = models.TrainerV1alpha1RuntimePatch.from_dict(patch_dict)
+    assert rp.manager == RUNTIME_PATCH_MANAGER
+    return rp
+
+
+def test_apply_output_dir_s3_produces_valid_runtime_patch():
+    """Test that S3 output_dir produces a valid RuntimePatch dict structure."""
+    print("Executing test: apply_output_dir_s3_produces_valid_runtime_patch")
+
+    resolved_dir, patches = apply_output_dir_uri_to_pod_overrides(
+        "s3://my-bucket/checkpoints", None
+    )
+
+    assert resolved_dir == CHECKPOINT_MOUNT_PATH
+    assert len(patches) == 1
+
+    rp = _assert_valid_runtime_patch(patches[0])
+    rj = rp.training_runtime_spec.template.spec.replicated_jobs[0]
+    assert rj.name == "node"
+
+    pod_spec = rj.template.spec.template.spec
+    assert len(pod_spec.volumes) == 1
+    assert pod_spec.volumes[0].name == CHECKPOINT_VOLUME_NAME
+    assert len(pod_spec.containers) == 1
+    assert pod_spec.containers[0].name == "node"
+    assert len(pod_spec.containers[0].volume_mounts) == 1
+    assert pod_spec.containers[0].volume_mounts[0].mount_path == CHECKPOINT_MOUNT_PATH
+
+    print("test execution complete")
+
+
+def test_apply_output_dir_pvc_produces_valid_runtime_patch():
+    """Test that PVC output_dir produces a valid RuntimePatch dict structure."""
+    print("Executing test: apply_output_dir_pvc_produces_valid_runtime_patch")
+
+    resolved_dir, patches = apply_output_dir_uri_to_pod_overrides("pvc://my-pvc/checkpoints", None)
+
+    assert resolved_dir == f"{CHECKPOINT_MOUNT_PATH}/checkpoints"
+    assert len(patches) == 1
+
+    rp = _assert_valid_runtime_patch(patches[0])
+    pod_spec = rp.training_runtime_spec.template.spec.replicated_jobs[0].template.spec.template.spec
+    assert pod_spec.volumes[0].persistent_volume_claim is not None
+    assert pod_spec.volumes[0].persistent_volume_claim.claim_name == "my-pvc"
+
+    print("test execution complete")
+
+
+def test_apply_output_dir_local_path_returns_empty_patches():
+    """Test that a local path returns no patches."""
+    print("Executing test: apply_output_dir_local_path_returns_empty_patches")
+
+    resolved_dir, patches = apply_output_dir_uri_to_pod_overrides("/workspace/checkpoints", None)
+
+    assert resolved_dir == "/workspace/checkpoints"
+    assert patches == []
+
+    print("test execution complete")
+
+
 def test_setup_rhai_trainer_storage_with_s3():
     """Test setup_rhai_trainer_storage handles S3 output_dir with volume mounts and credentials."""
     print("Executing test: setup_rhai_trainer_storage_with_s3")
@@ -493,12 +558,10 @@ def test_setup_rhai_trainer_storage_with_s3():
     }
     mock_core_api.read_namespaced_secret.return_value = mock_secret
 
-    # Create a mock trainer with S3 output_dir
     mock_trainer = MagicMock()
     mock_trainer.output_dir = "s3://my-bucket/checkpoints"
     mock_trainer.data_connection_name = "my-s3-secret"
 
-    # Create a mock trainer_cr with no existing env vars
     mock_trainer_cr = MagicMock()
     mock_trainer_cr.env = None
 
@@ -506,18 +569,10 @@ def test_setup_rhai_trainer_storage_with_s3():
         mock_trainer, mock_trainer_cr, None, mock_core_api, "default"
     )
 
-    # Verify expected results
-    expected = {
-        "resolved_dir": CHECKPOINT_MOUNT_PATH,
-        "has_overrides": True,
-        "env_count": 2,  # 2 keys in mock secret
-    }
-    actual = {
-        "resolved_dir": resolved_dir,
-        "has_overrides": result_overrides is not None and len(result_overrides) > 0,
-        "env_count": len(result_cr.env) if result_cr.env else 0,
-    }
-    assert actual == expected
+    assert resolved_dir == CHECKPOINT_MOUNT_PATH
+    assert len(result_overrides) == 1
+    _assert_valid_runtime_patch(result_overrides[0])
+    assert len(result_cr.env) == 2
 
     print("test execution complete")
 
@@ -528,7 +583,6 @@ def test_setup_rhai_trainer_storage_with_pvc():
 
     mock_core_api = MagicMock()
 
-    # Create a mock trainer with PVC output_dir
     mock_trainer = MagicMock()
     mock_trainer.output_dir = "pvc://my-pvc/checkpoints"
     mock_trainer.data_connection_name = None
@@ -540,20 +594,11 @@ def test_setup_rhai_trainer_storage_with_pvc():
         mock_trainer, mock_trainer_cr, None, mock_core_api, "default"
     )
 
-    # Verify expected results
-    expected = {
-        "resolved_dir": f"{CHECKPOINT_MOUNT_PATH}/checkpoints",
-        "has_overrides": True,
-        "env": [],
-        "secret_api_called": False,
-    }
-    actual = {
-        "resolved_dir": resolved_dir,
-        "has_overrides": result_overrides is not None and len(result_overrides) > 0,
-        "env": result_cr.env,
-        "secret_api_called": mock_core_api.read_namespaced_secret.called,
-    }
-    assert actual == expected
+    assert resolved_dir == f"{CHECKPOINT_MOUNT_PATH}/checkpoints"
+    assert len(result_overrides) == 1
+    _assert_valid_runtime_patch(result_overrides[0])
+    assert result_cr.env == []
+    assert not mock_core_api.read_namespaced_secret.called
 
     print("test execution complete")
 
