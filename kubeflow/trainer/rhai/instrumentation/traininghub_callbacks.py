@@ -72,13 +72,11 @@ def _module_level_names(module_tree: ast.Module) -> set[str]:
     return names
 
 
-def _names_defined_in_class(class_tree: ast.ClassDef) -> set[str]:
-    """Collect names defined inside a callback class body."""
+def _names_defined_in_scope(scope: ast.AST) -> set[str]:
+    """Collect names defined within a single function/method scope (non-recursive)."""
     names: set[str] = set()
-    for node in ast.walk(class_tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             names.add(node.id)
         elif isinstance(node, ast.arg):
             names.add(node.arg)
@@ -91,13 +89,56 @@ def _names_defined_in_class(class_tree: ast.ClassDef) -> set[str]:
     return names
 
 
-def _names_referenced_in_class(class_tree: ast.ClassDef) -> set[str]:
-    """Collect names loaded inside a callback class body."""
+def _names_defined_in_class(class_tree: ast.ClassDef) -> set[str]:
+    """Collect names defined at class level (not inside methods)."""
     names: set[str] = set()
-    for node in ast.walk(class_tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            names.add(node.id)
+    for node in class_tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
     return names
+
+
+def _unresolved_references_in_class(
+    class_tree: ast.ClassDef, module_names: set[str], allowed: set[str]
+) -> set[str]:
+    """Find module-level references not resolved in their own method scope."""
+    class_level = _names_defined_in_class(class_tree)
+    unresolved: set[str] = set()
+
+    for node in class_tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        method_locals = _names_defined_in_scope(node)
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                name = child.id
+                if name in module_names and name not in (
+                    method_locals | class_level | allowed
+                ):
+                    unresolved.add(name)
+
+    for node in class_tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                name = child.id
+                if name in module_names and name not in (class_level | allowed):
+                    unresolved.add(name)
+
+    return unresolved
 
 
 def _validate_callback_is_self_contained(cls: type) -> None:
@@ -118,10 +159,8 @@ def _validate_callback_is_self_contained(cls: type) -> None:
         return
 
     module_names = _module_level_names(module_tree)
-    referenced = _names_referenced_in_class(parsed_class)
-    defined_in_class = _names_defined_in_class(parsed_class)
     allowed = set(dir(builtins)) | _TRAINING_HUB_TYPE_NAMES | {"self", "cls", cls.__name__}
-    external = (referenced & module_names) - defined_in_class - allowed
+    external = _unresolved_references_in_class(parsed_class, module_names, allowed)
     if external:
         raise ValueError(
             f"Callback {cls.__name__!r} references module-level symbols "

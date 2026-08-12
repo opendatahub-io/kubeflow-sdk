@@ -103,6 +103,17 @@ class CallbackWithInMethodImport(TrainingHubCallback):
         print(json.dumps({"step": context.step}))
 
 
+class CallbackWithShadowedDependency(TrainingHubCallback):
+    """Callback where one method references a module symbol shadowed in another method."""
+
+    def on_log(self, context: TrainingHubContext) -> None:
+        _CALLBACK_THRESHOLD  # noqa: B018 — reference to module-level name
+
+    def on_train_end(self, context: TrainingHubContext) -> None:
+        _CALLBACK_THRESHOLD = 0.5  # noqa: F841, N806 — intentional shadow for test
+        print("done")
+
+
 def test_validate_callbacks_accepts_callback_classes():
     """validate_callbacks accepts callback classes."""
     print("Executing test: validate_callbacks accepts callback classes")
@@ -169,6 +180,12 @@ def test_validate_callbacks_accepts_callback_classes():
             name="callbacks reject unsupported hooks from mixins",
             expected_status=FAILED,
             config={"callbacks": [CallbackWithMixinHook]},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="callbacks reject shadowed module dependency",
+            expected_status=FAILED,
+            config={"callbacks": [CallbackWithShadowedDependency]},
             expected_error=ValueError,
         ),
     ],
@@ -246,11 +263,16 @@ def test_generated_callback_injection_code_executes():
 
     code = build_training_hub_callback_injection_code([LoggingCallback])
     namespace: dict[str, object] = {}
+    _sentinel = object()
+    _original = sys.modules.get("training_hub", _sentinel)
     sys.modules["training_hub"] = training_hub
     try:
         exec(code, namespace)  # noqa: S102
     finally:
-        sys.modules.pop("training_hub", None)
+        if _original is _sentinel:
+            sys.modules.pop("training_hub", None)
+        else:
+            sys.modules["training_hub"] = _original
 
     callbacks = namespace["_KUBEFLOW_HUB_CALLBACKS"]
     assert len(callbacks) == 1
