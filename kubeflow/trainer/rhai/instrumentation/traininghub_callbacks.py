@@ -124,9 +124,7 @@ def _unresolved_references_in_class(
         for child in ast.walk(node):
             if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
                 name = child.id
-                if name in module_names and name not in (
-                    method_locals | class_level | allowed
-                ):
+                if name in module_names and name not in (method_locals | class_level | allowed):
                     unresolved.add(name)
 
     for node in class_tree.body:
