@@ -76,11 +76,39 @@ class CallbackWithUnknownHook(TrainingHubCallback):
         print("prediction step")
 
 
+class CallbackWithRequiredInit(TrainingHubCallback):
+    """Callback that requires constructor arguments."""
+
+    def __init__(self, threshold: float) -> None:
+        self.threshold = threshold
+
+
+class UnsupportedHookMixin:
+    """Mixin that defines a hook outside the unified contract."""
+
+    def on_prediction_step(self, context: TrainingHubContext) -> None:
+        print("mixin hook")
+
+
+class CallbackWithMixinHook(UnsupportedHookMixin, TrainingHubCallback):
+    """Callback inheriting an unsupported hook from a mixin."""
+
+
+class CallbackWithInMethodImport(TrainingHubCallback):
+    """Callback that imports inside a method body (allowed self-contained pattern)."""
+
+    def on_log(self, context: TrainingHubContext) -> None:
+        import json
+
+        print(json.dumps({"step": context.step}))
+
+
 def test_validate_callbacks_accepts_callback_classes():
     """validate_callbacks accepts callback classes."""
     print("Executing test: validate_callbacks accepts callback classes")
 
     validate_callbacks([LoggingCallback])
+    validate_callbacks([CallbackWithInMethodImport])
     validate_callbacks(None)
 
     print("test execution complete")
@@ -131,6 +159,18 @@ def test_validate_callbacks_accepts_callback_classes():
             config={"callbacks": [CallbackWithUnknownHook]},
             expected_error=ValueError,
         ),
+        TestCase(
+            name="callbacks reject required constructor params",
+            expected_status=FAILED,
+            config={"callbacks": [CallbackWithRequiredInit]},
+            expected_error=TypeError,
+        ),
+        TestCase(
+            name="callbacks reject unsupported hooks from mixins",
+            expected_status=FAILED,
+            config={"callbacks": [CallbackWithMixinHook]},
+            expected_error=ValueError,
+        ),
     ],
 )
 def test_validate_callbacks_rejects_invalid_input(test_case):
@@ -159,6 +199,8 @@ def test_build_callback_injection_code_single_callback():
     assert "_KUBEFLOW_HUB_CALLBACKS = [LoggingCallback()]" in code
     assert "from training_hub import TrainingHubCallback, TrainingHubContext" in code
     assert "_kubeflow_wrap_training_hub_api" in code
+    assert "functools.wraps" in code
+    assert "_kubeflow_callbacks_applied" in code
     assert "lora_grpo" in code
 
     print("test execution complete")
