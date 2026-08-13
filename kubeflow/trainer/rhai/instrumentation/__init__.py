@@ -15,30 +15,12 @@
 """Instrumentation code generation for RHAI trainers.
 
 Submodules:
-- speculator: Public API for SpeculativeDecodingTrainer pod script generation
 - speculator_progression: Progression tracking injected into speculator pods
-- traininghub: Public API for TrainingHubTrainer pod script generation
-- transformers: Public API for TransformersTrainer pod script generation
 - traininghub_codegen: Code generation helpers for TrainingHub scripts
 - traininghub_progression: Progression tracking injected into TrainingHub pods
 - transformers_checkpoint: Checkpoint instrumentation injected into Transformers pods
 - transformers_progression: Progression tracking injected into Transformers pods
+
+Wrapper assembly lives in kubeflow.trainer.rhai.transformers,
+kubeflow.trainer.rhai.traininghub, and kubeflow.trainer.rhai.speculator.
 """
-
-from kubeflow.trainer.rhai.instrumentation.speculator import (
-    get_speculator_instrumentation_wrapper,
-)
-from kubeflow.trainer.rhai.instrumentation.traininghub import (
-    get_training_hub_instrumentation_wrapper,
-)
-from kubeflow.trainer.rhai.instrumentation.transformers import (
-    get_jit_checkpoint_injection_code,
-    get_transformers_instrumentation_wrapper,
-)
-
-__all__ = (
-    "get_jit_checkpoint_injection_code",
-    "get_speculator_instrumentation_wrapper",
-    "get_training_hub_instrumentation_wrapper",
-    "get_transformers_instrumentation_wrapper",
-)

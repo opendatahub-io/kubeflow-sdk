@@ -16,13 +16,11 @@
 
 import pytest
 
-from kubeflow.trainer.rhai.instrumentation.traininghub import (
-    get_training_hub_instrumentation_wrapper,
-)
 from kubeflow.trainer.rhai.instrumentation.traininghub_codegen import (
     _render_algorithm_wrapper,
     _render_user_func_code,
 )
+from kubeflow.trainer.rhai.traininghub import get_training_hub_instrumentation_wrapper
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 
 
