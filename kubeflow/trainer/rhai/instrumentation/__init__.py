@@ -15,24 +15,11 @@
 """Instrumentation code generation for RHAI trainers.
 
 Submodules:
-- traininghub: Public API for TrainingHubTrainer pod script generation
-- transformers: Public API for TransformersTrainer pod script generation
 - traininghub_codegen: Code generation helpers for TrainingHub scripts
 - traininghub_progression: Progression tracking injected into TrainingHub pods
 - transformers_checkpoint: Checkpoint instrumentation injected into Transformers pods
 - transformers_progression: Progression tracking injected into Transformers pods
+
+Wrapper assembly lives in kubeflow.trainer.rhai.transformers and
+kubeflow.trainer.rhai.traininghub.
 """
-
-from kubeflow.trainer.rhai.instrumentation.traininghub import (
-    get_training_hub_instrumentation_wrapper,
-)
-from kubeflow.trainer.rhai.instrumentation.transformers import (
-    get_jit_checkpoint_injection_code,
-    get_transformers_instrumentation_wrapper,
-)
-
-__all__ = (
-    "get_jit_checkpoint_injection_code",
-    "get_training_hub_instrumentation_wrapper",
-    "get_transformers_instrumentation_wrapper",
-)

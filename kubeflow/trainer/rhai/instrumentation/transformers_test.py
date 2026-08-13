@@ -16,7 +16,7 @@
 
 import pytest
 
-from kubeflow.trainer.rhai.instrumentation.transformers import (
+from kubeflow.trainer.rhai.transformers import (
     get_jit_checkpoint_injection_code,
     get_transformers_instrumentation_wrapper,
 )
