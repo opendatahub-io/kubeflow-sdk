@@ -889,8 +889,10 @@ def _speculator_data_only(
         if rank == 0:
             dataset_name = _regenerate_responses(dataset_name, save_path, endpoint, max_samples)
         if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+            import torch
             import torch.distributed as dist
 
+            torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
             if not dist.is_initialized():
                 dist.init_process_group(backend="nccl")
             dist.barrier()
@@ -1033,9 +1035,10 @@ def _speculator_train_only(
 
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
-    if is_distributed and not torch.distributed.is_initialized():
-        torch.distributed.init_process_group(backend="nccl")
+    if is_distributed:
         torch.cuda.set_device(local_rank)
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group(backend="nccl")
 
     model, verifier_config = _setup_eagle3_model(
         verifier_model=verifier_model,
@@ -1231,9 +1234,10 @@ def _speculator_online(
 
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
-    if is_distributed and not torch.distributed.is_initialized():
-        torch.distributed.init_process_group(backend="nccl")
+    if is_distributed:
         torch.cuda.set_device(local_rank)
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group(backend="nccl")
     model, verifier_config = _setup_eagle3_model(
         verifier_model=verifier_model,
         data_path=data_dir,
