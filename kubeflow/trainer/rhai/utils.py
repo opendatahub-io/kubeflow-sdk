@@ -10,6 +10,7 @@ from kubeflow.common.structured_logging import get_logger
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.rhai import (
     RHAITrainer,
+    speculator,
     traininghub,
     transformers,
 )
@@ -80,6 +81,13 @@ def get_trainer_cr_from_rhai_trainer(
 
     elif isinstance(trainer, transformers.TransformersTrainer):
         return transformers.get_trainer_cr_from_transformers_trainer(
+            runtime,
+            trainer,
+            initializer,
+        )
+
+    elif isinstance(trainer, speculator.SpeculativeDecodingTrainer):
+        return speculator.get_trainer_cr_from_speculator_trainer(
             runtime,
             trainer,
             initializer,
@@ -498,8 +506,44 @@ def setup_rhai_trainer_storage(
     """
     resolved_output_dir = None
 
-    # Apply output_dir URI parsing and volume mounting
-    if hasattr(trainer, "output_dir") and trainer.output_dir:
+    if isinstance(trainer, speculator.SpeculativeDecodingTrainer):
+        all_paths = [
+            trainer.output_dir,
+            trainer.hidden_states_path,
+            trainer.data_path,
+            trainer.dataset_name,
+            trainer.verifier_model,
+        ]
+        pvc_paths = [p for p in all_paths if p and p.startswith(PVC_URI_SCHEME)]
+        pvc_names = {p[len(PVC_URI_SCHEME) :].split("/", 1)[0] for p in pvc_paths}
+
+        if len(pvc_names) > 1:
+            raise NotImplementedError(
+                f"Multiple different PVCs are not yet supported. "
+                f"Found PVCs: {', '.join(sorted(pvc_names))}. "
+                f"Use the same PVC for all fields, or mount additional PVCs "
+                f"manually via runtime_patches."
+            )
+
+        if pvc_paths:
+            _, runtime_patches = apply_output_dir_uri_to_pod_overrides(
+                pvc_paths[0], runtime_patches
+            )
+        else:
+            runtime_patches = runtime_patches or []
+
+        _needs_sidecar = trainer.mode in (
+            speculator.SpeculatorMode.DATA_ONLY,
+            speculator.SpeculatorMode.ONLINE,
+        )
+        if trainer.mode == speculator.SpeculatorMode.DATA_ONLY and trainer.vllm_endpoint:
+            _needs_sidecar = False
+        if _needs_sidecar:
+            runtime_patches = speculator.apply_speculator_sidecar_overrides(
+                trainer, runtime_patches
+            )
+
+    elif hasattr(trainer, "output_dir") and trainer.output_dir:
         resolved_output_dir, runtime_patches = apply_output_dir_uri_to_pod_overrides(
             trainer.output_dir, runtime_patches
         )

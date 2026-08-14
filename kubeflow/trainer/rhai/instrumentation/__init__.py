@@ -15,11 +15,12 @@
 """Instrumentation code generation for RHAI trainers.
 
 Submodules:
+- speculator_progression: Progression tracking injected into speculator pods
 - traininghub_codegen: Code generation helpers for TrainingHub scripts
 - traininghub_progression: Progression tracking injected into TrainingHub pods
 - transformers_checkpoint: Checkpoint instrumentation injected into Transformers pods
 - transformers_progression: Progression tracking injected into Transformers pods
 
-Wrapper assembly lives in kubeflow.trainer.rhai.transformers and
-kubeflow.trainer.rhai.traininghub.
+Wrapper assembly lives in kubeflow.trainer.rhai.transformers,
+kubeflow.trainer.rhai.traininghub, and kubeflow.trainer.rhai.speculator.
 """

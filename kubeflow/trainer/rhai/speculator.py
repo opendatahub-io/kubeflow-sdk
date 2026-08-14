@@ -1,0 +1,1798 @@
+# Copyright 2025 The Kubeflow Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""SpeculativeDecodingTrainer for custom draft model training via the speculators library.
+
+This module provides the SpeculativeDecodingTrainer and SpeculatorConfig dataclasses
+for training speculative decoding draft models (e.g., Eagle3) using the speculators
+library. Supports TRAIN_ONLY and DATA_ONLY modes.
+"""
+
+from dataclasses import dataclass, field
+from enum import Enum
+import inspect
+import textwrap
+
+from kubeflow_trainer_api import models
+
+import kubeflow.trainer.backends.kubernetes.utils as k8s_utils
+from kubeflow.trainer.constants import constants
+from kubeflow.trainer.rhai.constants import PVC_URI_SCHEME
+from kubeflow.trainer.rhai.instrumentation.speculator_progression import (
+    _create_speculator_progression_instrumentation,
+)
+from kubeflow.trainer.types import types
+
+
+class SpeculatorMode(Enum):
+    """Training mode for speculator training.
+
+    Args:
+        TRAIN_ONLY: Train draft model from pre-extracted hidden states on PVC.
+        DATA_ONLY: Extract hidden states from verifier model via managed vLLM sidecar.
+        OFFLINE: Extract hidden states via self-managed vLLM endpoint, then train.
+        ONLINE: Online training with a custom runtime image that includes all dependencies.
+    """
+
+    TRAIN_ONLY = "train_only"
+    DATA_ONLY = "data_only"
+    OFFLINE = "offline"
+    ONLINE = "online"
+
+
+class SpeculatorType(Enum):
+    """Draft model architecture for speculative decoding.
+
+    Args:
+        EAGLE3: Eagle3 draft model architecture.
+        DFLASH: DFlash draft model architecture.
+        MTP: Multi-Token Prediction draft model architecture.
+        PEAGLE: PEAGLE draft model architecture.
+    """
+
+    EAGLE3 = "eagle3"
+    DFLASH = "dflash"
+    MTP = "mtp"
+    PEAGLE = "peagle"
+
+
+_SUPPORTED_DTYPES = {"bfloat16", "float16", "float32"}
+
+
+@dataclass
+class SpeculatorConfig:
+    """Advanced configuration for speculator training.
+
+    Args:
+        num_layers: Number of draft model layers (default: 1).
+        ttt_steps: Test-time training steps (default: 3).
+        norm_before_residual: Apply normalization before residual connection (default: True).
+        norm_before_fc: Apply normalization before fully-connected layer (default: False).
+        embed_requires_grad: Whether embedding layer requires gradients (default: False).
+        hidden_states_dtype: PyTorch dtype for hidden states tensors (default: "bfloat16").
+            Must match the verifier model's dtype. Supported: "bfloat16", "float16", "float32".
+        scheduler_type: Learning rate scheduler type (default: "linear").
+            Supported: "linear", "cosine", "none".
+        scheduler_warmup_steps: Number of warmup steps for the learning rate scheduler.
+            When ``None`` (default), computed as 1% of total training steps.
+        scheduler_total_steps: Total number of steps for the learning rate scheduler.
+            When ``None`` (default), computed as ``num_epochs * steps_per_epoch``.
+        scheduler_num_cosine_cycles: Number of cosine cycles for the cosine scheduler
+            (default: 0.5). Only used when ``scheduler_type="cosine"``.
+        checkpoint_freq: Checkpoint frequency in epochs (default: 1.0).
+        save_best: Save only the best model checkpoint by validation loss (default: False).
+        log_freq: Logging frequency in steps (default: 1).
+        resume_from_checkpoint: Resume training from an existing checkpoint (default: False).
+        datagen_concurrency: Number of concurrent requests to vLLM for hidden state
+            extraction (default: 4).
+        target_layer_ids: Specific layer IDs for hidden state extraction. When ``None``,
+            auto-selected from the verifier model architecture.
+        from_pretrained: Path to a pretrained draft model to resume training from.
+    """
+
+    num_layers: int = 1
+    ttt_steps: int = 3
+    norm_before_residual: bool = True
+    norm_before_fc: bool = False
+    embed_requires_grad: bool = False
+    hidden_states_dtype: str = "bfloat16"
+    scheduler_type: str = "linear"
+    scheduler_warmup_steps: int | None = None
+    scheduler_total_steps: int | None = None
+    scheduler_num_cosine_cycles: float = 0.5
+    checkpoint_freq: float = 1.0
+    save_best: bool = False
+    log_freq: int = 1
+    resume_from_checkpoint: bool = False
+    datagen_concurrency: int = 4
+    target_layer_ids: list[int] | None = None
+    from_pretrained: str | None = None
+
+
+@dataclass
+class SpeculativeDecodingTrainer:
+    """RHAI trainer for custom draft model training via the speculators library.
+
+    Args:
+        verifier_model: HuggingFace model ID (e.g. ``"meta-llama/Llama-3.1-8B-Instruct"``)
+            or PVC URI (``pvc://<name>/<path>``) pointing to a pre-downloaded model.
+        mode: Training mode (TRAIN_ONLY or DATA_ONLY).
+        speculator_type: Draft model architecture (default: EAGLE3).
+        hidden_states_path: PVC URI (``pvc://<name>/<path>``) to pre-extracted hidden states
+            (required for TRAIN_ONLY).
+        data_path: PVC URI (``pvc://<name>/<path>``) to preprocessed Arrow dataset
+            (required for TRAIN_ONLY).
+        dataset_name: Dataset for hidden state extraction (required for DATA_ONLY).
+            Built-in names (``"magpie"``, ``"ultrachat"``, ``"gsm8k"``) or a PVC URI
+            pointing to a ``.json``/``.jsonl`` file (e.g. ``"pvc://shared/data/custom.jsonl"``).
+            HuggingFace dataset IDs and direct filesystem paths are not supported.
+        max_samples: Maximum number of dataset samples to use for data generation.
+            Useful for quick testing. When ``None`` (default), all samples are used.
+        epochs: Training epochs (default: 3).
+        lr: Learning rate (default: 1e-4).
+        total_seq_len: Maximum sequence length for dataset preprocessing,
+            vLLM context window, and training (default: 8192).
+        draft_vocab_size: Vocabulary size for the draft model. When ``None`` (default),
+            auto-computed as ``min(8192, verifier_vocab_size)``.
+        training_resources: Resources for the training container. Maps to
+            ``resources_per_node`` in the CRD. Example:
+            ``{"nvidia.com/gpu": 2, "memory": "64Gi", "cpu": "4"}``.
+        vllm_resources: Resources for the vLLM sidecar container. When ``None``,
+            defaults to 1 GPU. Example:
+            ``{"nvidia.com/gpu": 2, "memory": "96Gi", "cpu": "4"}``.
+        vllm_gpu_memory_utilization: Fraction of GPU memory for vLLM (default: 0.9).
+        config: Advanced training configuration. See ``SpeculatorConfig``.
+        packages_to_install: Python packages to install before training.
+        pip_index_urls: PyPI index URLs for package installation.
+        env: Environment variables to set in training pods.
+        output_dir: Directory for saving outputs. Supports PVC URIs
+            (pvc://<name>/<path>). The SDK auto-mounts the volume and resolves the path.
+        regenerate_responses: When True, send dataset prompts to the verifier model
+            and use its responses instead of the original dataset responses before
+            preprocessing. Only supported in DATA_ONLY and OFFLINE modes (default: False).
+        vllm_endpoint: URL of self-managed vLLM endpoint for hidden state extraction.
+            Required for OFFLINE mode. Optional for DATA_ONLY mode (skips sidecar).
+            Example: ``"http://vllm-verifier-svc:8000/v1"``.
+        vllm_readiness_timeout_minutes: Maximum time in minutes to wait for the vLLM
+            server to become ready. The server may take longer for large models that
+            require downloading or loading into GPU memory. Increase this value if your
+            model is large. Must be at least 1 (default: 60).
+        enable_progression_tracking: Enable progression tracking (default: True).
+        metrics_port: HTTP server port for metrics endpoint (default: 28080).
+        metrics_poll_interval_seconds: How often controller polls metrics (default: 30).
+    """
+
+    verifier_model: str
+    mode: SpeculatorMode
+    training_resources: dict | None = None
+    speculator_type: SpeculatorType = SpeculatorType.EAGLE3
+    hidden_states_path: str | None = None
+    data_path: str | None = None
+    dataset_name: str | None = None
+    max_samples: int | None = None
+    epochs: int = 3
+    lr: float = 1e-4
+    total_seq_len: int = 2048
+    draft_vocab_size: int | None = None
+    vllm_resources: dict | None = None
+    vllm_gpu_memory_utilization: float = 0.9
+    config: SpeculatorConfig | None = None
+    packages_to_install: list[str] | None = None
+    pip_index_urls: list[str] = field(
+        default_factory=lambda: list(constants.DEFAULT_PIP_INDEX_URLS)
+    )
+    env: dict[str, str] | None = None
+    output_dir: str | None = None
+    regenerate_responses: bool = False
+    vllm_endpoint: str | None = None
+    vllm_readiness_timeout_minutes: int = 60
+
+    enable_progression_tracking: bool = True
+    metrics_port: int = 28080
+    metrics_poll_interval_seconds: int = 30
+
+    def __post_init__(self) -> None:
+        """Validate configuration after initialization."""
+        supported_modes = {
+            SpeculatorMode.TRAIN_ONLY,
+            SpeculatorMode.DATA_ONLY,
+            SpeculatorMode.OFFLINE,
+            SpeculatorMode.ONLINE,
+        }
+        if self.mode not in supported_modes:
+            raise NotImplementedError(
+                f"Mode '{self.mode.value}' is not yet supported. "
+                f"Currently supported modes: {', '.join(m.value for m in supported_modes)}."
+            )
+
+        if self.speculator_type != SpeculatorType.EAGLE3:
+            raise NotImplementedError(
+                f"Speculator type '{self.speculator_type.value}' is not yet supported. "
+                f"Currently only '{SpeculatorType.EAGLE3.value}' is supported."
+            )
+
+        _uses_external_vllm = self.vllm_endpoint is not None
+
+        if (
+            self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
+            or (self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm)
+        ) and not self.hidden_states_path:
+            raise ValueError(
+                f"hidden_states_path is required for {self.mode.name} mode. "
+                "Provide a PVC URI (pvc://<name>/<path>)."
+            )
+
+        if (
+            self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
+            and self.hidden_states_path
+            and not self.hidden_states_path.startswith(PVC_URI_SCHEME)
+        ):
+            raise ValueError(
+                f"hidden_states_path must use a PVC URI (pvc://<name>/<path>), "
+                f"got {self.hidden_states_path!r}."
+            )
+
+        if self.mode == SpeculatorMode.TRAIN_ONLY and not self.data_path:
+            raise ValueError(
+                "data_path is required for TRAIN_ONLY mode. "
+                "Provide a PVC URI (pvc://<name>/<path>) to the preprocessed Arrow dataset."
+            )
+
+        if self.data_path and not self.data_path.startswith(PVC_URI_SCHEME):
+            raise ValueError(
+                f"data_path must use a PVC URI (pvc://<name>/<path>), got {self.data_path!r}."
+            )
+
+        if not self.output_dir:
+            raise ValueError(
+                f"output_dir is required for {self.mode.name} mode. "
+                "Provide a PVC URI (pvc://<name>/<path>)."
+            )
+
+        if not self.output_dir.startswith(PVC_URI_SCHEME):
+            raise ValueError(
+                f"output_dir must use a PVC URI (pvc://<name>/<path>), got {self.output_dir!r}. "
+                "Shared PVC storage is required for the vLLM sidecar and main container "
+                "to exchange hidden states."
+            )
+
+        if (
+            self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.OFFLINE, SpeculatorMode.ONLINE)
+            and not self.dataset_name
+        ):
+            raise ValueError(
+                f"dataset_name is required for {self.mode.name} mode. "
+                "Provide a built-in name ('magpie', 'ultrachat', 'gsm8k') or "
+                "a PVC URI to a .json/.jsonl file (e.g. 'pvc://shared/data/custom.jsonl')."
+            )
+
+        _builtin_datasets = ("magpie", "ultrachat", "gsm8k")
+        if (
+            self.dataset_name
+            and not self.dataset_name.startswith(PVC_URI_SCHEME)
+            and self.dataset_name not in _builtin_datasets
+        ):
+            raise ValueError(
+                f"dataset_name must be a built-in name {_builtin_datasets} or a PVC URI "
+                f"to a .json/.jsonl file (e.g. 'pvc://shared/data/custom.jsonl'), "
+                f"got {self.dataset_name!r}."
+            )
+        if (
+            self.dataset_name
+            and self.dataset_name.startswith(PVC_URI_SCHEME)
+            and not (self.dataset_name.endswith(".json") or self.dataset_name.endswith(".jsonl"))
+        ):
+            raise ValueError(
+                f"dataset_name PVC URI must point to a .json or .jsonl file, "
+                f"got {self.dataset_name!r}."
+            )
+
+        if (
+            self.mode == SpeculatorMode.OFFLINE
+            or (self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm)
+        ) and not self.verifier_model.startswith(PVC_URI_SCHEME):
+            raise ValueError(
+                f"verifier_model must be a PVC URI (pvc://<name>/<path>) for "
+                f"{self.mode.name} mode with a self-managed vLLM endpoint. "
+                "The self-managed vLLM instance already has the model on shared storage, "
+                "so the training pod reads it from the same PVC."
+            )
+
+        if self.mode == SpeculatorMode.OFFLINE or (
+            self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm
+        ):
+            cfg = self.config or SpeculatorConfig()
+            if cfg.target_layer_ids is None:
+                raise ValueError(
+                    f"config.target_layer_ids is required for {self.mode.name} mode "
+                    f"with a self-managed vLLM endpoint. "
+                    "Provide the layer IDs matching your vLLM configuration via "
+                    "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n]). "
+                    "See https://docs.vllm.ai/projects/speculators/en/latest/cli/launch_vllm/#basic-usage"
+                )
+
+        if self.mode == SpeculatorMode.OFFLINE and not self.vllm_endpoint:
+            raise ValueError(
+                "vllm_endpoint is required for OFFLINE mode. "
+                "Provide the URL of your self-managed vLLM endpoint "
+                "(e.g. 'http://vllm-svc:8000/v1')."
+            )
+
+        if self.vllm_endpoint is not None and self.mode not in (
+            SpeculatorMode.OFFLINE,
+            SpeculatorMode.DATA_ONLY,
+        ):
+            raise ValueError(
+                "vllm_endpoint (self-managed vLLM server) is only supported in "
+                "OFFLINE and DATA_ONLY modes."
+            )
+
+        if (
+            self.mode == SpeculatorMode.DATA_ONLY
+            and _uses_external_vllm
+            and self.vllm_resources is not None
+        ):
+            raise ValueError(
+                "vllm_resources cannot be used with vllm_endpoint in DATA_ONLY mode. "
+                "The self-managed vLLM server's resources are configured externally."
+            )
+
+        if self.max_samples is not None:
+            if self.mode not in (
+                SpeculatorMode.DATA_ONLY,
+                SpeculatorMode.OFFLINE,
+                SpeculatorMode.ONLINE,
+            ):
+                raise ValueError(
+                    "max_samples is only supported in DATA_ONLY, OFFLINE, and ONLINE modes."
+                )
+            if not isinstance(self.max_samples, int) or self.max_samples < 1:
+                raise ValueError(
+                    f"max_samples must be a positive integer, got {self.max_samples!r}."
+                )
+
+        if self.regenerate_responses and self.mode not in (
+            SpeculatorMode.DATA_ONLY,
+            SpeculatorMode.OFFLINE,
+            SpeculatorMode.ONLINE,
+        ):
+            raise ValueError(
+                "regenerate_responses is only supported in DATA_ONLY, OFFLINE, and ONLINE modes."
+            )
+
+        _regen_supported_datasets = ("magpie", "ultrachat", "gsm8k")
+        if self.regenerate_responses and self.dataset_name not in _regen_supported_datasets:
+            raise ValueError(
+                f"regenerate_responses requires dataset_name to be one of "
+                f"{_regen_supported_datasets}, got {self.dataset_name!r}. "
+                f"These are the only supported datasets for response regeneration: "
+                f"magpie (Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered), "
+                f"ultrachat (HuggingFaceH4/ultrachat_200k), "
+                f"gsm8k (openai/gsm8k). "
+                f"PVC paths and other dataset names are not supported."
+            )
+
+        if not isinstance(self.epochs, int) or self.epochs < 1:
+            raise ValueError(f"epochs must be a positive integer, got {self.epochs!r}.")
+
+        if not isinstance(self.lr, (int, float)) or self.lr <= 0:
+            raise ValueError(f"lr must be a positive number, got {self.lr!r}.")
+
+        if not isinstance(self.total_seq_len, int) or self.total_seq_len < 1:
+            raise ValueError(
+                f"total_seq_len must be a positive integer, got {self.total_seq_len!r}."
+            )
+
+        if self.mode != SpeculatorMode.DATA_ONLY and (
+            not isinstance(self.training_resources, dict) or not self.training_resources
+        ):
+            raise ValueError(
+                f"training_resources is required for {self.mode.value} mode. "
+                "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
+            )
+
+        _needs_sidecar = self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE)
+        if self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm:
+            _needs_sidecar = False
+        if _needs_sidecar and (
+            not isinstance(self.vllm_resources, dict) or not self.vllm_resources
+        ):
+            raise ValueError(
+                f"vllm_resources is required for {self.mode.value} mode. "
+                "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
+            )
+
+        if self.training_resources is not None and (
+            not isinstance(self.training_resources, dict) or not self.training_resources
+        ):
+            raise ValueError(
+                "training_resources must be a non-empty dict when provided. "
+                "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
+            )
+
+        if self.vllm_resources is not None and (
+            not isinstance(self.vllm_resources, dict) or not self.vllm_resources
+        ):
+            raise ValueError(
+                "vllm_resources must be a non-empty dict when provided. "
+                "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
+            )
+
+        if self.vllm_resources is not None:
+            vllm_gpus = int(self.vllm_resources.get("nvidia.com/gpu", 1))
+            if vllm_gpus != 1:
+                raise ValueError(
+                    f"vLLM sidecar currently supports only 1 GPU, got {vllm_gpus}. "
+                    "Multi-GPU vLLM sidecar is not yet supported."
+                )
+
+        if (
+            not isinstance(self.vllm_gpu_memory_utilization, (int, float))
+            or self.vllm_gpu_memory_utilization <= 0
+            or self.vllm_gpu_memory_utilization > 1.0
+        ):
+            raise ValueError(
+                f"vllm_gpu_memory_utilization must be in range (0, 1.0], "
+                f"got {self.vllm_gpu_memory_utilization!r}."
+            )
+
+        _valid_schedulers = ("linear", "cosine", "none")
+        if self.config is not None and self.config.scheduler_type not in _valid_schedulers:
+            raise ValueError(
+                f"config.scheduler_type must be one of {_valid_schedulers}, "
+                f"got '{self.config.scheduler_type}'."
+            )
+
+        if self.config is not None and self.config.hidden_states_dtype not in _SUPPORTED_DTYPES:
+            raise ValueError(
+                f"config.hidden_states_dtype must be one of {_SUPPORTED_DTYPES}, "
+                f"got '{self.config.hidden_states_dtype}'."
+            )
+
+        if self.config is not None and self.config.from_pretrained is not None:
+            raise NotImplementedError(
+                "config.from_pretrained is not yet supported. "
+                "Eagle3DraftModel.from_training_args() does not implement checkpoint "
+                "resumption from a pretrained draft model."
+            )
+
+        if not isinstance(self.vllm_readiness_timeout_minutes, int):
+            raise ValueError(
+                f"vllm_readiness_timeout_minutes must be an integer, "
+                f"got {type(self.vllm_readiness_timeout_minutes).__name__}"
+            )
+        if self.vllm_readiness_timeout_minutes < 1:
+            raise ValueError(
+                f"vllm_readiness_timeout_minutes must be at least 1, "
+                f"got {self.vllm_readiness_timeout_minutes}"
+            )
+
+        if not isinstance(self.metrics_port, int):
+            raise ValueError(
+                f"metrics_port must be an integer, got {type(self.metrics_port).__name__}"
+            )
+        if self.metrics_port < 1024 or self.metrics_port > 65535:
+            raise ValueError(f"metrics_port must be in range 1024-65535, got {self.metrics_port}")
+
+        if not isinstance(self.metrics_poll_interval_seconds, int):
+            raise ValueError(
+                f"metrics_poll_interval_seconds must be an integer, "
+                f"got {type(self.metrics_poll_interval_seconds).__name__}"
+            )
+        if self.metrics_poll_interval_seconds < 5 or self.metrics_poll_interval_seconds > 300:
+            raise ValueError(
+                f"metrics_poll_interval_seconds must be in range 5-300 seconds, "
+                f"got {self.metrics_poll_interval_seconds}"
+            )
+
+        if self.output_dir:
+            from kubeflow.trainer.rhai.utils import normalize_and_validate_output_dir
+
+            self.output_dir = normalize_and_validate_output_dir(self.output_dir)
+
+        if (
+            self.output_dir
+            and "://" in self.output_dir
+            and not self.output_dir.startswith(PVC_URI_SCHEME)
+        ):
+            raise NotImplementedError(
+                f"output_dir scheme '{self.output_dir.split('://')[0]}://' is not yet supported "
+                f"for SpeculativeDecodingTrainer. Currently only PVC URIs (pvc://<name>/<path>) "
+                f"or direct paths are supported."
+            )
+
+        if self.hidden_states_path:
+            from kubeflow.trainer.rhai.utils import normalize_and_validate_output_dir
+
+            self.hidden_states_path = normalize_and_validate_output_dir(self.hidden_states_path)
+
+        if (
+            self.hidden_states_path
+            and "://" in self.hidden_states_path
+            and not self.hidden_states_path.startswith(PVC_URI_SCHEME)
+        ):
+            raise NotImplementedError(
+                f"hidden_states_path scheme "
+                f"'{self.hidden_states_path.split('://')[0]}://' is not yet supported "
+                f"for SpeculativeDecodingTrainer. Currently only PVC URIs (pvc://<name>/<path>) "
+                f"or direct paths are supported."
+            )
+
+        if self.dataset_name and self.dataset_name.startswith(PVC_URI_SCHEME):
+            from kubeflow.trainer.rhai.utils import normalize_and_validate_output_dir
+
+            self.dataset_name = normalize_and_validate_output_dir(self.dataset_name)
+
+        if (
+            self.dataset_name
+            and "://" in self.dataset_name
+            and not self.dataset_name.startswith(PVC_URI_SCHEME)
+        ):
+            raise NotImplementedError(
+                f"dataset_name scheme "
+                f"'{self.dataset_name.split('://')[0]}://' is not yet supported "
+                f"for SpeculativeDecodingTrainer. Currently only PVC URIs "
+                f"(pvc://<name>/<path>.json or .jsonl) or built-in dataset names "
+                f"('magpie', 'ultrachat', 'gsm8k') are supported."
+            )
+
+        if self.mode in (
+            SpeculatorMode.DATA_ONLY,
+            SpeculatorMode.TRAIN_ONLY,
+            SpeculatorMode.ONLINE,
+        ):
+            cfg = self.config or SpeculatorConfig()
+            if self.verifier_model.startswith(PVC_URI_SCHEME):
+                if cfg.target_layer_ids is None:
+                    raise ValueError(
+                        "config.target_layer_ids is required when verifier_model is a "
+                        "PVC URI. The SDK cannot read the model config from the PVC to "
+                        "auto-detect layers. Provide target_layer_ids explicitly via "
+                        "SpeculatorConfig(target_layer_ids=[2, n//2, n-3, n]). "
+                        "See https://docs.vllm.ai/projects/speculators/en/latest/cli/launch_vllm/#basic-usage"
+                    )
+            else:
+                if cfg.target_layer_ids is None:
+                    try:
+                        import os
+
+                        from transformers import AutoConfig
+
+                        token = (self.env or {}).get("HF_TOKEN") or os.environ.get("HF_TOKEN")
+                        model_config = AutoConfig.from_pretrained(
+                            self.verifier_model,
+                            trust_remote_code=False,
+                            token=token,
+                        )
+                    except Exception as e:
+                        if "gated repo" in str(e).lower():
+                            raise ValueError(
+                                f"verifier_model {self.verifier_model!r} is a gated "
+                                f"HuggingFace model. Set HF_TOKEN in your environment "
+                                f"or pass env={{'HF_TOKEN': '<your-token>'}} to "
+                                f"authenticate."
+                            ) from e
+                        raise ValueError(
+                            f"verifier_model {self.verifier_model!r} is not a valid "
+                            f"HuggingFace model ID. verifier_model "
+                            f"must be either a HuggingFace model ID "
+                            f"(e.g. 'meta-llama/Llama-3.1-8B-Instruct') or a PVC URI "
+                            f"(pvc://<name>/<path>)."
+                        ) from e
+                    if hasattr(model_config, "text_config"):
+                        model_config = model_config.text_config
+                    n = model_config.num_hidden_layers
+                    cfg.target_layer_ids = [2, n // 2, n - 3, n]
+                    self.config = cfg
+
+        cfg = self.config or SpeculatorConfig()
+        if cfg.target_layer_ids is not None and len(cfg.target_layer_ids) != 4:
+            raise ValueError(
+                f"config.target_layer_ids must have exactly 4 layers, "
+                f"got {len(cfg.target_layer_ids)}: {cfg.target_layer_ids}. "
+                f"Eagle3 training requires 4 layers (3 as input + 1 for target distribution)."
+            )
+
+
+def _wait_for_vllm(health_url: str, timeout_minutes: int = 60) -> None:
+    """Wait for vLLM endpoint to become ready. Shared helper injected via inspect.getsource().
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the script that runs inside the container.
+    """
+    import time
+    import urllib.error
+    import urllib.request
+
+    timeout_secs = timeout_minutes * 60
+    start = time.time()
+    print(
+        f"[Kubeflow] Waiting for vLLM server at {health_url} (timeout={timeout_minutes}m)",
+        flush=True,
+    )
+    while time.time() - start < timeout_secs:
+        try:
+            urllib.request.urlopen(health_url, timeout=5)
+            print("[Kubeflow] vLLM server is ready", flush=True)
+            break
+        except (urllib.error.URLError, OSError):
+            time.sleep(30)
+    else:
+        raise RuntimeError(
+            f"[Kubeflow] vLLM server at {health_url} did not become ready within "
+            f"{timeout_minutes} minutes. Common causes: the model is large and takes "
+            f"longer to download or load into GPU memory, the vLLM server failed to "
+            f"start, or there is a configuration error. Check the vLLM container logs "
+            f"for details. To increase the timeout, set vllm_readiness_timeout_minutes "
+            f"in SpeculativeDecodingTrainer (current: {timeout_minutes}m)."
+        )
+
+
+def _preprocess_dataset(
+    verifier_model: str,
+    dataset_name: str,
+    data_dir: str,
+    total_seq_len: int,
+    max_samples: int | None = None,
+) -> int:
+    """Preprocess dataset and save to disk. Shared helper injected via inspect.getsource().
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the script that runs inside the container.
+
+    Returns:
+        Number of samples in the preprocessed dataset.
+    """
+    import os
+
+    from speculators.data_generation.preprocessing import load_and_preprocess_dataset
+
+    os.makedirs(data_dir, exist_ok=True)
+
+    print(
+        f"[Kubeflow] Preprocessing dataset '{dataset_name}' (seq_len={total_seq_len})", flush=True
+    )
+
+    token_freq_path = os.path.join(data_dir, "token_freq.pt")
+    preprocess_kwargs = {
+        "target_model_path": verifier_model,
+        "train_data_paths": [dataset_name],
+        "seq_length": total_seq_len,
+        "token_freq_path": token_freq_path,
+    }
+    if max_samples is not None:
+        preprocess_kwargs["max_samples"] = max_samples
+    dataset, processor = load_and_preprocess_dataset(**preprocess_kwargs)
+    dataset.save_to_disk(data_dir)
+    print(
+        f"[Kubeflow] Saved preprocessed dataset to {data_dir} ({len(dataset)} samples)", flush=True
+    )
+    return len(dataset)
+
+
+def _setup_eagle3_model(
+    verifier_model: str,
+    data_path: str,
+    draft_vocab_size: int | None = None,
+    num_layers: int = 1,
+    ttt_steps: int = 3,
+    norm_before_residual: bool = True,
+    norm_before_fc: bool = False,
+    embed_requires_grad: bool = False,
+    target_layer_ids: list[int] | None = None,
+    is_distributed: bool = False,
+    rank: int = 0,
+):
+    """Build Eagle3 draft model with vocab mappings. Shared helper injected via inspect.getsource().
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the script that runs inside the container.
+
+    Returns:
+        Tuple of (model, verifier_config).
+    """
+    import os
+    from pathlib import Path
+
+    import numpy as np
+    from speculators.models.eagle3.core import Eagle3DraftModel
+    from speculators.train.vocab_mapping import build_vocab_mappings_from_distribution
+    import torch
+    from transformers import AutoConfig
+
+    verifier_config = AutoConfig.from_pretrained(verifier_model, token=os.environ.get("HF_TOKEN"))
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+    target_vocab_size = verifier_config.vocab_size
+
+    d2t_path = Path(data_path) / "d2t.npy"
+    t2d_path = Path(data_path) / "t2d.npy"
+
+    if not (d2t_path.exists() and t2d_path.exists()) and rank == 0:
+        resolved_draft_vocab = draft_vocab_size or min(8192, target_vocab_size)
+        token_freq_path = Path(data_path) / "token_freq.pt"
+        token_freq_dict = torch.load(str(token_freq_path), weights_only=True)
+        d2t, t2d = build_vocab_mappings_from_distribution(
+            token_freq_dict=token_freq_dict,
+            draft_vocab_size=resolved_draft_vocab,
+            target_vocab_size=target_vocab_size,
+        )
+        np.save(str(d2t_path), d2t.cpu().numpy())
+        np.save(str(t2d_path), t2d.cpu().numpy())
+    if is_distributed:
+        torch.distributed.barrier()
+
+    d2t = torch.from_numpy(np.load(str(d2t_path)))
+    t2d = torch.from_numpy(np.load(str(t2d_path)))
+    resolved_draft_vocab = len(d2t)
+
+    from_training_kwargs = {
+        "draft_vocab_size": resolved_draft_vocab,
+        "num_layers": num_layers,
+        "norm_before_residual": norm_before_residual,
+        "norm_before_fc": norm_before_fc,
+        "embed_requires_grad": embed_requires_grad,
+        "ttt_steps": ttt_steps,
+        "verifier_name_or_path": verifier_model,
+        "d2t": d2t,
+        "t2d": t2d,
+    }
+    if target_layer_ids is not None:
+        from_training_kwargs["target_layer_ids"] = target_layer_ids
+    model = Eagle3DraftModel.from_training_args(verifier_config, **from_training_kwargs)
+
+    return model, verifier_config
+
+
+def _regenerate_responses(
+    dataset_name: str,
+    save_path: str,
+    vllm_endpoint: str,
+    max_samples: int | None = None,
+) -> str:
+    """Regenerate dataset responses using the verifier model via vLLM.
+
+    Sends prompts to the vLLM chat completions endpoint to produce on-policy
+    responses, improving draft model alignment with the target model.
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the training script that runs inside the container.
+
+    Args:
+        dataset_name: Original dataset name (maps to regeneration dataset).
+        save_path: Directory to write regenerated JSONL output.
+        vllm_endpoint: vLLM endpoint URL (e.g. ``http://localhost:8234/v1``).
+        max_samples: Maximum number of samples to regenerate.
+
+    Returns:
+        Path to the regenerated JSONL file.
+    """
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    if "_set_phase" in globals():
+        _set_phase("regenerating_responses", 5)  # noqa: F821
+
+    print(f"[Kubeflow] Regenerating responses via vLLM endpoint '{vllm_endpoint}'", flush=True)
+
+    os.makedirs(save_path, exist_ok=True)
+    regen_output = str(Path(save_path) / "regenerated_responses.jsonl")
+    chat_endpoint = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/v1/chat/completions"
+
+    regen_script_path = "/tmp/response_regeneration.py"
+    if not os.path.exists(regen_script_path):
+        import base64
+
+        regen_content = base64.b64decode(_REGEN_SCRIPT_B64).decode("utf-8")  # noqa: F821
+        with open(regen_script_path, "w") as f:
+            f.write(regen_content)
+
+    regen_cmd = [
+        sys.executable,
+        regen_script_path,
+        "--endpoint",
+        chat_endpoint,
+        "--dataset",
+        dataset_name,
+        "--outfile",
+        regen_output,
+    ]
+    if max_samples is not None:
+        regen_cmd.extend(["--limit", str(max_samples)])
+    print(f"[Kubeflow] Regenerating responses using dataset '{dataset_name}'", flush=True)
+    regen_result = subprocess.run(regen_cmd, capture_output=False)
+    if regen_result.returncode != 0:
+        raise RuntimeError(f"response_regeneration.py exited with code {regen_result.returncode}")
+    print(f"[Kubeflow] Responses saved to {regen_output}", flush=True)
+    return regen_output
+
+
+def _speculator_data_only(
+    verifier_model: str,
+    dataset_name: str,
+    save_path: str,
+    total_seq_len: int,
+    max_samples: int | None = None,
+    vllm_endpoint: str = "http://localhost:8234/v1",
+    concurrency: int = 4,
+    regenerate_responses: bool = False,
+    hidden_states_path: str | None = None,
+    vllm_readiness_timeout_minutes: int = 60,
+) -> None:
+    """Data extraction function injected into pods via inspect.getsource().
+
+    Extracts hidden states from the verifier model via a vLLM endpoint.
+    The vLLM server is provided either by the Kubernetes sidecar container
+    (DATA_ONLY mode).
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the script that runs inside the container.
+    """
+    import os
+    import subprocess
+    import sys
+
+    hidden_states_dir = os.path.join(save_path, "hidden_states")
+    os.makedirs(save_path, exist_ok=True)
+    os.makedirs(hidden_states_dir, exist_ok=True)
+
+    rank = int(os.environ.get("RANK", "0"))
+    marker_name = f"{EXTRACTION_INCOMPLETE_MARKER}.rank-{rank}"  # noqa: F821
+    incomplete_marker = os.path.join(hidden_states_dir, marker_name)
+
+    if os.path.exists(incomplete_marker):
+        print(
+            f"[Kubeflow] Warning: Previous data extraction for rank {rank} did not complete. "
+            "Restarting extraction from the beginning.",
+            flush=True,
+        )
+    elif any(f.endswith(".safetensors") for f in os.listdir(hidden_states_dir)):
+        print("[Kubeflow] Data extraction already completed. Skipping.", flush=True)
+        if "_mark_data_complete" in globals():
+            _mark_data_complete()  # noqa: F821
+        if "_set_phase" in globals():
+            _set_phase("complete", 100)  # noqa: F821
+        return
+
+    try:
+        with open(incomplete_marker, "w") as f:
+            f.write(f"Data extraction in progress (rank {rank})")
+    except Exception as e:
+        print(
+            f"[Kubeflow] Warning: Failed to write sentinel file: {e}. "
+            "Check local disk space and write permissions in output_dir.",
+            flush=True,
+        )
+
+    if "_set_phase" in globals():
+        _set_phase("checking_vllm", 5)  # noqa: F821
+
+    endpoint = vllm_endpoint.rstrip("/")
+    if not endpoint.endswith("/v1"):
+        endpoint += "/v1"
+    print(f"[Kubeflow] Using vLLM endpoint: {endpoint}", flush=True)
+    health = endpoint.rsplit("/v1", 1)[0] + "/health"
+    _wait_for_vllm(health, timeout_minutes=vllm_readiness_timeout_minutes)
+
+    if regenerate_responses:
+        if rank == 0:
+            dataset_name = _regenerate_responses(dataset_name, save_path, endpoint, max_samples)
+        if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+            import torch
+            import torch.distributed as dist
+
+            torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
+            if not dist.is_initialized():
+                dist.init_process_group(backend="nccl")
+            dist.barrier()
+        if rank != 0:
+            regen_output = os.path.join(save_path, "regenerated_responses.jsonl")
+            if os.path.exists(regen_output):
+                dataset_name = regen_output
+
+    if "_set_phase" in globals():
+        _set_phase("preprocessing", 10)  # noqa: F821
+
+    num_samples = _preprocess_dataset(
+        verifier_model, dataset_name, save_path, total_seq_len, max_samples
+    )
+
+    if "_start_data_progress_server" in globals():
+        _start_data_progress_server(hidden_states_dir, num_samples)  # noqa: F821
+
+    if "_set_phase" in globals():
+        _set_phase("extracting", 15)  # noqa: F821
+
+    print(
+        f"[Kubeflow] Extracting hidden states from '{verifier_model}' to '{hidden_states_dir}'",
+        flush=True,
+    )
+
+    script_path = "/tmp/data_generation_offline.py"
+    if not os.path.exists(script_path):
+        import base64
+
+        script_content = base64.b64decode(_DATAGEN_SCRIPT_B64).decode("utf-8")  # noqa: F821
+        with open(script_path, "w") as f:
+            f.write(script_content)
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    datagen_cmd = [
+        sys.executable,
+        script_path,
+        "--preprocessed-data",
+        save_path,
+        "--endpoint",
+        endpoint,
+        "--output",
+        hidden_states_dir,
+        "--concurrency",
+        str(concurrency),
+        "--world-size",
+        str(world_size),
+        "--rank",
+        str(rank),
+    ]
+    if not hidden_states_path:
+        datagen_cmd.extend(["--model", verifier_model])
+    if hidden_states_path:
+        datagen_cmd.extend(["--hidden-states-dir", hidden_states_path])
+    if max_samples is not None:
+        datagen_cmd.extend(["--max-samples", str(max_samples)])
+    print(
+        f"[Kubeflow] Running hidden state extraction (concurrency={concurrency}, rank={rank}/{world_size})",
+        flush=True,
+    )
+    result = subprocess.run(datagen_cmd, capture_output=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"data_generation_offline.py exited with code {result.returncode}")
+
+    if os.path.exists(incomplete_marker):
+        try:
+            os.remove(incomplete_marker)
+        except Exception as e:
+            print(
+                f"[Kubeflow] Warning: Failed to remove sentinel file: {e}. "
+                f"A stale marker may cause re-extraction on next run. "
+                f"Remove it manually from: {incomplete_marker}",
+                flush=True,
+            )
+    if "_set_phase" in globals():
+        _set_phase("complete", 100)  # noqa: F821
+
+    print(
+        f"[Kubeflow] Data extraction complete. Hidden states saved to '{hidden_states_dir}'",
+        flush=True,
+    )
+
+
+def _speculator_train_only(
+    verifier_model: str,
+    data_path: str,
+    hidden_states_path: str,
+    save_path: str,
+    epochs: int,
+    lr: float,
+    total_seq_len: int,
+    draft_vocab_size: int | None = None,
+    hidden_states_dtype: str = "bfloat16",
+    num_layers: int = 1,
+    ttt_steps: int = 3,
+    norm_before_residual: bool = True,
+    norm_before_fc: bool = False,
+    embed_requires_grad: bool = False,
+    scheduler_type: str = "linear",
+    scheduler_warmup_steps: int | None = None,
+    scheduler_total_steps: int | None = None,
+    scheduler_num_cosine_cycles: float = 0.5,
+    checkpoint_freq: float = 1.0,
+    save_best: bool = False,
+    log_freq: int = 1,
+    resume_from_checkpoint: bool = False,
+    from_pretrained: str | None = None,
+    target_layer_ids: list[int] | None = None,
+) -> None:
+    """Training function injected into pods via inspect.getsource().
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the training script that runs inside the container.
+    """
+    import contextlib
+    import os
+
+    if "_set_phase" in globals():
+        _set_phase("initializing", 0)  # noqa: F821
+    from speculators.models.eagle3.data import shift_batch
+    from speculators.train.data import ArrowDataset, create_collate_fn
+    from speculators.train.distributed_batch_sampler import (
+        MultipackDistributedBatchSamplerV2,
+    )
+    from speculators.train.noise_transforms import AddUniformNoise
+    from speculators.train.trainer import Trainer, TrainerConfig
+    import torch
+    from torch.utils.data import DataLoader
+
+    rank = int(os.environ.get("RANK", "0"))
+    marker_name = f"{EXTRACTION_INCOMPLETE_MARKER}.rank-{rank}"  # noqa: F821
+    own_marker = os.path.join(hidden_states_path, marker_name)
+    if os.path.exists(own_marker):
+        raise RuntimeError(
+            f"Incomplete data extraction detected at '{hidden_states_path}' "
+            f"for rank {rank}. "
+            "Re-run data extraction (DATA_ONLY mode) before training."
+        )
+
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
+    if is_distributed:
+        torch.cuda.set_device(local_rank)
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group(backend="nccl")
+
+    model, verifier_config = _setup_eagle3_model(
+        verifier_model=verifier_model,
+        data_path=data_path,
+        draft_vocab_size=draft_vocab_size,
+        num_layers=num_layers,
+        ttt_steps=ttt_steps,
+        norm_before_residual=norm_before_residual,
+        norm_before_fc=norm_before_fc,
+        embed_requires_grad=embed_requires_grad,
+        target_layer_ids=target_layer_ids,
+        is_distributed=is_distributed,
+        rank=rank,
+    )
+
+    max_len = total_seq_len
+    hs_dtype = getattr(torch, hidden_states_dtype)
+    collate_fn = create_collate_fn(
+        max_len,
+        verifier_config.hidden_size,
+        num_target_layers=len(target_layer_ids),
+        dtype=hs_dtype,
+    )
+
+    train_dataset = ArrowDataset(
+        max_len=max_len,
+        datapath=data_path,
+        hidden_states_path=hidden_states_path,
+        split_ratio=0.9,
+        on_missing="skip",
+        transform=AddUniformNoise(),
+        hidden_states_dtype=hs_dtype,
+    )
+    val_dataset = ArrowDataset(
+        max_len=max_len,
+        datapath=data_path,
+        hidden_states_path=hidden_states_path,
+        split_ratio=-0.1,
+        on_missing="skip",
+        hidden_states_dtype=hs_dtype,
+    )
+
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    rank = int(os.environ.get("RANK", 0))
+
+    train_batch_sampler = MultipackDistributedBatchSamplerV2(
+        batch_max_length=max_len,
+        lengths=train_dataset.approx_lengths,
+        num_replicas=world_size,
+        rank=rank,
+    )
+    val_batch_sampler = MultipackDistributedBatchSamplerV2(
+        batch_max_length=max_len,
+        lengths=val_dataset.approx_lengths,
+        num_replicas=world_size,
+        rank=rank,
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_sampler=train_batch_sampler,
+        collate_fn=collate_fn,
+    )
+    val_loader = DataLoader(val_dataset, batch_sampler=val_batch_sampler, collate_fn=collate_fn)
+
+    with contextlib.suppress(NameError):
+        _set_steps_per_epoch(len(train_loader))  # noqa: F821
+
+    config = TrainerConfig(
+        lr=lr,
+        num_epochs=epochs,
+        save_path=save_path,
+        resume_from_checkpoint=resume_from_checkpoint,
+        is_distributed=is_distributed,
+        local_rank=local_rank,
+        train_call_kwargs={"shift_fn": shift_batch},
+        val_call_kwargs={"shift_fn": shift_batch},
+        scheduler_type=scheduler_type,
+        scheduler_warmup_steps=scheduler_warmup_steps,
+        scheduler_total_steps=scheduler_total_steps,
+        scheduler_num_cosine_cycles=scheduler_num_cosine_cycles,
+        checkpoint_freq=checkpoint_freq,
+        save_best=save_best,
+        hidden_states_dtype=hs_dtype,
+        log_freq=log_freq,
+    )
+
+    if resume_from_checkpoint and rank == 0:
+        from pathlib import Path
+
+        interrupted_path = Path(save_path) / "interrupted"
+        if interrupted_path.exists():
+            import shutil
+
+            shutil.rmtree(str(interrupted_path))
+            print(
+                f"[Kubeflow] Removed interrupted checkpoint at {interrupted_path}",
+                flush=True,
+            )
+    if resume_from_checkpoint and is_distributed:
+        torch.distributed.barrier()
+
+    if "_set_phase" in globals():
+        _set_phase("training", 15)  # noqa: F821
+
+    trainer = Trainer(model, config, train_loader, val_loader)
+    trainer.run_training()
+
+    if "_set_phase" in globals():
+        _set_phase("complete", 100)  # noqa: F821
+
+
+def _speculator_online(
+    verifier_model: str,
+    dataset_name: str,
+    output_dir: str,
+    epochs: int,
+    lr: float,
+    total_seq_len: int,
+    draft_vocab_size: int | None = None,
+    max_samples: int | None = None,
+    hidden_states_dtype: str = "bfloat16",
+    num_layers: int = 1,
+    ttt_steps: int = 3,
+    norm_before_residual: bool = True,
+    norm_before_fc: bool = False,
+    embed_requires_grad: bool = False,
+    scheduler_type: str = "linear",
+    scheduler_warmup_steps: int | None = None,
+    scheduler_total_steps: int | None = None,
+    scheduler_num_cosine_cycles: float = 0.5,
+    checkpoint_freq: float = 1.0,
+    save_best: bool = False,
+    log_freq: int = 1,
+    resume_from_checkpoint: bool = False,
+    regenerate_responses: bool = False,
+    from_pretrained: str | None = None,
+    target_layer_ids: list[int] | None = None,
+    vllm_endpoint: str = "http://localhost:8234/v1",
+    vllm_readiness_timeout_minutes: int = 60,
+) -> None:
+    """Online training function injected into pods via inspect.getsource().
+
+    Combines preprocessing, vLLM sidecar wait, model setup, and training
+    in a single function. Hidden states are generated on-the-fly from the
+    vLLM sidecar and deleted after use (not saved to disk).
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the training script that runs inside the container.
+    """
+    import contextlib
+    import os
+
+    if "_set_phase" in globals():
+        _set_phase("waiting_for_vllm", 3)  # noqa: F821
+
+    health = vllm_endpoint.rstrip("/").rsplit("/v1", 1)[0] + "/health"
+    _wait_for_vllm(health, timeout_minutes=vllm_readiness_timeout_minutes)
+
+    rank = int(os.environ.get("RANK", 0))
+
+    if regenerate_responses:
+        if rank == 0:
+            dataset_name = _regenerate_responses(
+                dataset_name, output_dir, vllm_endpoint, max_samples
+            )
+        if int(os.environ.get("WORLD_SIZE", 1)) > 1:
+            import torch
+
+            if not torch.distributed.is_initialized():
+                torch.distributed.init_process_group(backend="nccl")
+            torch.distributed.barrier()
+        if rank != 0:
+            regen_output = os.path.join(output_dir, "regenerated_responses.jsonl")
+            if os.path.exists(regen_output):
+                dataset_name = regen_output
+
+    if "_set_phase" in globals():
+        _set_phase("preprocessing", 8)  # noqa: F821
+
+    data_dir = os.path.join(output_dir, "data")
+    _preprocess_dataset(verifier_model, dataset_name, data_dir, total_seq_len, max_samples)
+
+    if "_set_phase" in globals():
+        _set_phase("setting_up_model", 12)  # noqa: F821
+
+    from speculators.models.eagle3.data import shift_batch
+    from speculators.train.data import ArrowDataset, create_collate_fn
+    from speculators.train.trainer import Trainer, TrainerConfig
+    import torch
+    from torch.utils.data import DataLoader
+    from torch.utils.data.distributed import DistributedSampler
+
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
+    if is_distributed:
+        torch.cuda.set_device(local_rank)
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group(backend="nccl")
+    model, verifier_config = _setup_eagle3_model(
+        verifier_model=verifier_model,
+        data_path=data_dir,
+        draft_vocab_size=draft_vocab_size,
+        num_layers=num_layers,
+        ttt_steps=ttt_steps,
+        norm_before_residual=norm_before_residual,
+        norm_before_fc=norm_before_fc,
+        embed_requires_grad=embed_requires_grad,
+        target_layer_ids=target_layer_ids,
+        is_distributed=is_distributed,
+        rank=rank,
+    )
+
+    max_len = total_seq_len
+    hs_dtype = getattr(torch, hidden_states_dtype)
+    collate_fn = create_collate_fn(
+        max_len,
+        verifier_config.hidden_size,
+        num_target_layers=len(target_layer_ids),
+        dtype=hs_dtype,
+    )
+
+    train_dataset = ArrowDataset(
+        max_len=max_len,
+        datapath=data_dir,
+        on_missing="generate",
+        vllm_endpoint=vllm_endpoint,
+        split_ratio=0.9,
+        hidden_states_dtype=hs_dtype,
+    )
+
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    rank = int(os.environ.get("RANK", 0))
+
+    sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=1,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    with contextlib.suppress(NameError):
+        _set_steps_per_epoch(len(train_loader))  # noqa: F821
+
+    config = TrainerConfig(
+        lr=lr,
+        num_epochs=epochs,
+        save_path=output_dir,
+        resume_from_checkpoint=resume_from_checkpoint,
+        is_distributed=is_distributed,
+        local_rank=local_rank,
+        train_call_kwargs={"shift_fn": shift_batch},
+        val_call_kwargs={"shift_fn": shift_batch},
+        scheduler_type=scheduler_type,
+        scheduler_warmup_steps=scheduler_warmup_steps,
+        scheduler_total_steps=scheduler_total_steps,
+        scheduler_num_cosine_cycles=scheduler_num_cosine_cycles,
+        checkpoint_freq=checkpoint_freq,
+        save_best=save_best,
+        hidden_states_dtype=hs_dtype,
+        log_freq=log_freq,
+    )
+
+    if resume_from_checkpoint and rank == 0:
+        from pathlib import Path
+
+        interrupted_path = Path(output_dir) / "interrupted"
+        if interrupted_path.exists():
+            import shutil
+
+            shutil.rmtree(str(interrupted_path))
+            print(
+                f"[Kubeflow] Removed interrupted checkpoint at {interrupted_path}",
+                flush=True,
+            )
+    if resume_from_checkpoint and is_distributed:
+        torch.distributed.barrier()
+
+    if "_set_phase" in globals():
+        _set_phase("training", 15)  # noqa: F821
+
+    trainer = Trainer(model, config, train_loader)
+    trainer.run_training()
+
+    if "_set_phase" in globals():
+        _set_phase("complete", 100)  # noqa: F821
+
+
+def get_speculator_instrumentation_wrapper(
+    metrics_port: int,
+    mode: str,
+    num_epochs: int = 0,
+) -> str:
+    """Generate self-contained instrumentation wrapper via inspect.getsource.
+
+    Args:
+        metrics_port: Port for HTTP metrics server.
+        mode: Speculator mode string ("data_only", "train_only").
+        num_epochs: Total training epochs.
+
+    Returns:
+        Python code as string with {{user_training_code}} placeholder.
+    """
+    instrumentation_code = inspect.getsource(_create_speculator_progression_instrumentation)
+    instrumentation_code = textwrap.dedent(instrumentation_code)
+
+    wrapper = f"""\
+# =============================================================================
+# Kubeflow SDK - Speculator Progression Tracking Instrumentation
+# Generated by kubeflow.trainer.rhai.speculator
+# =============================================================================
+
+import os as _instr_os
+_local_rank = int(_instr_os.environ.get("LOCAL_RANK", "0"))
+
+print("[Kubeflow] Initializing speculator progression tracking", flush=True)
+
+# Instrumentation function definition
+{instrumentation_code}
+
+if _local_rank == 0:
+    # Initialize and apply instrumentation
+    (
+        _apply_progression_tracking,
+        _start_data_progress_server,
+        _,
+        _mark_data_complete,
+        _set_phase,
+    ) = _create_speculator_progression_instrumentation(
+        metrics_port={metrics_port},
+        mode={mode!r},
+        num_epochs={num_epochs},
+    )
+    _set_steps_per_epoch = _apply_progression_tracking()
+    print("[Kubeflow] Speculator progression tracking enabled", flush=True)
+
+# =============================================================================
+# USER CODE
+# =============================================================================
+
+{{{{user_training_code}}}}"""
+
+    return wrapper
+
+
+def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> str:
+    """Generate a training script via inspect.getsource().
+
+    Builds the script by composing shared pieces based on what each mode needs:
+    - DATA_ONLY: data extraction only
+    - TRAIN_ONLY: training only
+    - OFFLINE: data extraction then training (both calls sequentially)
+
+    Args:
+        trainer: SpeculativeDecodingTrainer configuration.
+
+    Returns:
+        Python source code string for the training script.
+    """
+    import inspect
+    import textwrap
+
+    from kubeflow.trainer.rhai.utils import parse_output_dir_uri
+
+    resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
+
+    needs_data = trainer.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.OFFLINE)
+    needs_train = trainer.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
+
+    cfg = trainer.config or SpeculatorConfig()
+
+    from kubeflow.trainer.rhai.constants import EXTRACTION_INCOMPLETE_MARKER
+
+    script = (
+        "import logging\n"
+        "import os\n"
+        "_speculators_logger = logging.getLogger('speculators')\n"
+        "_speculators_logger.setLevel(logging.INFO)\n"
+        "if not _speculators_logger.handlers:\n"
+        "    _handler = logging.StreamHandler()\n"
+        "    class _Rank0Filter(logging.Filter):\n"
+        "        def filter(self, record):\n"
+        "            return int(os.environ.get('LOCAL_RANK', 0)) == 0\n"
+        "    _handler.addFilter(_Rank0Filter())\n"
+        "    _speculators_logger.addHandler(_handler)\n\n"
+        f"EXTRACTION_INCOMPLETE_MARKER = {EXTRACTION_INCOMPLETE_MARKER!r}\n\n"
+    )
+
+    needs_online = trainer.mode == SpeculatorMode.ONLINE
+
+    needs_vllm_helper = needs_data or needs_online
+    needs_preprocess_helper = needs_data or needs_online
+    needs_model_helper = needs_train or needs_online
+
+    if needs_vllm_helper:
+        script += textwrap.dedent(inspect.getsource(_wait_for_vllm))
+        script += "\n\n"
+
+    if needs_preprocess_helper:
+        script += textwrap.dedent(inspect.getsource(_preprocess_dataset))
+        script += "\n\n"
+
+    if needs_model_helper:
+        script += textwrap.dedent(inspect.getsource(_setup_eagle3_model))
+        script += "\n\n"
+
+    needs_regen = needs_data or needs_online
+
+    if needs_regen:
+        import base64
+        from pathlib import Path
+
+        regen_script_path = Path(__file__).parent / "scripts" / "response_regeneration.py"
+        regen_b64 = base64.b64encode(regen_script_path.read_bytes()).decode("ascii")
+        script += f'_REGEN_SCRIPT_B64 = "{regen_b64}"\n\n'
+        script += textwrap.dedent(inspect.getsource(_regenerate_responses))
+        script += "\n\n"
+
+    if needs_data:
+        import base64
+        from pathlib import Path
+
+        datagen_script_path = Path(__file__).parent / "scripts" / "data_generation_offline.py"
+        datagen_b64 = base64.b64encode(datagen_script_path.read_bytes()).decode("ascii")
+
+        script += f'_DATAGEN_SCRIPT_B64 = "{datagen_b64}"\n\n'
+        script += textwrap.dedent(inspect.getsource(_speculator_data_only))
+
+    if needs_train:
+        script += textwrap.dedent(inspect.getsource(_speculator_train_only))
+
+    if needs_online:
+        script += textwrap.dedent(inspect.getsource(_speculator_online))
+
+    if trainer.verifier_model.startswith(PVC_URI_SCHEME):
+        resolved_verifier_model, _ = parse_output_dir_uri(trainer.verifier_model)
+    else:
+        resolved_verifier_model = trainer.verifier_model
+
+    if trainer.dataset_name and trainer.dataset_name.startswith(PVC_URI_SCHEME):
+        resolved_dataset_name, _ = parse_output_dir_uri(trainer.dataset_name)
+    else:
+        resolved_dataset_name = trainer.dataset_name
+
+    if trainer.hidden_states_path and trainer.hidden_states_path.startswith(PVC_URI_SCHEME):
+        resolved_hidden_states, _ = parse_output_dir_uri(trainer.hidden_states_path)
+    elif trainer.hidden_states_path:
+        resolved_hidden_states = trainer.hidden_states_path
+    else:
+        resolved_hidden_states = resolved_output_dir
+
+    if trainer.data_path and trainer.data_path.startswith(PVC_URI_SCHEME):
+        resolved_data_path, _ = parse_output_dir_uri(trainer.data_path)
+    elif trainer.data_path:
+        resolved_data_path = trainer.data_path
+    else:
+        resolved_data_path = resolved_output_dir
+
+    from kubeflow.trainer.rhai.constants import VLLM_SIDECAR_ENDPOINT
+
+    _uses_external_vllm = trainer.vllm_endpoint is not None
+    data_vllm_endpoint = trainer.vllm_endpoint if _uses_external_vllm else VLLM_SIDECAR_ENDPOINT
+
+    offline_hs_path = resolved_hidden_states if _uses_external_vllm else None
+
+    offline_train_hs_path = (
+        f"{resolved_output_dir}/hidden_states"
+        if trainer.mode == SpeculatorMode.OFFLINE
+        else resolved_hidden_states
+    )
+
+    data_call = (
+        f"_speculator_data_only(\n"
+        f"    verifier_model={resolved_verifier_model!r},\n"
+        f"    dataset_name={resolved_dataset_name!r},\n"
+        f"    save_path={resolved_output_dir!r},\n"
+        f"    total_seq_len={trainer.total_seq_len!r},\n"
+        f"    max_samples={trainer.max_samples!r},\n"
+        f"    vllm_endpoint={data_vllm_endpoint!r},\n"
+        f"    concurrency={cfg.datagen_concurrency!r},\n"
+        f"    regenerate_responses={trainer.regenerate_responses!r},\n"
+        f"    hidden_states_path={offline_hs_path!r},\n"
+        f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
+        f")\n"
+    )
+
+    train_call = (
+        f"_speculator_train_only(\n"
+        f"    verifier_model={resolved_verifier_model!r},\n"
+        f"    data_path={resolved_data_path!r},\n"
+        f"    hidden_states_path={offline_train_hs_path!r},\n"
+        f"    save_path={resolved_output_dir!r},\n"
+        f"    epochs={trainer.epochs!r},\n"
+        f"    lr={trainer.lr!r},\n"
+        f"    total_seq_len={trainer.total_seq_len!r},\n"
+        f"    draft_vocab_size={trainer.draft_vocab_size!r},\n"
+        f"    hidden_states_dtype={cfg.hidden_states_dtype!r},\n"
+        f"    num_layers={cfg.num_layers!r},\n"
+        f"    ttt_steps={cfg.ttt_steps!r},\n"
+        f"    norm_before_residual={cfg.norm_before_residual!r},\n"
+        f"    norm_before_fc={cfg.norm_before_fc!r},\n"
+        f"    embed_requires_grad={cfg.embed_requires_grad!r},\n"
+        f"    scheduler_type={cfg.scheduler_type!r},\n"
+        f"    scheduler_warmup_steps={cfg.scheduler_warmup_steps!r},\n"
+        f"    scheduler_total_steps={cfg.scheduler_total_steps!r},\n"
+        f"    scheduler_num_cosine_cycles={cfg.scheduler_num_cosine_cycles!r},\n"
+        f"    checkpoint_freq={cfg.checkpoint_freq!r},\n"
+        f"    save_best={cfg.save_best!r},\n"
+        f"    log_freq={cfg.log_freq!r},\n"
+        f"    resume_from_checkpoint={cfg.resume_from_checkpoint!r},\n"
+        f"    from_pretrained={cfg.from_pretrained!r},\n"
+        f"    target_layer_ids={cfg.target_layer_ids!r},\n"
+        f")\n"
+    )
+
+    online_call = (
+        f"_speculator_online(\n"
+        f"    verifier_model={resolved_verifier_model!r},\n"
+        f"    dataset_name={resolved_dataset_name!r},\n"
+        f"    output_dir={resolved_output_dir!r},\n"
+        f"    epochs={trainer.epochs!r},\n"
+        f"    lr={trainer.lr!r},\n"
+        f"    total_seq_len={trainer.total_seq_len!r},\n"
+        f"    draft_vocab_size={trainer.draft_vocab_size!r},\n"
+        f"    max_samples={trainer.max_samples!r},\n"
+        f"    hidden_states_dtype={cfg.hidden_states_dtype!r},\n"
+        f"    num_layers={cfg.num_layers!r},\n"
+        f"    ttt_steps={cfg.ttt_steps!r},\n"
+        f"    norm_before_residual={cfg.norm_before_residual!r},\n"
+        f"    norm_before_fc={cfg.norm_before_fc!r},\n"
+        f"    embed_requires_grad={cfg.embed_requires_grad!r},\n"
+        f"    scheduler_type={cfg.scheduler_type!r},\n"
+        f"    scheduler_warmup_steps={cfg.scheduler_warmup_steps!r},\n"
+        f"    scheduler_total_steps={cfg.scheduler_total_steps!r},\n"
+        f"    scheduler_num_cosine_cycles={cfg.scheduler_num_cosine_cycles!r},\n"
+        f"    checkpoint_freq={cfg.checkpoint_freq!r},\n"
+        f"    save_best={cfg.save_best!r},\n"
+        f"    log_freq={cfg.log_freq!r},\n"
+        f"    resume_from_checkpoint={cfg.resume_from_checkpoint!r},\n"
+        f"    regenerate_responses={trainer.regenerate_responses!r},\n"
+        f"    from_pretrained={cfg.from_pretrained!r},\n"
+        f"    target_layer_ids={cfg.target_layer_ids!r},\n"
+        f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
+        f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
+        f")\n"
+    )
+
+    if trainer.mode == SpeculatorMode.DATA_ONLY:
+        script += f"\n{data_call}"
+
+    elif trainer.mode == SpeculatorMode.TRAIN_ONLY:
+        script += f"\n{train_call}"
+
+    elif trainer.mode == SpeculatorMode.OFFLINE:
+        script += f"\n{data_call}"
+        script += f"\n{train_call}"
+
+    elif trainer.mode == SpeculatorMode.ONLINE:
+        script += f"\n{online_call}"
+
+    return script
+
+
+def _build_install_snippet(
+    packages_to_install: list[str] | None,
+    pip_index_urls: list[str],
+) -> str:
+    """Build the shell snippet to install Python packages if requested."""
+    if not packages_to_install:
+        return ""
+    return k8s_utils.get_script_for_python_packages(
+        packages_to_install,
+        pip_index_urls,
+    )
+
+
+def _get_command_from_runtime(
+    runtime: types.Runtime,
+    func_code: str,
+    func_file: str,
+    install_snippet: str,
+) -> list[str]:
+    """Build command using runtime's command template.
+
+    Args:
+        runtime: Runtime configuration with command template.
+        func_code: The training function code to execute.
+        func_file: The filename to write the code to.
+        install_snippet: Package installation script to prepend.
+
+    Returns:
+        Command list ready for trainer_crd.command.
+    """
+    command = []
+    for c in runtime.trainer.command:
+        if "{func_file}" in c:
+            exec_script = c.format(func_code=func_code, func_file=func_file)
+            if install_snippet:
+                exec_script = install_snippet + exec_script
+            command.append(exec_script)
+        else:
+            command.append(c)
+    return command
+
+
+def apply_speculator_sidecar_overrides(
+    trainer: SpeculativeDecodingTrainer,
+    runtime_patches: list,
+) -> list:
+    """Configure the vLLM sidecar init container via runtime patches.
+
+    Sets environment variables, PVC volume mount, and GPU resources on the
+    ``vllm-sidecar`` init container defined in the ClusterTrainingRuntime.
+
+    Args:
+        trainer: SpeculativeDecodingTrainer with model path, GPU settings, and output_dir.
+        runtime_patches: Existing runtime patches list (mutated in place).
+
+    Returns:
+        Updated runtime_patches list.
+    """
+    from kubeflow.trainer.rhai.constants import (
+        CHECKPOINT_MOUNT_PATH,
+        CHECKPOINT_VOLUME_NAME,
+        VLLM_SIDECAR_CONTAINER_NAME,
+    )
+    from kubeflow.trainer.rhai.utils import (
+        RUNTIME_PATCH_MANAGER,
+        _get_pod_spec_from_runtime_patch,
+        parse_output_dir_uri,
+    )
+
+    if trainer.output_dir.startswith(PVC_URI_SCHEME):
+        resolved_output_dir, _ = parse_output_dir_uri(trainer.output_dir)
+    else:
+        resolved_output_dir = trainer.output_dir
+    hs_path = f"{resolved_output_dir}/hidden_states"
+
+    sdk_patch = None
+    for patch in runtime_patches:
+        if patch.get("manager") == RUNTIME_PATCH_MANAGER:
+            sdk_patch = patch
+            break
+
+    if sdk_patch is None:
+        sdk_patch = {"manager": RUNTIME_PATCH_MANAGER}
+        runtime_patches.append(sdk_patch)
+
+    pod_spec = _get_pod_spec_from_runtime_patch(sdk_patch)
+
+    init_containers = pod_spec.setdefault("initContainers", [])
+
+    if trainer.verifier_model.startswith(PVC_URI_SCHEME):
+        resolved_verifier, _ = parse_output_dir_uri(trainer.verifier_model)
+    else:
+        resolved_verifier = trainer.verifier_model
+
+    cfg = trainer.config or SpeculatorConfig()
+
+    layer_ids_str = ",".join(str(lid) for lid in cfg.target_layer_ids)
+
+    vllm_gpu_count = int((trainer.vllm_resources or {}).get("nvidia.com/gpu", 1))
+
+    sidecar_env = [
+        {"name": "SPECULATOR_VERIFIER_MODEL", "value": resolved_verifier},
+        {"name": "SPECULATOR_HS_PATH", "value": hs_path},
+        {
+            "name": "SPECULATOR_GPU_MEM_UTIL",
+            "value": str(trainer.vllm_gpu_memory_utilization),
+        },
+        {"name": "SPECULATOR_VLLM_GPU_COUNT", "value": str(vllm_gpu_count)},
+        {"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str},
+    ]
+
+    if trainer.env and "HF_TOKEN" in trainer.env:
+        sidecar_env.append({"name": "HF_TOKEN", "value": trainer.env["HF_TOKEN"]})
+
+    sidecar_override = {
+        "name": VLLM_SIDECAR_CONTAINER_NAME,
+        "env": sidecar_env,
+    }
+    if trainer.vllm_resources:
+        sidecar_resources = {k: str(v) for k, v in trainer.vllm_resources.items()}
+        sidecar_override["resources"] = {
+            "limits": sidecar_resources,
+            "requests": sidecar_resources,
+        }
+    if trainer.output_dir.startswith(PVC_URI_SCHEME):
+        sidecar_override["volumeMounts"] = [
+            {
+                "name": CHECKPOINT_VOLUME_NAME,
+                "mountPath": CHECKPOINT_MOUNT_PATH,
+                "readOnly": False,
+            }
+        ]
+    init_containers.append(sidecar_override)
+
+    return runtime_patches
+
+
+def get_trainer_cr_from_speculator_trainer(
+    runtime: types.Runtime,
+    trainer: SpeculativeDecodingTrainer,
+    initializer: types.Initializer | None = None,
+) -> models.TrainerV1alpha1Trainer:
+    """Build Trainer CRD for SpeculativeDecodingTrainer.
+
+    Args:
+        runtime: Runtime configuration.
+        trainer: SpeculativeDecodingTrainer configuration.
+        initializer: Optional initializer configuration.
+
+    Returns:
+        Trainer CRD spec.
+    """
+    if trainer.mode == SpeculatorMode.DATA_ONLY:
+        runtime.trainer.set_command(constants.DEFAULT_COMMAND)
+    else:
+        runtime.trainer.set_command(constants.TORCH_COMMAND)
+
+    trainer_crd = models.TrainerV1alpha1Trainer()
+
+    if trainer.training_resources:
+        trainer_crd.resources_per_node = k8s_utils.get_resources_per_node(
+            trainer.training_resources
+        )
+
+    install_snippet = _build_install_snippet(trainer.packages_to_install, trainer.pip_index_urls)
+
+    func_code = _render_speculator_training_script(trainer)
+    func_file = "speculator_train.py"
+
+    if trainer.enable_progression_tracking:
+        wrapper_code = get_speculator_instrumentation_wrapper(
+            metrics_port=trainer.metrics_port,
+            mode=trainer.mode.value,
+            num_epochs=trainer.epochs,
+        )
+        func_code = wrapper_code.replace("{{user_training_code}}", func_code)
+
+    trainer_crd.command = _get_command_from_runtime(
+        runtime=runtime,
+        func_code=func_code,
+        func_file=func_file,
+        install_snippet=install_snippet,
+    )
+
+    trainer_crd.env = (
+        [models.IoK8sApiCoreV1EnvVar(name=k, value=v) for k, v in trainer.env.items()]
+        if trainer.env
+        else None
+    )
+
+    return trainer_crd
