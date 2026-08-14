@@ -1411,5 +1411,72 @@ def test_grpo_instrumentation_cleans_metrics_on_startup(grpo_handler):
     print("test execution complete")
 
 
+def test_get_trainer_cr_includes_callback_injection():
+    """get_trainer_cr_from_training_hub_trainer injects callback code into command."""
+    print("Executing test: CRD generation includes callback injection")
+
+    from kubeflow.trainer.rhai.instrumentation.traininghub_callbacks_test import LoggingCallback
+    from kubeflow.trainer.rhai.traininghub import get_trainer_cr_from_training_hub_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    runtime.trainer.set_command(constants.TORCH_COMMAND)
+
+    trainer = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.LORA_SFT,
+        func_args={"data_path": "/data/train.jsonl", "ckpt_output_dir": "/tmp/checkpoints"},
+        callbacks=[LoggingCallback],
+        enable_progression_tracking=False,
+    )
+
+    trainer_crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer)
+    script = " ".join(trainer_crd.command) if trainer_crd.command else ""
+
+    assert "Training Hub Callback Injection" in script
+    assert "class LoggingCallback" in script
+    assert "_KUBEFLOW_HUB_CALLBACKS = [LoggingCallback()]" in script
+
+    print("test execution complete")
+
+
+def test_get_trainer_cr_no_callbacks_no_injection():
+    """Without callbacks, no callback injection code is added."""
+    print("Executing test: CRD generation without callbacks has no injection")
+
+    from kubeflow.trainer.rhai.traininghub import get_trainer_cr_from_training_hub_trainer
+    from kubeflow.trainer.types import types
+
+    runtime = types.Runtime(
+        name="test-runtime",
+        trainer=types.RuntimeTrainer(
+            trainer_type=types.TrainerType.CUSTOM_TRAINER,
+            framework="pytorch",
+            image="pytorch/pytorch:2.0.0",
+        ),
+    )
+    runtime.trainer.set_command(constants.TORCH_COMMAND)
+
+    trainer = TrainingHubTrainer(
+        algorithm=TrainingHubAlgorithms.LORA_SFT,
+        func_args={"data_path": "/data/train.jsonl", "ckpt_output_dir": "/tmp/checkpoints"},
+        enable_progression_tracking=False,
+    )
+
+    trainer_crd = get_trainer_cr_from_training_hub_trainer(runtime, trainer)
+    script = " ".join(trainer_crd.command) if trainer_crd.command else ""
+
+    assert "Training Hub Callback Injection" not in script
+    assert "_KUBEFLOW_HUB_CALLBACKS" not in script
+
+    print("test execution complete")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

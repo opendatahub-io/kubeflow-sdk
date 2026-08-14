@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import inspect
 import textwrap
+from typing import Any
 
 from kubeflow_trainer_api import models
 
@@ -41,6 +42,10 @@ class TrainingHubTrainer:
         enable_progression_tracking: Enable file-based progress tracking with HTTP server.
         metrics_port: HTTP server port for metrics endpoint.
         metrics_poll_interval_seconds: How often controller polls metrics endpoint.
+        callbacks: Optional list of Training Hub callback classes.
+            Classes are serialized into the training pod and passed to training_hub
+            APIs (sft, osft, lora_sft, lora_grpo). Define callbacks at module level
+            so inspect.getsource can serialize them.
     """
 
     func: Callable | None = None
@@ -57,6 +62,7 @@ class TrainingHubTrainer:
     enable_progression_tracking: bool = True  # Enabled by default
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
+    callbacks: list[Any] | None = None
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -81,6 +87,12 @@ class TrainingHubTrainer:
                 f"metrics_poll_interval_seconds must be in range 5-300 seconds, "
                 f"got {self.metrics_poll_interval_seconds}"
             )
+
+        from kubeflow.trainer.rhai.instrumentation.traininghub_callbacks import (
+            validate_callbacks,
+        )
+
+        validate_callbacks(self.callbacks)
 
 
 def _derive_topology_from_func_args(
@@ -248,6 +260,14 @@ def get_trainer_cr_from_training_hub_trainer(
         # Secondary case: user provided function; embed their function and call with kwargs
         func_code, func_file = _render_user_func_code(trainer.func, trainer.func_args)
         algorithm_name = trainer.algorithm.value if trainer.algorithm else None
+
+    if trainer.callbacks:
+        from kubeflow.trainer.rhai.instrumentation.traininghub_callbacks import (
+            build_training_hub_callback_injection_code,
+        )
+
+        callback_code = build_training_hub_callback_injection_code(trainer.callbacks)
+        func_code = callback_code + "\n" + func_code
 
     # Add progress tracking instrumentation if enabled (common for both modes)
     if trainer.enable_progression_tracking:
