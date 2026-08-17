@@ -8,6 +8,11 @@
 
 Latest News 🔥
 
+<<<<<<< HEAD
+=======
+- [2026/03] The Kubeflow SDK v0.4 is officially released with `SparkClient` and `ModelRegistryClient`
+  support. Check out [the announcement blog post](https://blog.kubeflow.org/kubeflow-sdk-0.4.0-release/).
+>>>>>>> upstream/main
 - [2026/01] We have our official documentation here at [Kubeflow SDK Documentation](https://sdk.kubeflow.org/en/latest/)
 - [2025/11] Please fill [this survey](https://docs.google.com/forms/d/e/1FAIpQLSet_IAFQzMMDWolzFt5LI9lhzqOOStjIGHxgYqKBnVcRtDfrw/viewform)
   to shape the future of Kubeflow SDK.
@@ -212,6 +217,39 @@ ModelRegistryClient("https://example.org:456")        # Port parsed from base_ur
 ModelRegistryClient("https://example.org")            # Default port (443 for https, 8080 for http)
 ```
 
+<<<<<<< HEAD
+=======
+### Run and monitor pipelines
+
+**Install Kubeflow Pipelines support:**
+
+```bash
+pip install 'kubeflow[pipelines]'
+```
+
+```python
+from kubeflow.pipelines import PipelinesClient, dsl
+
+@dsl.component(base_image="python:3.11")
+def say_hello(greeting: str) -> str:
+    return f"Hello, {greeting}!"
+
+@dsl.pipeline
+def hello_pipeline(greeting: str = "world"):
+    say_hello(greeting=greeting)
+
+client = PipelinesClient()
+
+# Upload and run
+client.upload_pipeline(hello_pipeline, name="hello-pipeline")
+run = client.run("hello-pipeline", params={"greeting": "Kubeflow"})
+
+# Wait for completion
+completed = client.wait_for_run_status(run, timeout=300)
+print(f"Run finished: {completed.state}")
+```
+
+>>>>>>> upstream/main
 ## Local Development
 
 Kubeflow Trainer client supports local development without needing a Kubernetes cluster.
@@ -243,7 +281,11 @@ job_id = client.train(trainer=CustomTrainer(func=train_fn))
 | **Kubeflow Katib**          | ✅ **Available** | v0.19.0+        | Hyperparameter optimization                                           |
 | **Kubeflow Model Registry** | ✅ **Available** | v0.3.0+         | Manage model artifacts, versions and ML artifacts metadata            |
 | **Kubeflow Spark Operator** | ✅ **Available** | v2.5.0+         | Manage Spark applications for data processing and feature engineering |
+<<<<<<< HEAD
 | **Kubeflow Pipelines**      | 🚧 Planned       | TBD             | Build, run, and track AI workflows                                    |
+=======
+| **Kubeflow Pipelines**      | ✅ **Available** | v2.17.0+        | Build, run, and track AI workflows                                    |
+>>>>>>> upstream/main
 | **Feast**                   | 🚧 Planned       | TBD             | Feature store for machine learning                                    |
 
 ## Community
