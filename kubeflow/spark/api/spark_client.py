@@ -200,7 +200,11 @@ class SparkClient:
                 Format: ``{"cpu": "5", "memory": "10Gi"}``.
 
             spark_conf:
+<<<<<<< HEAD
                 Spark configuration dictionary.
+=======
+                Spark configuration properties.
+>>>>>>> upstream/main
 
             options:
                 List of additional Spark configuration options.
@@ -215,16 +219,24 @@ class SparkClient:
             NotImplementedError:
                 If unsupported features are requested.
         """
+<<<<<<< HEAD
         if spark_conf is not None:
             raise NotImplementedError("spark_conf support is not yet implemented.")
 
         if options is not None:
             raise NotImplementedError("options are not supported in Phase 1.")
+=======
+>>>>>>> upstream/main
 
         return self.backend.submit_job(
             job=job,
             num_executors=num_executors,
             resources_per_executor=resources_per_executor,
+<<<<<<< HEAD
+=======
+            options=options,
+            spark_conf=spark_conf,
+>>>>>>> upstream/main
         ).name
 
     def get_job(self, name: str) -> SparkJob:

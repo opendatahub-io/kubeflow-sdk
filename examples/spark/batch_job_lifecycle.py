@@ -58,6 +58,12 @@ def example_submit_and_wait():
             "cpu": "1",
             "memory": "512Mi",
         },
+<<<<<<< HEAD
+=======
+        spark_conf={
+            "spark.sql.shuffle.partitions": "8",
+        },
+>>>>>>> upstream/main
     )
 
     print(f"Job submitted successfully: {JOB_NAME}")

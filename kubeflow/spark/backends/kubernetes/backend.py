@@ -50,7 +50,10 @@ from kubeflow.spark.backends.kubernetes.utils import (
     get_spark_connect_info_from_cr,
     read_pod_logs,
 )
+<<<<<<< HEAD
 from kubeflow.spark.types.options import Name
+=======
+>>>>>>> upstream/main
 from kubeflow.spark.types.types import (
     Driver,
     Executor,
@@ -119,6 +122,7 @@ class KubernetesBackend(RuntimeBackend):
     # Spark Connect sessions
     # ------------------------------------------------------------------
 
+<<<<<<< HEAD
     def _extract_name_option(self, options: list | None) -> tuple[str, list]:
         """Extract Name option from options list, or generate name if absent.
 
@@ -148,6 +152,8 @@ class KubernetesBackend(RuntimeBackend):
 
         return session_name, filtered_options
 
+=======
+>>>>>>> upstream/main
     def _create_session(
         self,
         num_executors: int | None = None,
@@ -176,8 +182,12 @@ class KubernetesBackend(RuntimeBackend):
             RuntimeError:
                 If the SparkConnect resource cannot be created.
         """
+<<<<<<< HEAD
         # Extract Name option if present, or auto-generate
         name, filtered_options = self._extract_name_option(options)
+=======
+        name = generate_session_name()
+>>>>>>> upstream/main
 
         spark_connect = build_spark_connect_cr(
             name=name,
@@ -187,7 +197,11 @@ class KubernetesBackend(RuntimeBackend):
             spark_conf=spark_conf,
             driver=driver,
             executor=executor,
+<<<<<<< HEAD
             options=filtered_options,  # Use filtered list
+=======
+            options=options,
+>>>>>>> upstream/main
             backend=self,  # Pass backend for option validation
         )
 
@@ -448,6 +462,14 @@ class KubernetesBackend(RuntimeBackend):
         Returns:
             (connect_url, port_forward_process or None). Caller may keep process reference;
             process exits when the Python process exits.
+<<<<<<< HEAD
+=======
+
+        Raises:
+            RuntimeError: If the session reports no port-forward target, if
+                build_service_url cannot resolve an in-cluster host, or if
+                port-forward fails for every candidate.
+>>>>>>> upstream/main
         """
         if os.environ.get("KUBERNETES_SERVICE_HOST"):
             url = build_service_url(info)
@@ -457,6 +479,7 @@ class KubernetesBackend(RuntimeBackend):
         if port is None:
             port_str = os.environ.get("SPARK_CONNECT_LOCAL_PORT")
             port = int(port_str) if port_str else random.randint(15002, 16002)
+<<<<<<< HEAD
         # Prefer pod when available (bypasses Service/EndpointSlice); then try svc names
         candidates: list[tuple[str, str]] = []
         if info.driver_pod_name:
@@ -470,6 +493,22 @@ class KubernetesBackend(RuntimeBackend):
             if key in seen:
                 continue
             seen.add(key)
+=======
+        # Prefer pod when available (bypasses Service/EndpointSlice); then try svc name
+        candidates: list[tuple[str, str]] = []
+        if info.driver_pod_name:
+            candidates.append(("pod", info.driver_pod_name))
+        if info.service_name:
+            candidates.append(("svc", info.service_name))
+        if not candidates:
+            raise RuntimeError(
+                f"No port-forward target for {info.namespace}/{info.name}: neither "
+                "status.server.podName nor status.server.serviceName is populated. "
+                "The session is not ready."
+            )
+        for kind, target in candidates:
+            key = f"{kind}/{target}"
+>>>>>>> upstream/main
             # Use 127.0.0.1 instead of localhost to force IPv4 (gRPC may prefer IPv6 which can fail)
             url = f"sc://127.0.0.1:{port}"
             cmd = [
@@ -917,6 +956,11 @@ class KubernetesBackend(RuntimeBackend):
         job: FileJob | FuncJob,
         num_executors: int | None = None,
         resources_per_executor: dict[str, str] | None = None,
+<<<<<<< HEAD
+=======
+        options: list | None = None,
+        spark_conf: dict[str, str] | None = None,
+>>>>>>> upstream/main
     ) -> SparkJob:
         """Submit a SparkApplication for batch execution.
 
@@ -930,6 +974,14 @@ class KubernetesBackend(RuntimeBackend):
             resources_per_executor:
                 Resource requirements per executor.
 
+<<<<<<< HEAD
+=======
+            options:
+                List of additional Spark configuration options.
+            spark_conf:
+                Spark configuration properties to set on the SparkApplication.
+
+>>>>>>> upstream/main
         Returns:
             SparkJob information object.
 
@@ -947,11 +999,14 @@ class KubernetesBackend(RuntimeBackend):
 
         job_name = generate_job_name()
 
+<<<<<<< HEAD
         logger.info(
             "Submitting SparkApplication '%s'",
             job_name,
         )
 
+=======
+>>>>>>> upstream/main
         if isinstance(job, FileJob):
             spark_application = get_spark_application_cr_from_file_job(
                 name=job_name,
@@ -960,6 +1015,12 @@ class KubernetesBackend(RuntimeBackend):
                 arguments=job.args,
                 num_executors=num_executors,
                 resources_per_executor=resources_per_executor,
+<<<<<<< HEAD
+=======
+                options=options,
+                backend=self,
+                spark_conf=spark_conf,
+>>>>>>> upstream/main
             )
 
         else:
@@ -970,8 +1031,24 @@ class KubernetesBackend(RuntimeBackend):
                 func_args=job.func_args,
                 num_executors=num_executors,
                 resources_per_executor=resources_per_executor,
+<<<<<<< HEAD
             )
 
+=======
+                options=options,
+                backend=self,
+                spark_conf=spark_conf,
+            )
+
+        # The Name option may override the auto-generated name.
+        job_name = spark_application.metadata.name
+
+        logger.info(
+            "Submitting SparkApplication '%s'",
+            job_name,
+        )
+
+>>>>>>> upstream/main
         try:
             thread = self.custom_api.create_namespaced_custom_object(
                 group=constants.SPARK_APPLICATION_GROUP,

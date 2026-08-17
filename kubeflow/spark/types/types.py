@@ -71,10 +71,21 @@ class Driver:
         java_options: JVM options for the driver (e.g., "-Xmx4g -XX:+UseG1GC").
         service_account: Kubernetes service account name for RBAC.
 
+<<<<<<< HEAD
     Example:
         driver = Driver(
             resources={"cpu": "4", "memory": "8Gi"},
             service_account="spark-driver-prod"
+=======
+    Example::
+
+        driver = Driver(
+            resources={
+                "cpu": "4",
+                "memory": "8Gi",
+            },
+            service_account="spark-driver-prod",
+>>>>>>> upstream/main
         )
 
     Note:
@@ -101,10 +112,21 @@ class Executor:
             (e.g., {"cpu": "4", "memory": "8Gi"}).
         java_options: JVM options for executors (e.g., "-Xmx28g -XX:+UseG1GC").
 
+<<<<<<< HEAD
     Example:
         executor = Executor(
             num_instances=20,
             resources_per_executor={"cpu": "8", "memory": "32Gi"}
+=======
+    Example::
+
+        executor = Executor(
+            num_instances=20,
+            resources_per_executor={
+                "cpu": "8",
+                "memory": "32Gi",
+            },
+>>>>>>> upstream/main
         )
 
     Note:

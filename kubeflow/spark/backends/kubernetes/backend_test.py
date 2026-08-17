@@ -30,6 +30,10 @@ from kubeflow.spark.backends.kubernetes.backend import KubernetesBackend
 from kubeflow.spark.backends.kubernetes.utils import (
     validate_spark_connect_url,
 )
+<<<<<<< HEAD
+=======
+from kubeflow.spark.options import Labels, Name
+>>>>>>> upstream/main
 from kubeflow.spark.test.common import (
     DEFAULT_NAMESPACE,
     FAILED,
@@ -41,7 +45,10 @@ from kubeflow.spark.test.common import (
     TIMEOUT,
     TestCase,
 )
+<<<<<<< HEAD
 from kubeflow.spark.types.options import Labels, Name
+=======
+>>>>>>> upstream/main
 from kubeflow.spark.types.types import (
     FileJob,
     FuncJob,
@@ -698,16 +705,34 @@ def test_get_session_logs(kubernetes_backend, test_case):
             config={"in_cluster": False},
             expected_output={"url": "sc://127.0.0.1:15002", "proc_is_none": False},
         ),
+<<<<<<< HEAD
     ],
 )
 def test_get_connect_url(kubernetes_backend, test_case):
     """Test get_connect_url for in-cluster and port-forward scenarios."""
+=======
+        TestCase(
+            name="out-of-cluster without pod or service name raises",
+            expected_status=FAILED,
+            config={"in_cluster": False, "service_name": None},
+            expected_error=RuntimeError,
+            expected_output="No port-forward target",
+        ),
+    ],
+)
+def test_get_connect_url(kubernetes_backend, test_case):
+    """Test get_connect_url for in-cluster, port-forward, and not-ready scenarios."""
+>>>>>>> upstream/main
     print("Executing test:", test_case.name)
     info = SparkConnectInfo(
         name="test-session",
         namespace="default",
         state=SparkConnectState.READY,
+<<<<<<< HEAD
         service_name="test-session-svc",
+=======
+        service_name=test_case.config.get("service_name", "test-session-server"),
+>>>>>>> upstream/main
     )
 
     if test_case.config["in_cluster"]:
@@ -729,6 +754,17 @@ def test_get_connect_url(kubernetes_backend, test_case):
             patch("kubeflow.spark.backends.kubernetes.backend.time.sleep"),
             patch.object(kubernetes_backend, "_wait_for_connect_port", return_value=True),
         ):
+<<<<<<< HEAD
+=======
+            if test_case.expected_status == FAILED:
+                with pytest.raises(
+                    test_case.expected_error,
+                    match=test_case.expected_output,
+                ):
+                    kubernetes_backend.get_connect_url(info)
+                print("test execution complete")
+                return
+>>>>>>> upstream/main
             url, proc = kubernetes_backend.get_connect_url(info)
 
     if "url_contains" in test_case.expected_output:
@@ -870,6 +906,7 @@ def test_create_and_connect(kubernetes_backend, test_case):
     "test_case",
     [
         TestCase(
+<<<<<<< HEAD
             name="valid flow with name option provided",
             expected_status=SUCCESS,
             config={"options": [Name("test-name"), Labels({"app": "spark"})]},
@@ -923,6 +960,8 @@ def test_extract_name_option(kubernetes_backend, test_case):
     "test_case",
     [
         TestCase(
+=======
+>>>>>>> upstream/main
             name="valid remote file job",
             expected_status=SUCCESS,
             config={
@@ -1277,6 +1316,37 @@ def test_validate_job(kubernetes_backend, test_case):
                 "use_mock_command": True,
             },
         ),
+<<<<<<< HEAD
+=======
+        TestCase(
+            name="valid remote file submission with spark conf",
+            expected_status=SUCCESS,
+            config={
+                "job": FileJob(
+                    file_source="s3://bucket/job.py",
+                    args=["--date", "2026-06-30"],
+                ),
+                "spark_conf": {
+                    "spark.executor.memory": "4g",
+                    "spark.sql.shuffle.partitions": "10",
+                },
+            },
+        ),
+        TestCase(
+            name="valid remote file submission with options",
+            expected_status=SUCCESS,
+            config={
+                "job": FileJob(
+                    file_source="s3://bucket/job.py",
+                    args=["--date", "2026-06-30"],
+                ),
+                "options": [
+                    Name("custom-job"),
+                    Labels({"team": "ml"}),
+                ],
+            },
+        ),
+>>>>>>> upstream/main
     ],
 )
 def test_submit_job(kubernetes_backend, test_case):
@@ -1299,20 +1369,47 @@ def test_submit_job(kubernetes_backend, test_case):
 
                 job = kubernetes_backend.submit_job(
                     job=test_case.config["job"],
+<<<<<<< HEAD
+=======
+                    options=test_case.config.get("options"),
+                    spark_conf=test_case.config.get("spark_conf"),
+>>>>>>> upstream/main
                 )
 
                 mock_build.assert_called_once()
 
                 assert mock_build.call_args.kwargs["func"] == test_case.config["job"].func
                 assert mock_build.call_args.kwargs["func_args"] == test_case.config["job"].func_args
+<<<<<<< HEAD
+=======
+                if test_case.config.get("options"):
+                    assert mock_build.call_args.kwargs["options"] == test_case.config["options"]
+                    assert mock_build.call_args.kwargs["backend"] is kubernetes_backend
+                assert mock_build.call_args.kwargs["spark_conf"] == test_case.config.get(
+                    "spark_conf"
+                )
+>>>>>>> upstream/main
 
         else:
             job = kubernetes_backend.submit_job(
                 job=test_case.config["job"],
+<<<<<<< HEAD
             )
 
         assert test_case.expected_status == SUCCESS
         assert job.name.startswith("spark-job-")
+=======
+                options=test_case.config.get("options"),
+                spark_conf=test_case.config.get("spark_conf"),
+            )
+
+        assert test_case.expected_status == SUCCESS
+
+        if test_case.config.get("options"):
+            assert job.name == "custom-job"
+        else:
+            assert job.name.startswith("spark-job-")
+>>>>>>> upstream/main
 
     except Exception as e:
         assert type(e) is test_case.expected_error

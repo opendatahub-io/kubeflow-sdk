@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+<<<<<<< HEAD
 
 """Unit tests for kubeflow.common.utils module."""
 
@@ -161,6 +162,13 @@ def test_get_default_target_namespace(test_case: TestCase):
 # validate_wait_for_job_status tests
 # --------------------------
 
+=======
+import pytest
+
+from kubeflow.common import utils
+from kubeflow.trainer.test.common import SUCCESS, TestCase
+
+>>>>>>> upstream/main
 
 @pytest.mark.parametrize(
     "test_case",

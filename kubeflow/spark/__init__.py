@@ -16,7 +16,11 @@
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.spark.api.spark_client import SparkClient
+<<<<<<< HEAD
 from kubeflow.spark.types.options import (
+=======
+from kubeflow.spark.options import (
+>>>>>>> upstream/main
     Annotations,
     Labels,
     Name,
