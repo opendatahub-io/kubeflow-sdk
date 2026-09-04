@@ -558,7 +558,7 @@ def test_train_only_script_includes_config_fix():
     assert "def _set_speculator_config_for_inference(" in script
 
     # Verify function is called after training
-    assert "Set config.json for inference" in script
+    assert "for inference compatibility" in script
     assert "target_hidden_size=verifier_config.hidden_size" in script
 
     # Verify it's called after trainer.run_training()
@@ -591,7 +591,7 @@ def test_online_script_includes_config_fix():
     assert "def _set_speculator_config_for_inference(" in script
 
     # Verify function is called after training
-    assert "Set config.json for inference" in script
+    assert "for inference compatibility" in script
     assert "target_hidden_size=verifier_config.hidden_size" in script
 
     # Verify it's called after trainer.run_training()

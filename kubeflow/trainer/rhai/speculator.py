@@ -768,7 +768,12 @@ def _set_speculator_config_for_inference(
 
     Eagle3 training uses 4 target layers (3 input + 1 for target distribution),
     but inference expects only 3 layers. This function removes the 4th layer
-    from config.json and sets target_hidden_size.
+    from eagle_aux_hidden_state_layer_ids in every config.json found under
+    save_path and sets target_hidden_size.
+
+    The speculators Trainer saves checkpoints into subdirectories (0, 1, 2,
+    checkpoint_best), so this function walks save_path to find all config.json
+    files.
 
     Only rank 0 performs the modification to avoid race conditions.
 
@@ -776,50 +781,60 @@ def _set_speculator_config_for_inference(
     code and injected into the training script that runs inside the container.
 
     Args:
-        save_path: Directory containing the saved model and config.json.
+        save_path: Root directory containing saved checkpoints.
         target_hidden_size: Hidden size of verifier model's target layers.
         rank: Distributed training rank (default: 0).
     """
     import json
+    import os
     from pathlib import Path
 
     if rank != 0:
         return
 
-    config_path = Path(save_path) / "config.json"
+    config_files = []
+    for dirpath, _, filenames in os.walk(save_path):
+        if "config.json" in filenames:
+            config_files.append(Path(dirpath) / "config.json")
 
-    if not config_path.exists():
+    if not config_files:
         print(
-            f"[Kubeflow] Warning: config.json not found at {config_path}. "
+            f"[Kubeflow] Warning: No config.json found under {save_path}. "
             "Skipping inference compatibility fix.",
             flush=True,
         )
         return
 
-    print("[Kubeflow] Setting config.json for inference compatibility", flush=True)
+    for config_path in config_files:
+        print(
+            f"[Kubeflow] Setting {config_path} for inference compatibility",
+            flush=True,
+        )
 
-    with open(config_path) as f:
-        config = json.load(f)
+        with open(config_path) as f:
+            config = json.load(f)
 
-    # Remove 4th layer (target distribution layer) - keep only first 3
-    if "target_layer_ids" in config and isinstance(config["target_layer_ids"], list):
-        original_layers = config["target_layer_ids"].copy()
-        if len(original_layers) == 4:
-            config["target_layer_ids"] = original_layers[:3]
-            print(
-                f"[Kubeflow] Reduced target_layer_ids from 4 to 3 layers: "
-                f"{original_layers} -> {config['target_layer_ids']}",
-                flush=True,
-            )
+        layer_key = "eagle_aux_hidden_state_layer_ids"
+        if layer_key in config and isinstance(config[layer_key], list):
+            original_layers = config[layer_key].copy()
+            if len(original_layers) == 4:
+                config[layer_key] = original_layers[:3]
+                print(
+                    f"[Kubeflow] Reduced {layer_key} from 4 to 3 layers: "
+                    f"{original_layers} -> {config[layer_key]}",
+                    flush=True,
+                )
 
-    # Set target_hidden_size for inference
-    config["target_hidden_size"] = target_hidden_size
-    print(f"[Kubeflow] Set target_hidden_size = {target_hidden_size}", flush=True)
+        config["target_hidden_size"] = target_hidden_size
 
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
 
-    print(f"[Kubeflow] Updated config.json at {config_path}", flush=True)
+    print(
+        f"[Kubeflow] Updated {len(config_files)} config.json file(s) "
+        f"(target_hidden_size={target_hidden_size})",
+        flush=True,
+    )
 
 
 def _regenerate_responses(
