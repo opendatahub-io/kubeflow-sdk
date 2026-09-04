@@ -168,6 +168,9 @@ class SpeculativeDecodingTrainer:
             server to become ready. The server may take longer for large models that
             require downloading or loading into GPU memory. Increase this value if your
             model is large. Must be at least 1 (default: 60).
+        target_hidden_size: Hidden size of the verifier model's target layers. When ``None``
+            (default), auto-detected from the verifier model config. Required for proper
+            inference configuration in the saved draft model's config.json.
         enable_progression_tracking: Enable progression tracking (default: True).
         metrics_port: HTTP server port for metrics endpoint (default: 28080).
         metrics_poll_interval_seconds: How often controller polls metrics (default: 30).
@@ -197,6 +200,7 @@ class SpeculativeDecodingTrainer:
     regenerate_responses: bool = False
     vllm_endpoint: str | None = None
     vllm_readiness_timeout_minutes: int = 60
+    target_hidden_size: int | None = None
 
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
@@ -755,6 +759,69 @@ def _setup_eagle3_model(
     return model, verifier_config
 
 
+def _set_speculator_config_for_inference(
+    save_path: str,
+    target_hidden_size: int,
+    rank: int = 0,
+) -> None:
+    """Set saved Eagle3 config.json for inference compatibility.
+
+    Eagle3 training uses 4 target layers (3 input + 1 for target distribution),
+    but inference expects only 3 layers. This function removes the 4th layer
+    from config.json and sets target_hidden_size.
+
+    Only rank 0 performs the modification to avoid race conditions.
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the training script that runs inside the container.
+
+    Args:
+        save_path: Directory containing the saved model and config.json.
+        target_hidden_size: Hidden size of verifier model's target layers.
+        rank: Distributed training rank (default: 0).
+    """
+    import json
+    from pathlib import Path
+
+    if rank != 0:
+        return
+
+    config_path = Path(save_path) / "config.json"
+
+    if not config_path.exists():
+        print(
+            f"[Kubeflow] Warning: config.json not found at {config_path}. "
+            "Skipping inference compatibility fix.",
+            flush=True,
+        )
+        return
+
+    print("[Kubeflow] Setting config.json for inference compatibility", flush=True)
+
+    with open(config_path) as f:
+        config = json.load(f)
+
+    # Remove 4th layer (target distribution layer) - keep only first 3
+    if "target_layer_ids" in config and isinstance(config["target_layer_ids"], list):
+        original_layers = config["target_layer_ids"].copy()
+        if len(original_layers) == 4:
+            config["target_layer_ids"] = original_layers[:3]
+            print(
+                f"[Kubeflow] Reduced target_layer_ids from 4 to 3 layers: "
+                f"{original_layers} -> {config['target_layer_ids']}",
+                flush=True,
+            )
+
+    # Set target_hidden_size for inference
+    config["target_hidden_size"] = target_hidden_size
+    print(f"[Kubeflow] Set target_hidden_size = {target_hidden_size}", flush=True)
+
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+    print(f"[Kubeflow] Updated config.json at {config_path}", flush=True)
+
+
 def _regenerate_responses(
     dataset_name: str,
     save_path: str,
@@ -1149,6 +1216,13 @@ def _speculator_train_only(
     trainer = Trainer(model, config, train_loader, val_loader)
     trainer.run_training()
 
+    # Set config.json for inference (remove 4th layer, set target_hidden_size)
+    _set_speculator_config_for_inference(
+        save_path=save_path,
+        target_hidden_size=verifier_config.hidden_size,
+        rank=rank,
+    )
+
     if "_set_phase" in globals():
         _set_phase("complete", 100)  # noqa: F821
 
@@ -1326,6 +1400,13 @@ def _speculator_online(
     trainer = Trainer(model, config, train_loader)
     trainer.run_training()
 
+    # Set config.json for inference (remove 4th layer, set target_hidden_size)
+    _set_speculator_config_for_inference(
+        save_path=output_dir,
+        target_hidden_size=verifier_config.hidden_size,
+        rank=rank,
+    )
+
     if "_set_phase" in globals():
         _set_phase("complete", 100)  # noqa: F821
 
@@ -1446,6 +1527,8 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     if needs_model_helper:
         script += textwrap.dedent(inspect.getsource(_setup_eagle3_model))
+        script += "\n\n"
+        script += textwrap.dedent(inspect.getsource(_set_speculator_config_for_inference))
         script += "\n\n"
 
     needs_regen = needs_data or needs_online

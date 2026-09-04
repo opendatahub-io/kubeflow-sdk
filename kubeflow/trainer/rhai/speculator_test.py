@@ -536,6 +536,95 @@ def test_training_script_distributed_batch_sampler():
     print("test execution complete")
 
 
+def test_train_only_script_includes_config_fix():
+    """Test that TRAIN_ONLY script includes _set_speculator_config_for_inference."""
+    print("Executing test: TRAIN_ONLY script includes config fix function")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.TRAIN_ONLY,
+        training_resources={"nvidia.com/gpu": 1},
+        hidden_states_path="pvc://test-pvc/hidden_states",
+        data_path="pvc://test-pvc/arrow_dataset",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
+
+    # Verify function definition is injected
+    assert "_set_speculator_config_for_inference" in script
+    assert "def _set_speculator_config_for_inference(" in script
+
+    # Verify function is called after training
+    assert "Set config.json for inference" in script
+    assert "target_hidden_size=verifier_config.hidden_size" in script
+
+    # Verify it's called after trainer.run_training()
+    assert "trainer.run_training()" in script
+    script_after_training = script.split("trainer.run_training()")[1]
+    assert "_set_speculator_config_for_inference(" in script_after_training
+
+    print("test execution complete")
+
+
+def test_online_script_includes_config_fix():
+    """Test that ONLINE script includes _set_speculator_config_for_inference."""
+    print("Executing test: ONLINE script includes config fix function")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="pvc://shared/model",
+        mode=SpeculatorMode.ONLINE,
+        dataset_name="magpie",
+        output_dir="pvc://shared/output",
+        training_resources={"nvidia.com/gpu": 1, "memory": "16Gi"},
+        vllm_resources={"nvidia.com/gpu": 1, "memory": "32Gi"},
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
+
+    # Verify function definition is injected
+    assert "_set_speculator_config_for_inference" in script
+    assert "def _set_speculator_config_for_inference(" in script
+
+    # Verify function is called after training
+    assert "Set config.json for inference" in script
+    assert "target_hidden_size=verifier_config.hidden_size" in script
+
+    # Verify it's called after trainer.run_training()
+    assert "trainer.run_training()" in script
+    script_after_training = script.split("trainer.run_training()")[1]
+    assert "_set_speculator_config_for_inference(" in script_after_training
+
+    print("test execution complete")
+
+
+def test_data_only_script_excludes_config_fix():
+    """Test that DATA_ONLY script does NOT include config fix (no training)."""
+    print("Executing test: DATA_ONLY script excludes config fix function")
+
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="meta-llama/Llama-3.1-8B-Instruct",
+        mode=SpeculatorMode.DATA_ONLY,
+        vllm_resources={"nvidia.com/gpu": 1},
+        training_resources={"nvidia.com/gpu": 1},
+        dataset_name="ultrachat",
+        output_dir="pvc://shared/datagen_output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    )
+
+    script = _render_speculator_training_script(trainer)
+    compile(script, "<test>", "exec")
+
+    # DATA_ONLY mode does data extraction only, no training, so no config fix
+    assert "_set_speculator_config_for_inference" not in script
+
+    print("test execution complete")
+
+
 @pytest.mark.parametrize(
     "test_case",
     [
