@@ -1086,6 +1086,7 @@ def _speculator_train_only(
     resume_from_checkpoint: bool = False,
     from_pretrained: str | None = None,
     target_layer_ids: list[int] | None = None,
+    target_hidden_size: int | None = None,
 ) -> None:
     """Training function injected into pods via inspect.getsource().
 
@@ -1232,9 +1233,12 @@ def _speculator_train_only(
     trainer.run_training()
 
     # Set config.json for inference (remove 4th layer, set target_hidden_size)
+    resolved_target_hidden_size = (
+        target_hidden_size if target_hidden_size is not None else verifier_config.hidden_size
+    )
     _set_speculator_config_for_inference(
         save_path=save_path,
-        target_hidden_size=verifier_config.hidden_size,
+        target_hidden_size=resolved_target_hidden_size,
         rank=rank,
     )
 
@@ -1268,6 +1272,7 @@ def _speculator_online(
     regenerate_responses: bool = False,
     from_pretrained: str | None = None,
     target_layer_ids: list[int] | None = None,
+    target_hidden_size: int | None = None,
     vllm_endpoint: str = "http://localhost:8234/v1",
     vllm_readiness_timeout_minutes: int = 60,
 ) -> None:
@@ -1416,9 +1421,12 @@ def _speculator_online(
     trainer.run_training()
 
     # Set config.json for inference (remove 4th layer, set target_hidden_size)
+    resolved_target_hidden_size = (
+        target_hidden_size if target_hidden_size is not None else verifier_config.hidden_size
+    )
     _set_speculator_config_for_inference(
         save_path=output_dir,
-        target_hidden_size=verifier_config.hidden_size,
+        target_hidden_size=resolved_target_hidden_size,
         rank=rank,
     )
 
@@ -1652,6 +1660,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    resume_from_checkpoint={cfg.resume_from_checkpoint!r},\n"
         f"    from_pretrained={cfg.from_pretrained!r},\n"
         f"    target_layer_ids={cfg.target_layer_ids!r},\n"
+        f"    target_hidden_size={trainer.target_hidden_size!r},\n"
         f")\n"
     )
 
@@ -1682,6 +1691,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    regenerate_responses={trainer.regenerate_responses!r},\n"
         f"    from_pretrained={cfg.from_pretrained!r},\n"
         f"    target_layer_ids={cfg.target_layer_ids!r},\n"
+        f"    target_hidden_size={trainer.target_hidden_size!r},\n"
         f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
         f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
         f")\n"
