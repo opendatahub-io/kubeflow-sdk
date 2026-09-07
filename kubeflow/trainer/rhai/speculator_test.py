@@ -1965,6 +1965,10 @@ def test_online_script_uses_on_missing_generate():
 
     assert 'on_missing="generate"' in script
     assert "DistributedSampler" in script
+    assert "split_ratio=-0.1" in script
+    assert "val_sampler = DistributedSampler(val_dataset" in script
+    assert "val_loader = DataLoader(" in script
+    assert "trainer = Trainer(model, config, train_loader, val_loader)" in script
     assert "data_generation_offline" not in script
 
     print("test execution complete")

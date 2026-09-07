@@ -1271,15 +1271,30 @@ def _speculator_online(
         split_ratio=0.9,
         hidden_states_dtype=hs_dtype,
     )
+    val_dataset = ArrowDataset(
+        max_len=max_len,
+        datapath=data_dir,
+        on_missing="generate",
+        vllm_endpoint=vllm_endpoint,
+        split_ratio=-0.1,
+        hidden_states_dtype=hs_dtype,
+    )
 
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     rank = int(os.environ.get("RANK", 0))
 
-    sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank)
     train_loader = DataLoader(
         train_dataset,
         batch_size=1,
-        sampler=sampler,
+        sampler=train_sampler,
+        collate_fn=collate_fn,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=1,
+        sampler=val_sampler,
         collate_fn=collate_fn,
     )
 
@@ -1323,7 +1338,7 @@ def _speculator_online(
     if "_set_phase" in globals():
         _set_phase("training", 15)  # noqa: F821
 
-    trainer = Trainer(model, config, train_loader)
+    trainer = Trainer(model, config, train_loader, val_loader)
     trainer.run_training()
 
     if "_set_phase" in globals():
