@@ -43,12 +43,13 @@ jobs:
           title: "chore(deps): Update requirements.txt"
           body: |
             Automated update of `requirements.txt` based on current `uv.lock`.
-
+            
             Generated with: `uv export --format requirements-txt`
-
+            
             Triggered by changes to `uv.lock` in commit ${{ github.sha }}
           branch: auto/update-requirements
           delete-branch: true
           labels: |
             automated-update
             dependencies
+
