@@ -1963,9 +1963,13 @@ def test_online_script_uses_on_missing_generate():
 
     script = _render_speculator_training_script(trainer)
 
-    assert 'on_missing="generate"' in script
+    val_dataset_start = script.index("    val_dataset = ArrowDataset(")
+    val_dataset_end = script.index("    world_size =", val_dataset_start)
+    val_dataset_block = script[val_dataset_start:val_dataset_end]
+
+    assert 'on_missing="generate"' in val_dataset_block
     assert "DistributedSampler" in script
-    assert "split_ratio=-0.1" in script
+    assert "split_ratio=-0.1" in val_dataset_block
     assert "val_sampler = DistributedSampler(val_dataset" in script
     assert "val_loader = DataLoader(" in script
     assert "trainer = Trainer(model, config, train_loader, val_loader)" in script
