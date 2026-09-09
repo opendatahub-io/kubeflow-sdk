@@ -26,6 +26,7 @@ from kubeflow.trainer.rhai.speculator import (
     SpeculatorMode,
     SpeculatorType,
     _render_speculator_training_script,
+    _update_draft_config_for_inference,
     apply_speculator_sidecar_overrides,
     get_trainer_cr_from_speculator_trainer,
 )
@@ -537,7 +538,7 @@ def test_training_script_distributed_batch_sampler():
 
 
 def test_train_only_script_includes_config_fix():
-    """Test that TRAIN_ONLY script includes _set_speculator_config_for_inference."""
+    """Test that TRAIN_ONLY script includes the draft config updater."""
     print("Executing test: TRAIN_ONLY script includes config fix function")
 
     trainer = SpeculativeDecodingTrainer(
@@ -554,51 +555,52 @@ def test_train_only_script_includes_config_fix():
     compile(script, "<test>", "exec")
 
     # Verify function definition is injected
-    assert "_set_speculator_config_for_inference" in script
-    assert "def _set_speculator_config_for_inference(" in script
+    assert "_update_draft_config_for_inference" in script
+    assert "def _update_draft_config_for_inference(" in script
 
     # Verify function is called after training with fallback logic
-    assert "for inference compatibility" in script
-    assert "target_hidden_size if target_hidden_size is not None" in script
-    assert "target_hidden_size=None" in script
+    assert "inference-compatible" in script
+    assert "target_hidden_size=verifier_config.hidden_size" in script
 
     # Verify it's called after trainer.run_training()
     assert "trainer.run_training()" in script
     script_after_training = script.split("trainer.run_training()")[1]
-    assert "_set_speculator_config_for_inference(" in script_after_training
+    assert "_update_draft_config_for_inference(" in script_after_training
 
     print("test execution complete")
 
 
-def test_train_only_script_uses_target_hidden_size_override():
-    """Test that TRAIN_ONLY script passes target_hidden_size override to config fix."""
-    print("Executing test: TRAIN_ONLY script uses target_hidden_size override")
+def test_update_draft_config_for_inference(tmp_path):
+    """Test that only unpatched Eagle3 draft configs are updated atomically."""
+    import json
 
-    trainer = SpeculativeDecodingTrainer(
-        verifier_model="Qwen/Qwen3-8B",
-        mode=SpeculatorMode.TRAIN_ONLY,
-        training_resources={"nvidia.com/gpu": 1},
-        hidden_states_path="pvc://test-pvc/hidden_states",
-        data_path="pvc://test-pvc/arrow_dataset",
-        output_dir="pvc://test-pvc/output",
-        target_hidden_size=2048,
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    draft_path = tmp_path / "0"
+    draft_path.mkdir()
+    draft_config_path = draft_path / "config.json"
+    draft_config_path.write_text(json.dumps({"eagle_aux_hidden_state_layer_ids": [2, 16, 29, 31]}))
+    verifier_config_path = tmp_path / "verifier" / "config.json"
+    verifier_config_path.parent.mkdir()
+    verifier_config_path.write_text(json.dumps({"hidden_size": 4096}))
+    patched_config_path = tmp_path / "checkpoint_best" / "config.json"
+    patched_config_path.parent.mkdir()
+    patched_config_path.write_text(
+        json.dumps({"eagle_aux_hidden_state_layer_ids": [2, 16, 29], "other": True})
     )
 
-    script = _render_speculator_training_script(trainer)
-    compile(script, "<test>", "exec")
+    _update_draft_config_for_inference(str(tmp_path), target_hidden_size=1024)
 
-    # Verify override value is passed in the function call
-    assert "target_hidden_size=2048" in script
-
-    # Verify fallback logic is in function definition
-    assert "target_hidden_size if target_hidden_size is not None" in script
-
-    print("test execution complete")
+    draft_config = json.loads(draft_config_path.read_text())
+    assert draft_config["eagle_aux_hidden_state_layer_ids"] == [2, 16, 29]
+    assert draft_config["target_hidden_size"] == 1024
+    assert json.loads(verifier_config_path.read_text()) == {"hidden_size": 4096}
+    assert json.loads(patched_config_path.read_text()) == {
+        "eagle_aux_hidden_state_layer_ids": [2, 16, 29],
+        "other": True,
+    }
 
 
 def test_online_script_includes_config_fix():
-    """Test that ONLINE script includes _set_speculator_config_for_inference."""
+    """Test that ONLINE script includes the draft config updater."""
     print("Executing test: ONLINE script includes config fix function")
 
     trainer = SpeculativeDecodingTrainer(
@@ -615,18 +617,17 @@ def test_online_script_includes_config_fix():
     compile(script, "<test>", "exec")
 
     # Verify function definition is injected
-    assert "_set_speculator_config_for_inference" in script
-    assert "def _set_speculator_config_for_inference(" in script
+    assert "_update_draft_config_for_inference" in script
+    assert "def _update_draft_config_for_inference(" in script
 
     # Verify function is called after training with fallback logic
-    assert "for inference compatibility" in script
-    assert "target_hidden_size if target_hidden_size is not None" in script
-    assert "target_hidden_size=None" in script
+    assert "inference-compatible" in script
+    assert "target_hidden_size=verifier_config.hidden_size" in script
 
     # Verify it's called after trainer.run_training()
     assert "trainer.run_training()" in script
     script_after_training = script.split("trainer.run_training()")[1]
-    assert "_set_speculator_config_for_inference(" in script_after_training
+    assert "_update_draft_config_for_inference(" in script_after_training
 
     print("test execution complete")
 
@@ -649,7 +650,7 @@ def test_data_only_script_excludes_config_fix():
     compile(script, "<test>", "exec")
 
     # DATA_ONLY mode does data extraction only, no training, so no config fix
-    assert "_set_speculator_config_for_inference" not in script
+    assert "_update_draft_config_for_inference" not in script
 
     print("test execution complete")
 
