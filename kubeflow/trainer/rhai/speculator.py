@@ -197,7 +197,6 @@ class SpeculativeDecodingTrainer:
     regenerate_responses: bool = False
     vllm_endpoint: str | None = None
     vllm_readiness_timeout_minutes: int = 60
-
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
@@ -755,6 +754,68 @@ def _setup_eagle3_model(
     return model, verifier_config
 
 
+def _update_draft_config_for_inference(
+    save_path: str,
+    target_hidden_size: int,
+    rank: int = 0,
+) -> None:
+    """Make saved Eagle3 draft configs inference-compatible (rank 0 only).
+
+    Training uses 4 target layers (3 input + 1 for the target distribution),
+    but inference expects 3. For every draft config.json under save_path, trim
+    the extraction-only 4th layer and set target_hidden_size. Configs already
+    at 3 layers are skipped, making the update idempotent.
+
+    The speculators Trainer saves checkpoints into subdirectories (0, 1, 2,
+    checkpoint_best), so this function searches save_path recursively.
+
+    Only rank 0 performs the modification to avoid race conditions.
+
+    This function is NOT called directly in the SDK. It is extracted as source
+    code and injected into the training script that runs inside the container.
+
+    Args:
+        save_path: Root directory containing saved checkpoints.
+        target_hidden_size: Hidden size of verifier model's target layers.
+        rank: Distributed training rank (default: 0).
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    if rank != 0:
+        return
+
+    layer_key = "eagle_aux_hidden_state_layer_ids"
+    patched = 0
+    for config_path in Path(save_path).rglob("config.json"):
+        with open(config_path) as f:
+            config = json.load(f)
+
+        layers = config.get(layer_key)
+        if not (isinstance(layers, list) and len(layers) == 4):
+            continue
+
+        config[layer_key] = layers[:3]
+        config["target_hidden_size"] = target_hidden_size
+        tmp_path = config_path.with_suffix(".json.tmp")
+        with open(tmp_path, "w") as f:
+            json.dump(config, f, indent=2)
+        os.replace(tmp_path, config_path)
+        patched += 1
+        print(
+            f"[Kubeflow] Updated {config_path}: {layer_key} {layers} -> "
+            f"{layers[:3]}, target_hidden_size={target_hidden_size}",
+            flush=True,
+        )
+
+    print(
+        f"[Kubeflow] Updated {patched} Eagle3 draft config.json file(s) "
+        f"(target_hidden_size={target_hidden_size})",
+        flush=True,
+    )
+
+
 def _regenerate_responses(
     dataset_name: str,
     save_path: str,
@@ -1149,6 +1210,13 @@ def _speculator_train_only(
     trainer = Trainer(model, config, train_loader, val_loader)
     trainer.run_training()
 
+    # Set config.json for inference (remove 4th layer, set target_hidden_size)
+    _update_draft_config_for_inference(
+        save_path=save_path,
+        target_hidden_size=verifier_config.hidden_size,
+        rank=rank,
+    )
+
     if "_set_phase" in globals():
         _set_phase("complete", 100)  # noqa: F821
 
@@ -1346,6 +1414,13 @@ def _speculator_online(
     trainer = Trainer(model, config, train_loader, val_loader)
     trainer.run_training()
 
+    # Set config.json for inference (remove 4th layer, set target_hidden_size)
+    _update_draft_config_for_inference(
+        save_path=output_dir,
+        target_hidden_size=verifier_config.hidden_size,
+        rank=rank,
+    )
+
     if "_set_phase" in globals():
         _set_phase("complete", 100)  # noqa: F821
 
@@ -1466,6 +1541,8 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     if needs_model_helper:
         script += textwrap.dedent(inspect.getsource(_setup_eagle3_model))
+        script += "\n\n"
+        script += textwrap.dedent(inspect.getsource(_update_draft_config_for_inference))
         script += "\n\n"
 
     needs_regen = needs_data or needs_online
