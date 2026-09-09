@@ -1962,9 +1962,22 @@ def test_online_script_uses_on_missing_generate():
     )
 
     script = _render_speculator_training_script(trainer)
+    compile(script, "", "exec")
 
-    assert 'on_missing="generate"' in script
+    val_dataset_start = script.index("    val_dataset = ArrowDataset(")
+    val_dataset_end = script.index("    world_size =", val_dataset_start)
+    val_dataset_block = script[val_dataset_start:val_dataset_end]
+    val_sampler_start = script.index("    val_sampler = DistributedSampler(")
+    val_sampler_end = script.index("    train_loader =", val_sampler_start)
+    val_sampler_block = script[val_sampler_start:val_sampler_end]
+
+    assert 'on_missing="generate"' in val_dataset_block
     assert "DistributedSampler" in script
+    assert "split_ratio=-0.1" in val_dataset_block
+    assert "val_sampler = DistributedSampler(" in val_sampler_block
+    assert "shuffle=False" in val_sampler_block
+    assert "val_loader = DataLoader(" in script
+    assert "trainer = Trainer(model, config, train_loader, val_loader)" in script
     assert "data_generation_offline" not in script
 
     print("test execution complete")
