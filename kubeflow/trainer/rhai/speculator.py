@@ -1284,7 +1284,12 @@ def _speculator_online(
     rank = int(os.environ.get("RANK", 0))
 
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-    val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank)
+    val_sampler = DistributedSampler(
+        val_dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False,
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=1,
