@@ -24,9 +24,12 @@ API_VERSION = f"{GROUP}/{VERSION}"
 # The plural for the ClusterTrainingRuntime.
 CLUSTER_TRAINING_RUNTIME_PLURAL = "clustertrainingruntimes"
 
+<<<<<<< HEAD
 # The Kind name for the TrainingRuntime.
 TRAINING_RUNTIME_KIND = "TrainingRuntime"
 
+=======
+>>>>>>> upstream/main
 # The plural for the TrainingRuntime.
 TRAINING_RUNTIME_PLURAL = "trainingruntimes"
 

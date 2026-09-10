@@ -37,6 +37,7 @@ from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
 import kubeflow.trainer.backends.kubernetes.utils as utils
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.options import (
+    ActiveDeadlineSeconds,
     Annotations,
     JobSetSpecPatch,
     JobSetTemplatePatch,
@@ -48,11 +49,14 @@ from kubeflow.trainer.options import (
     ReplicatedJobPatch,
     RuntimePatch,
     TrainingRuntimeSpecPatch,
+<<<<<<< HEAD
 )
 from kubeflow.trainer.rhai import (
     TrainingHubAlgorithms,
     TrainingHubTrainer,
     traininghub as rhai_traininghub,
+=======
+>>>>>>> upstream/main
 )
 from kubeflow.trainer.test.common import (
     DEFAULT_NAMESPACE,
@@ -369,6 +373,10 @@ def get_train_job(
     annotations: dict[str, str] | None = None,
     runtime_patches: list[models.TrainerV1alpha1RuntimePatch] | None = None,
     runtime_kind: types.RuntimeKind = types.RuntimeKind.TRAINING_RUNTIME,
+<<<<<<< HEAD
+=======
+    active_deadline_seconds: int | None = None,
+>>>>>>> upstream/main
 ) -> models.TrainerV1alpha1TrainJob:
     """
     Create a mock TrainJob object with optional trainer configurations.
@@ -388,6 +396,10 @@ def get_train_job(
             ),
             trainer=train_job_trainer,
             runtimePatches=runtime_patches,
+<<<<<<< HEAD
+=======
+            activeDeadlineSeconds=active_deadline_seconds,
+>>>>>>> upstream/main
         ),
     )
 
@@ -1165,10 +1177,18 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
     """Test KubernetesBackend.get_runtime_packages with basic success path."""
     print("Executing test:", test_case.name)
 
-    try:
-        kubernetes_backend.get_runtime_packages(**test_case.config)
-    except Exception as e:
-        assert type(e) is test_case.expected_error
+    if test_case.expected_status == SUCCESS:
+        # get_runtime_packages runs a TrainJob and streams its logs; it does not
+        # return a value, so a successful call completes without raising.
+        assert kubernetes_backend.get_runtime_packages(**test_case.config) is None
+    else:
+        with pytest.raises(test_case.expected_error):
+            kubernetes_backend.get_runtime_packages(**test_case.config)
+
+    if test_case.expected_status == SUCCESS:
+        kubernetes_backend.custom_api.delete_namespaced_custom_object.assert_called_once()
+    else:
+        kubernetes_backend.custom_api.delete_namespaced_custom_object.assert_not_called()
 
     if test_case.expected_status == SUCCESS:
         kubernetes_backend.custom_api.delete_namespaced_custom_object.assert_called_once()
@@ -1476,6 +1496,39 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
             ),
         ),
         TestCase(
+<<<<<<< HEAD
+=======
+            name="train with active deadline seconds",
+            expected_status=SUCCESS,
+            config={
+                "options": [
+                    ActiveDeadlineSeconds(seconds=3600),
+                ],
+            },
+            expected_output=get_train_job(
+                runtime_name=TORCH_RUNTIME,
+                train_job_name=BASIC_TRAIN_JOB_NAME,
+                active_deadline_seconds=3600,
+            ),
+        ),
+        TestCase(
+            name="train with active deadline seconds and labels",
+            expected_status=SUCCESS,
+            config={
+                "options": [
+                    ActiveDeadlineSeconds(seconds=600),
+                    Labels({"team": "ml-platform"}),
+                ],
+            },
+            expected_output=get_train_job(
+                runtime_name=TORCH_RUNTIME,
+                train_job_name=BASIC_TRAIN_JOB_NAME,
+                active_deadline_seconds=600,
+                labels={"team": "ml-platform"},
+            ),
+        ),
+        TestCase(
+>>>>>>> upstream/main
             name="train with metadata labels and runtime patches",
             expected_status=SUCCESS,
             config={

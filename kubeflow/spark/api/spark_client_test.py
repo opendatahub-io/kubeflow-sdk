@@ -20,6 +20,10 @@ import pytest
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.spark.api.spark_client import SparkClient
+<<<<<<< HEAD
+=======
+from kubeflow.spark.options import Labels
+>>>>>>> upstream/main
 from kubeflow.spark.test.common import FAILED, SUCCESS, TestCase
 from kubeflow.spark.types.types import (
     FileJob,
@@ -99,6 +103,7 @@ def test_create_and_connect(test_case: TestCase):
         ),
         (
             FileJob(file_source="s3://bucket/job.py"),
+<<<<<<< HEAD
             {"spark.executor.memory": "4g"},
             None,
             None,
@@ -110,6 +115,12 @@ def test_create_and_connect(test_case: TestCase):
             [object()],
             None,
             NotImplementedError,
+=======
+            [],
+            None,
+            ValueError("spark_conf must be a dictionary."),
+            ValueError,
+>>>>>>> upstream/main
         ),
     ],
 )
@@ -139,6 +150,7 @@ def test_submit_job_validation(
 
 
 @pytest.mark.parametrize(
+<<<<<<< HEAD
     "job",
     [
         FileJob(
@@ -150,6 +162,25 @@ def test_submit_job_validation(
     ],
 )
 def test_submit_job_success(job):
+=======
+    "job,options",
+    [
+        (
+            FileJob(file_source="s3://bucket/job.py"),
+            None,
+        ),
+        (
+            FileJob(file_source="s3://bucket/job.py"),
+            [Labels({"team": "ml"})],
+        ),
+        (
+            FuncJob(func=lambda: None),
+            None,
+        ),
+    ],
+)
+def test_submit_job_success(job, options):
+>>>>>>> upstream/main
     """Test successful submit_job."""
 
     with patch("kubeflow.spark.api.spark_client.KubernetesBackend") as mock_backend:
@@ -162,7 +193,11 @@ def test_submit_job_success(job):
 
         client = SparkClient()
 
+<<<<<<< HEAD
         name = client.submit_job(job=job)
+=======
+        name = client.submit_job(job=job, options=options)
+>>>>>>> upstream/main
 
         assert name == "spark-job-123"
 
@@ -170,4 +205,9 @@ def test_submit_job_success(job):
             job=job,
             num_executors=None,
             resources_per_executor=None,
+<<<<<<< HEAD
+=======
+            spark_conf=None,
+            options=options,
+>>>>>>> upstream/main
         )
