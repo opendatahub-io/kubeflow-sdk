@@ -251,8 +251,8 @@ class SpeculativeDecodingTrainer:
     lr: float = 1e-4
     total_seq_len: int = 2048
     draft_vocab_size: int | None = None
-    vllm_resources: dict | None = None
-    vllm_gpu_memory_utilization: float = 0.9
+    vllm_resources: dict | None = SpeculatorVLLMConfig.resources
+    vllm_gpu_memory_utilization: float = SpeculatorVLLMConfig.gpu_memory_utilization
     config: SpeculatorConfig | None = None
     packages_to_install: list[str] | None = None
     pip_index_urls: list[str] = field(
@@ -261,8 +261,8 @@ class SpeculativeDecodingTrainer:
     env: dict[str, str] | None = None
     output_dir: str | None = None
     regenerate_responses: bool = False
-    vllm_endpoint: str | None = None
-    vllm_readiness_timeout_minutes: int = 60
+    vllm_endpoint: str | None = SpeculatorVLLMConfig.endpoint
+    vllm_readiness_timeout_minutes: int = SpeculatorVLLMConfig.readiness_timeout_minutes
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
