@@ -73,10 +73,10 @@ Utilities
 RHAI Speculator Training
 ------------------------
 
-.. autoclass:: kubeflow.trainer.rhai.SpeculatorVLLMConfig
+.. autoclass:: kubeflow.trainer.rhai.SpeculativeDecodingTrainer
    :members:
    :show-inheritance:
 
-.. autoclass:: kubeflow.trainer.rhai.SpeculativeDecodingTrainer
+.. autoclass:: kubeflow.trainer.rhai.SpeculatorVLLMConfig
    :members:
    :show-inheritance:
