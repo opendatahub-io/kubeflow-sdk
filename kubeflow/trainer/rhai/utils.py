@@ -536,7 +536,7 @@ def setup_rhai_trainer_storage(
             speculator.SpeculatorMode.DATA_ONLY,
             speculator.SpeculatorMode.ONLINE,
         )
-        if trainer.mode == speculator.SpeculatorMode.DATA_ONLY and trainer.vllm_endpoint:
+        if trainer.mode == speculator.SpeculatorMode.DATA_ONLY and trainer.vllm_config.endpoint:
             _needs_sidecar = False
         if _needs_sidecar:
             runtime_patches = speculator.apply_speculator_sidecar_overrides(

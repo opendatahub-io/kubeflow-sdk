@@ -71,6 +71,69 @@ _SUPPORTED_DTYPES = {"bfloat16", "float16", "float32"}
 
 
 @dataclass
+class SpeculatorVLLMConfig:
+    """Configuration for the vLLM server used by speculator training.
+
+    Args:
+        resources: Resources for the managed vLLM sidecar container. When ``None``,
+            no sidecar resources are configured.
+        gpu_memory_utilization: Fraction of GPU memory available to vLLM (default: 0.9).
+        endpoint: URL of a self-managed vLLM endpoint for hidden-state extraction.
+        readiness_timeout_minutes: Maximum time in minutes to wait for vLLM readiness
+            (default: 60).
+    """
+
+    resources: dict | None = None
+    gpu_memory_utilization: float = 0.9
+    endpoint: str | None = None
+    readiness_timeout_minutes: int = 60
+
+    def __post_init__(self) -> None:
+        """Validate vLLM-specific configuration."""
+        if self.resources is not None and (
+            not isinstance(self.resources, dict) or not self.resources
+        ):
+            raise ValueError(
+                "SpeculatorVLLMConfig.resources must be a non-empty dict when provided. "
+                "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
+            )
+
+        if self.resources is not None:
+            try:
+                vllm_gpus = int(self.resources.get("nvidia.com/gpu", 1))
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "SpeculatorVLLMConfig.resources['nvidia.com/gpu'] must be an integer."
+                ) from error
+            if vllm_gpus != 1:
+                raise ValueError(
+                    f"vLLM sidecar currently supports only 1 GPU, got {vllm_gpus}. "
+                    "Multi-GPU vLLM sidecar is not yet supported."
+                )
+
+        if (
+            not isinstance(self.gpu_memory_utilization, (int, float))
+            or self.gpu_memory_utilization <= 0
+            or self.gpu_memory_utilization > 1.0
+        ):
+            raise ValueError(
+                "SpeculatorVLLMConfig.gpu_memory_utilization must be in range (0, 1.0], "
+                f"got {self.gpu_memory_utilization!r}."
+            )
+
+        if not isinstance(self.readiness_timeout_minutes, int):
+            raise ValueError(
+                "SpeculatorVLLMConfig.readiness_timeout_minutes must be an integer, "
+                f"got {type(self.readiness_timeout_minutes).__name__}"
+            )
+        if self.readiness_timeout_minutes < 1:
+            raise ValueError(
+                "SpeculatorVLLMConfig.readiness_timeout_minutes must be at least 1, "
+                f"got {self.readiness_timeout_minutes}"
+            )
+
+
+@dataclass
 class SpeculatorConfig:
     """Advanced configuration for speculator training.
 
@@ -168,6 +231,9 @@ class SpeculativeDecodingTrainer:
             server to become ready. The server may take longer for large models that
             require downloading or loading into GPU memory. Increase this value if your
             model is large. Must be at least 1 (default: 60).
+        vllm_config: Grouped vLLM configuration. When provided, its values are used as
+            the canonical vLLM settings. The individual ``vllm_*`` arguments remain
+            available for backward compatibility.
         enable_progression_tracking: Enable progression tracking (default: True).
         metrics_port: HTTP server port for metrics endpoint (default: 28080).
         metrics_poll_interval_seconds: How often controller polls metrics (default: 30).
@@ -185,8 +251,8 @@ class SpeculativeDecodingTrainer:
     lr: float = 1e-4
     total_seq_len: int = 2048
     draft_vocab_size: int | None = None
-    vllm_resources: dict | None = None
-    vllm_gpu_memory_utilization: float = 0.9
+    vllm_resources: dict | None = SpeculatorVLLMConfig.resources
+    vllm_gpu_memory_utilization: float = SpeculatorVLLMConfig.gpu_memory_utilization
     config: SpeculatorConfig | None = None
     packages_to_install: list[str] | None = None
     pip_index_urls: list[str] = field(
@@ -195,14 +261,28 @@ class SpeculativeDecodingTrainer:
     env: dict[str, str] | None = None
     output_dir: str | None = None
     regenerate_responses: bool = False
-    vllm_endpoint: str | None = None
-    vllm_readiness_timeout_minutes: int = 60
+    vllm_endpoint: str | None = SpeculatorVLLMConfig.endpoint
+    vllm_readiness_timeout_minutes: int = SpeculatorVLLMConfig.readiness_timeout_minutes
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
+    vllm_config: SpeculatorVLLMConfig | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
+        if self.vllm_config is None:
+            self.vllm_config = SpeculatorVLLMConfig(
+                resources=self.vllm_resources,
+                gpu_memory_utilization=self.vllm_gpu_memory_utilization,
+                endpoint=self.vllm_endpoint,
+                readiness_timeout_minutes=self.vllm_readiness_timeout_minutes,
+            )
+        else:
+            self.vllm_resources = self.vllm_config.resources
+            self.vllm_gpu_memory_utilization = self.vllm_config.gpu_memory_utilization
+            self.vllm_endpoint = self.vllm_config.endpoint
+            self.vllm_readiness_timeout_minutes = self.vllm_config.readiness_timeout_minutes
+
         supported_modes = {
             SpeculatorMode.TRAIN_ONLY,
             SpeculatorMode.DATA_ONLY,
@@ -221,7 +301,7 @@ class SpeculativeDecodingTrainer:
                 f"Currently only '{SpeculatorType.EAGLE3.value}' is supported."
             )
 
-        _uses_external_vllm = self.vllm_endpoint is not None
+        _uses_external_vllm = self.vllm_config.endpoint is not None
 
         if (
             self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
@@ -321,14 +401,14 @@ class SpeculativeDecodingTrainer:
                     "See https://docs.vllm.ai/projects/speculators/en/latest/cli/launch_vllm/#basic-usage"
                 )
 
-        if self.mode == SpeculatorMode.OFFLINE and not self.vllm_endpoint:
+        if self.mode == SpeculatorMode.OFFLINE and not self.vllm_config.endpoint:
             raise ValueError(
                 "vllm_endpoint is required for OFFLINE mode. "
                 "Provide the URL of your self-managed vLLM endpoint "
                 "(e.g. 'http://vllm-svc:8000/v1')."
             )
 
-        if self.vllm_endpoint is not None and self.mode not in (
+        if self.vllm_config.endpoint is not None and self.mode not in (
             SpeculatorMode.OFFLINE,
             SpeculatorMode.DATA_ONLY,
         ):
@@ -340,7 +420,7 @@ class SpeculativeDecodingTrainer:
         if (
             self.mode == SpeculatorMode.DATA_ONLY
             and _uses_external_vllm
-            and self.vllm_resources is not None
+            and self.vllm_config.resources is not None
         ):
             raise ValueError(
                 "vllm_resources cannot be used with vllm_endpoint in DATA_ONLY mode. "
@@ -404,9 +484,7 @@ class SpeculativeDecodingTrainer:
         _needs_sidecar = self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE)
         if self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm:
             _needs_sidecar = False
-        if _needs_sidecar and (
-            not isinstance(self.vllm_resources, dict) or not self.vllm_resources
-        ):
+        if _needs_sidecar and not self.vllm_config.resources:
             raise ValueError(
                 f"vllm_resources is required for {self.mode.value} mode. "
                 "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
@@ -418,32 +496,6 @@ class SpeculativeDecodingTrainer:
             raise ValueError(
                 "training_resources must be a non-empty dict when provided. "
                 "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
-            )
-
-        if self.vllm_resources is not None and (
-            not isinstance(self.vllm_resources, dict) or not self.vllm_resources
-        ):
-            raise ValueError(
-                "vllm_resources must be a non-empty dict when provided. "
-                "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
-            )
-
-        if self.vllm_resources is not None:
-            vllm_gpus = int(self.vllm_resources.get("nvidia.com/gpu", 1))
-            if vllm_gpus != 1:
-                raise ValueError(
-                    f"vLLM sidecar currently supports only 1 GPU, got {vllm_gpus}. "
-                    "Multi-GPU vLLM sidecar is not yet supported."
-                )
-
-        if (
-            not isinstance(self.vllm_gpu_memory_utilization, (int, float))
-            or self.vllm_gpu_memory_utilization <= 0
-            or self.vllm_gpu_memory_utilization > 1.0
-        ):
-            raise ValueError(
-                f"vllm_gpu_memory_utilization must be in range (0, 1.0], "
-                f"got {self.vllm_gpu_memory_utilization!r}."
             )
 
         _valid_schedulers = ("linear", "cosine", "none")
@@ -464,17 +516,6 @@ class SpeculativeDecodingTrainer:
                 "config.from_pretrained is not yet supported. "
                 "Eagle3DraftModel.from_training_args() does not implement checkpoint "
                 "resumption from a pretrained draft model."
-            )
-
-        if not isinstance(self.vllm_readiness_timeout_minutes, int):
-            raise ValueError(
-                f"vllm_readiness_timeout_minutes must be an integer, "
-                f"got {type(self.vllm_readiness_timeout_minutes).__name__}"
-            )
-        if self.vllm_readiness_timeout_minutes < 1:
-            raise ValueError(
-                f"vllm_readiness_timeout_minutes must be at least 1, "
-                f"got {self.vllm_readiness_timeout_minutes}"
             )
 
         if not isinstance(self.metrics_port, int):
@@ -1599,8 +1640,10 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     from kubeflow.trainer.rhai.constants import VLLM_SIDECAR_ENDPOINT
 
-    _uses_external_vllm = trainer.vllm_endpoint is not None
-    data_vllm_endpoint = trainer.vllm_endpoint if _uses_external_vllm else VLLM_SIDECAR_ENDPOINT
+    _uses_external_vllm = trainer.vllm_config.endpoint is not None
+    data_vllm_endpoint = (
+        trainer.vllm_config.endpoint if _uses_external_vllm else VLLM_SIDECAR_ENDPOINT
+    )
 
     offline_hs_path = resolved_hidden_states if _uses_external_vllm else None
 
@@ -1621,7 +1664,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    concurrency={cfg.datagen_concurrency!r},\n"
         f"    regenerate_responses={trainer.regenerate_responses!r},\n"
         f"    hidden_states_path={offline_hs_path!r},\n"
-        f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
+        f"    vllm_readiness_timeout_minutes={trainer.vllm_config.readiness_timeout_minutes!r},\n"
         f")\n"
     )
 
@@ -1682,7 +1725,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    from_pretrained={cfg.from_pretrained!r},\n"
         f"    target_layer_ids={cfg.target_layer_ids!r},\n"
         f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
-        f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
+        f"    vllm_readiness_timeout_minutes={trainer.vllm_config.readiness_timeout_minutes!r},\n"
         f")\n"
     )
 
@@ -1800,14 +1843,14 @@ def apply_speculator_sidecar_overrides(
 
     layer_ids_str = ",".join(str(lid) for lid in cfg.target_layer_ids)
 
-    vllm_gpu_count = int((trainer.vllm_resources or {}).get("nvidia.com/gpu", 1))
+    vllm_gpu_count = int((trainer.vllm_config.resources or {}).get("nvidia.com/gpu", 1))
 
     sidecar_env = [
         {"name": "SPECULATOR_VERIFIER_MODEL", "value": resolved_verifier},
         {"name": "SPECULATOR_HS_PATH", "value": hs_path},
         {
             "name": "SPECULATOR_GPU_MEM_UTIL",
-            "value": str(trainer.vllm_gpu_memory_utilization),
+            "value": str(trainer.vllm_config.gpu_memory_utilization),
         },
         {"name": "SPECULATOR_VLLM_GPU_COUNT", "value": str(vllm_gpu_count)},
         {"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str},
@@ -1820,8 +1863,8 @@ def apply_speculator_sidecar_overrides(
         "name": VLLM_SIDECAR_CONTAINER_NAME,
         "env": sidecar_env,
     }
-    if trainer.vllm_resources:
-        sidecar_resources = {k: str(v) for k, v in trainer.vllm_resources.items()}
+    if trainer.vllm_config.resources:
+        sidecar_resources = {k: str(v) for k, v in trainer.vllm_config.resources.items()}
         sidecar_override["resources"] = {
             "limits": sidecar_resources,
             "requests": sidecar_resources,

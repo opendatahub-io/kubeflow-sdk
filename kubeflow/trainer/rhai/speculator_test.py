@@ -25,6 +25,7 @@ from kubeflow.trainer.rhai.speculator import (
     SpeculatorConfig,
     SpeculatorMode,
     SpeculatorType,
+    SpeculatorVLLMConfig,
     _render_speculator_training_script,
     _update_draft_config_for_inference,
     apply_speculator_sidecar_overrides,
@@ -32,6 +33,64 @@ from kubeflow.trainer.rhai.speculator import (
 )
 from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
 from kubeflow.trainer.types import types
+
+
+def test_vllm_config_defaults():
+    """Test SpeculatorVLLMConfig default values."""
+    config = SpeculatorVLLMConfig()
+
+    assert config.resources is None
+    assert config.gpu_memory_utilization == 0.9
+    assert config.endpoint is None
+    assert config.readiness_timeout_minutes == 60
+
+
+@pytest.mark.parametrize("gpu_memory_utilization", [0, -0.1, 1.1, "0.9"])
+def test_vllm_config_rejects_invalid_gpu_memory_utilization(gpu_memory_utilization):
+    """Test SpeculatorVLLMConfig rejects utilization outside the supported range."""
+    with pytest.raises(ValueError, match="gpu_memory_utilization"):
+        SpeculatorVLLMConfig(gpu_memory_utilization=gpu_memory_utilization)
+
+
+@pytest.mark.parametrize("readiness_timeout_minutes", [0, -1, 1.5, "60"])
+def test_vllm_config_rejects_invalid_readiness_timeout(readiness_timeout_minutes):
+    """Test SpeculatorVLLMConfig rejects invalid readiness timeouts."""
+    with pytest.raises(ValueError, match="readiness_timeout_minutes"):
+        SpeculatorVLLMConfig(readiness_timeout_minutes=readiness_timeout_minutes)
+
+
+def test_vllm_config_rejects_invalid_resources():
+    """Test SpeculatorVLLMConfig validates sidecar resources."""
+    with pytest.raises(ValueError, match="non-empty dict"):
+        SpeculatorVLLMConfig(resources={})
+    with pytest.raises(ValueError, match="only 1 GPU"):
+        SpeculatorVLLMConfig(resources={"nvidia.com/gpu": 2})
+
+
+def test_speculator_trainer_uses_vllm_config():
+    """Test grouped vLLM settings are normalized onto the trainer."""
+    vllm_config = SpeculatorVLLMConfig(
+        resources={"nvidia.com/gpu": 1, "memory": "96Gi"},
+        gpu_memory_utilization=0.85,
+        readiness_timeout_minutes=120,
+    )
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.DATA_ONLY,
+        vllm_config=vllm_config,
+        training_resources={"nvidia.com/gpu": 1},
+        dataset_name="ultrachat",
+        output_dir="pvc://test-pvc/output",
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    )
+
+    assert trainer.vllm_config is vllm_config
+    assert trainer.vllm_resources == vllm_config.resources
+    assert trainer.vllm_gpu_memory_utilization == 0.85
+    assert trainer.vllm_readiness_timeout_minutes == 120
+
+    script = _render_speculator_training_script(trainer)
+    assert "vllm_readiness_timeout_minutes=120" in script
 
 
 def test_speculator_trainer_initialization():
