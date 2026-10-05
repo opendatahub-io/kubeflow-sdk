@@ -14,6 +14,9 @@
 
 """Tests for SpeculativeDecodingTrainer and CRD conversion."""
 
+import json
+
+from kubeflow_trainer_api import models
 import pytest
 
 from kubeflow.trainer.constants import constants
@@ -1627,6 +1630,8 @@ def test_apply_speculator_sidecar_overrides():
     assert env_dict["SPECULATOR_GPU_MEM_UTIL"] == "0.85"
     assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "1"
     assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
+    assert "command" not in sidecar
+    assert "args" not in sidecar
 
     assert sidecar["volumeMounts"][0]["name"] == "checkpoint-storage"
     assert sidecar["volumeMounts"][0]["mountPath"] == "/mnt/kubeflow-checkpoints"
@@ -1634,6 +1639,79 @@ def test_apply_speculator_sidecar_overrides():
     assert sidecar["resources"]["limits"]["nvidia.com/gpu"] == "1"
 
     print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "mode", [SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE], ids=lambda mode: mode.value
+)
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(name="defaults", expected_output={}),
+        TestCase(name="empty-extra-args", config={"extra_args": {}}, expected_output={}),
+        TestCase(
+            name="named-and-extra-args",
+            config={
+                "max_model_len": 8192,
+                "enforce_eager": True,
+                "dtype": "bfloat16",
+                "max_num_seqs": 16,
+                "extra_args": {"max_num_batched_tokens": "8192"},
+            },
+            expected_output={
+                "max_model_len": 8192,
+                "enforce_eager": True,
+                "dtype": "bfloat16",
+                "max_num_seqs": 16,
+                "max_num_batched_tokens": "8192",
+            },
+        ),
+        TestCase(
+            name="false-is-not-omitted",
+            config={"enforce_eager": False},
+            expected_output={"enforce_eager": False},
+        ),
+        TestCase(
+            name="extra-args-only",
+            config={"extra_args": {"max_num_batched_tokens": "8192", "served_model_name": "a b"}},
+            expected_output={"max_num_batched_tokens": "8192", "served_model_name": "a b"},
+        ),
+    ],
+    ids=lambda test_case: test_case.name,
+)
+def test_speculator_vllm_engine_args_survive_patch_serialization(
+    mode: SpeculatorMode, test_case: TestCase
+) -> None:
+    """Forward engine settings through the API without overriding the runtime launcher."""
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=mode,
+        training_resources={"nvidia.com/gpu": 1},
+        dataset_name="ultrachat",
+        output_dir="pvc://test-pvc/output",
+        vllm_config=SpeculatorVLLMConfig(
+            resources={"nvidia.com/gpu": 1},
+            **test_case.config,
+        ),
+        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
+    )
+
+    raw_patch = apply_speculator_sidecar_overrides(trainer, [])[0]
+    serialized_patch = models.TrainerV1alpha1RuntimePatch.from_dict(raw_patch).to_dict()
+
+    for patch in (raw_patch, serialized_patch):
+        pod_spec = patch["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+            "template"
+        ]["spec"]["template"]["spec"]
+        sidecar = pod_spec["initContainers"][0]
+        assert sidecar["name"] == "vllm-sidecar"
+        assert "command" not in sidecar
+        assert "args" not in sidecar
+        env_dict = {env["name"]: env["value"] for env in sidecar["env"]}
+        if test_case.expected_output:
+            assert json.loads(env_dict["SPECULATOR_VLLM_EXTRA_ARGS"]) == test_case.expected_output
+        else:
+            assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
 
 
 def test_apply_speculator_sidecar_overrides_preserves_existing():
