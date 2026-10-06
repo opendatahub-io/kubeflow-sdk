@@ -33,11 +33,15 @@ from kubernetes import client
 import pytest
 
 from kubeflow.common.types import KubernetesBackendConfig
-from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
+from kubeflow.trainer.backends.kubernetes.backend import (
+    KubernetesBackend,
+    _serialize_train_job_with_runtime_patches,
+)
 import kubeflow.trainer.backends.kubernetes.utils as utils
 from kubeflow.trainer.constants import constants
 from kubeflow.trainer.options import (
     Annotations,
+    ContainerPatch,
     JobSetSpecPatch,
     JobSetTemplatePatch,
     JobSpecPatch,
@@ -66,6 +70,121 @@ from kubeflow.trainer.types import types
 
 NOT_FOUND = "not_found"
 FORBIDDEN = "forbidden"
+
+
+def test_trainjob_serialization_preserves_forward_compatible_runtime_patch_fields():
+    """Keep sidecar args/resources even when the generated client lacks those model fields."""
+    runtime_patch = {
+        "manager": "trainer.kubeflow.org/kubeflow-sdk",
+        "trainingRuntimeSpec": {
+            "template": {
+                "spec": {
+                    "replicatedJobs": [
+                        {
+                            "name": "node",
+                            "template": {
+                                "spec": {
+                                    "template": {
+                                        "spec": {
+                                            "initContainers": [
+                                                {
+                                                    "name": "vllm-sidecar",
+                                                    "args": ["python -m vllm serve"],
+                                                    "resources": {
+                                                        "requests": {"nvidia.com/gpu": "1"},
+                                                        "limits": {"nvidia.com/gpu": "1"},
+                                                    },
+                                                }
+                                            ]
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                }
+            }
+        },
+    }
+    runtime_patch_model = models.TrainerV1alpha1RuntimePatch.from_dict(runtime_patch)
+    typed_patch_container = runtime_patch_model.to_dict()["trainingRuntimeSpec"]["template"][
+        "spec"
+    ]["replicatedJobs"][0]["template"]["spec"]["template"]["spec"]["initContainers"][0]
+    assert "args" not in typed_patch_container
+    assert "resources" not in typed_patch_container
+    train_job = models.TrainerV1alpha1TrainJob(
+        apiVersion=constants.API_VERSION,
+        kind=constants.TRAINJOB_KIND,
+        metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(name="speculator-job"),
+        spec=models.TrainerV1alpha1TrainJobSpec(
+            runtimeRef=models.TrainerV1alpha1RuntimeRef(
+                name=TORCH_RUNTIME,
+                kind=types.RuntimeKind.TRAINING_RUNTIME.value,
+            ),
+            runtimePatches=[runtime_patch_model],
+        ),
+    )
+
+    serialized = _serialize_train_job_with_runtime_patches(train_job, [runtime_patch])
+    container_patch = serialized["spec"]["runtimePatches"][0]["trainingRuntimeSpec"]["template"][
+        "spec"
+    ]["replicatedJobs"][0]["template"]["spec"]["template"]["spec"]["initContainers"][0]
+    assert container_patch["args"] == ["python -m vllm serve"]
+    assert (
+        container_patch["resources"]
+        == runtime_patch["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+            "template"
+        ]["spec"]["template"]["spec"]["initContainers"][0]["resources"]
+    )
+
+
+def test_train_submits_container_args_and_resources_in_runtime_patch(kubernetes_backend):
+    """Preserve new container fields through the complete SDK TrainJob submission path."""
+    patch = RuntimePatch(
+        training_runtime_spec=TrainingRuntimeSpecPatch(
+            template=JobSetTemplatePatch(
+                spec=JobSetSpecPatch(
+                    replicated_jobs=[
+                        ReplicatedJobPatch(
+                            name="node",
+                            template=JobTemplatePatch(
+                                spec=JobSpecPatch(
+                                    template=PodTemplatePatch(
+                                        spec=PodSpecPatch(
+                                            init_containers=[
+                                                ContainerPatch(
+                                                    name="vllm-sidecar",
+                                                    args=["sh", "-c", "python -m vllm serve"],
+                                                    resources={
+                                                        "requests": {"nvidia.com/gpu": "1"},
+                                                        "limits": {"nvidia.com/gpu": "1"},
+                                                    },
+                                                )
+                                            ]
+                                        )
+                                    )
+                                )
+                            ),
+                        )
+                    ]
+                )
+            )
+        )
+    )
+    runtime = kubernetes_backend.get_runtime(TORCH_RUNTIME)
+
+    kubernetes_backend.train(runtime=runtime, options=[patch])
+
+    body = kubernetes_backend.custom_api.create_namespaced_custom_object.call_args[0][4]
+    container_patch = body["spec"]["runtimePatches"][0]["trainingRuntimeSpec"]["template"]["spec"][
+        "replicatedJobs"
+    ][0]["template"]["spec"]["template"]["spec"]["initContainers"][0]
+    assert container_patch["args"] == ["sh", "-c", "python -m vllm serve"]
+    assert container_patch["resources"] == {
+        "requests": {"nvidia.com/gpu": "1"},
+        "limits": {"nvidia.com/gpu": "1"},
+    }
+
 
 # In all tests runtime name is equal to the framework name.
 TORCH_RUNTIME = "torch"

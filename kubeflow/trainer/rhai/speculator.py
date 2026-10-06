@@ -24,6 +24,7 @@ from enum import Enum
 import inspect
 import json
 import re
+import shlex
 import textwrap
 
 from kubeflow_trainer_api import models
@@ -73,16 +74,12 @@ _SUPPORTED_DTYPES = {"bfloat16", "float16", "float32"}
 
 
 @dataclass
-class SpeculatorVLLMConfig:
-    """Configuration for the vLLM server used by speculator training.
+class VLLMSpeculativeConfig:
+    """Configuration for speculative decoding and vLLM engine options.
 
     Args:
-        resources: Resources for the managed vLLM sidecar container. When ``None``,
-            no sidecar resources are configured.
-        gpu_memory_utilization: Fraction of GPU memory available to vLLM (default: 0.9).
-        endpoint: URL of a self-managed vLLM endpoint for hidden-state extraction.
-        readiness_timeout_minutes: Maximum time in minutes to wait for vLLM readiness
-            (default: 60).
+        num_speculative_tokens: Number of speculative tokens used by the vLLM
+            speculative decoding configuration (default: 1).
         max_model_len: Maximum context length, or a vLLM-supported string such as
             ``"auto"``. When ``None``, vLLM derives the length from the model.
         enforce_eager: Whether vLLM should run eagerly instead of using CUDA graphs.
@@ -93,14 +90,13 @@ class SpeculatorVLLMConfig:
             When ``None``, vLLM uses its default.
         extra_args: Additional vLLM EngineArgs as a mapping from argument names in
             Python ``snake_case`` to string values, for example
-            ``{"max_num_batched_tokens": "8192"}``. Passed to the managed sidecar
-            as JSON in ``SPECULATOR_VLLM_EXTRA_ARGS`` together with the named engine
-            arguments. Applying these settings requires a compatible runtime entrypoint
-            that converts the JSON into vLLM CLI arguments. Configure self-managed
-            servers separately.
+            ``{"max_num_batched_tokens": "8192"}``. Values are converted into
+            command-line flags for the managed vLLM sidecar. Applying these requires
+            a Trainer Operator RuntimePatch API that supports container ``args``.
 
     Example:
-        SpeculatorVLLMConfig(
+        VLLMSpeculativeConfig(
+            num_speculative_tokens=2,
             max_model_len=8192,
             enforce_eager=True,
             dtype="bfloat16",
@@ -109,10 +105,7 @@ class SpeculatorVLLMConfig:
         )
     """
 
-    resources: dict | None = None
-    gpu_memory_utilization: float = 0.9
-    endpoint: str | None = None
-    readiness_timeout_minutes: int = 60
+    num_speculative_tokens: int = 1
     max_model_len: int | str | None = None
     enforce_eager: bool | None = None
     dtype: str | None = None
@@ -120,54 +113,22 @@ class SpeculatorVLLMConfig:
     extra_args: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
-        """Validate vLLM-specific configuration."""
-        if self.resources is not None and (
-            not isinstance(self.resources, dict) or not self.resources
-        ):
-            raise ValueError(
-                "SpeculatorVLLMConfig.resources must be a non-empty dict when provided. "
-                "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
-            )
-
-        if self.resources is not None:
-            try:
-                vllm_gpus = int(self.resources.get("nvidia.com/gpu", 1))
-            except (TypeError, ValueError) as error:
-                raise ValueError(
-                    "SpeculatorVLLMConfig.resources['nvidia.com/gpu'] must be an integer."
-                ) from error
-            if vllm_gpus != 1:
-                raise ValueError(
-                    f"vLLM sidecar currently supports only 1 GPU, got {vllm_gpus}. "
-                    "Multi-GPU vLLM sidecar is not yet supported."
-                )
-
+        """Validate vLLM speculative decoding and engine arguments."""
         if (
-            not isinstance(self.gpu_memory_utilization, (int, float))
-            or self.gpu_memory_utilization <= 0
-            or self.gpu_memory_utilization > 1.0
+            isinstance(self.num_speculative_tokens, bool)
+            or not isinstance(self.num_speculative_tokens, int)
+            or self.num_speculative_tokens < 1
         ):
             raise ValueError(
-                "SpeculatorVLLMConfig.gpu_memory_utilization must be in range (0, 1.0], "
-                f"got {self.gpu_memory_utilization!r}."
-            )
-
-        if not isinstance(self.readiness_timeout_minutes, int):
-            raise ValueError(
-                "SpeculatorVLLMConfig.readiness_timeout_minutes must be an integer, "
-                f"got {type(self.readiness_timeout_minutes).__name__}"
-            )
-        if self.readiness_timeout_minutes < 1:
-            raise ValueError(
-                "SpeculatorVLLMConfig.readiness_timeout_minutes must be at least 1, "
-                f"got {self.readiness_timeout_minutes}"
+                "VLLMSpeculativeConfig.num_speculative_tokens must be a positive integer, "
+                f"got {self.num_speculative_tokens!r}."
             )
 
         if isinstance(self.max_model_len, bool) or not isinstance(
             self.max_model_len, (int, str, type(None))
         ):
             raise ValueError(
-                "SpeculatorVLLMConfig.max_model_len must be an integer, string, or None, "
+                "VLLMSpeculativeConfig.max_model_len must be an integer, string, or None, "
                 f"got {type(self.max_model_len).__name__}"
             )
         if (
@@ -176,20 +137,20 @@ class SpeculatorVLLMConfig:
             and (self.max_model_len < 1)
         ):
             raise ValueError(
-                "SpeculatorVLLMConfig.max_model_len must be positive or -1 for "
+                "VLLMSpeculativeConfig.max_model_len must be positive or -1 for "
                 f"automatic selection, got {self.max_model_len}"
             )
         if isinstance(self.max_model_len, str) and not self.max_model_len.strip():
-            raise ValueError("SpeculatorVLLMConfig.max_model_len cannot be empty.")
+            raise ValueError("VLLMSpeculativeConfig.max_model_len cannot be empty.")
 
         if self.enforce_eager is not None and not isinstance(self.enforce_eager, bool):
             raise ValueError(
-                "SpeculatorVLLMConfig.enforce_eager must be a boolean or None, "
+                "VLLMSpeculativeConfig.enforce_eager must be a boolean or None, "
                 f"got {type(self.enforce_eager).__name__}"
             )
 
         if self.dtype is not None and (not isinstance(self.dtype, str) or not self.dtype.strip()):
-            raise ValueError("SpeculatorVLLMConfig.dtype must be a non-empty string or None.")
+            raise ValueError("VLLMSpeculativeConfig.dtype must be a non-empty string or None.")
 
         if self.max_num_seqs is not None and (
             isinstance(self.max_num_seqs, bool)
@@ -197,22 +158,24 @@ class SpeculatorVLLMConfig:
             or self.max_num_seqs < 1
         ):
             raise ValueError(
-                "SpeculatorVLLMConfig.max_num_seqs must be a positive integer or None, "
+                "VLLMSpeculativeConfig.max_num_seqs must be a positive integer or None, "
                 f"got {self.max_num_seqs!r}"
             )
 
         if self.extra_args is not None:
             if not isinstance(self.extra_args, dict):
-                raise ValueError("SpeculatorVLLMConfig.extra_args must be a dict or None.")
+                raise ValueError("VLLMSpeculativeConfig.extra_args must be a dict or None.")
 
             reserved_args = {
                 "model",
                 "port",
                 "gpu_memory_utilization",
                 "speculative_config",
+                "num_speculative_tokens",
                 "kv_transfer_config",
                 "trust_remote_code",
                 "enable_chunked_prefill",
+                "tensor_parallel_size",
             }
             named_args = {
                 "max_model_len": self.max_model_len,
@@ -223,38 +186,87 @@ class SpeculatorVLLMConfig:
             for name, value in self.extra_args.items():
                 if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", name):
                     raise ValueError(
-                        "SpeculatorVLLMConfig.extra_args keys must be vLLM argument "
+                        "VLLMSpeculativeConfig.extra_args keys must be vLLM argument "
                         f"names in snake_case, got {name!r}"
                     )
-                if not isinstance(value, str):
+                if not isinstance(value, str) or not value.strip():
                     raise ValueError(
-                        "SpeculatorVLLMConfig.extra_args values must be strings, "
+                        "VLLMSpeculativeConfig.extra_args values must be non-empty strings, "
                         f"got {type(value).__name__} for {name!r}"
                     )
                 if name in reserved_args:
                     raise ValueError(
-                        f"SpeculatorVLLMConfig.extra_args cannot override managed "
+                        f"VLLMSpeculativeConfig.extra_args cannot override managed "
                         f"argument {name!r}."
                     )
                 if name in named_args and named_args[name] is not None:
                     raise ValueError(
-                        f"SpeculatorVLLMConfig.extra_args[{name!r}] duplicates the "
+                        f"VLLMSpeculativeConfig.extra_args[{name!r}] duplicates the "
                         "corresponding named field."
                     )
 
 
-def _get_vllm_engine_args(config: SpeculatorVLLMConfig) -> dict[str, bool | int | str]:
-    """Collect configured vLLM EngineArgs using their Python argument names."""
-    engine_args: dict[str, bool | int | str] = {}
+# Backwards-compatible import alias; new code should use VLLMSpeculativeConfig.
+SpeculatorVLLMConfig = VLLMSpeculativeConfig
+
+
+def _get_vllm_cli_flags(config: VLLMSpeculativeConfig) -> list[str]:
+    """Build CLI flags for the configured vLLM EngineArgs."""
+    cli_flags: list[str] = []
     named_args = {
         "max_model_len": config.max_model_len,
-        "enforce_eager": config.enforce_eager,
         "dtype": config.dtype,
         "max_num_seqs": config.max_num_seqs,
     }
-    engine_args.update({name: value for name, value in named_args.items() if value is not None})
-    engine_args.update(config.extra_args or {})
-    return engine_args
+    for name, value in named_args.items():
+        if value is not None:
+            cli_flags.extend((f"--{name.replace('_', '-')}", shlex.quote(str(value))))
+
+    if config.enforce_eager:
+        cli_flags.append("--enforce-eager")
+
+    for name, value in sorted((config.extra_args or {}).items()):
+        cli_flags.extend((f"--{name.replace('_', '-')}", shlex.quote(value)))
+
+    return cli_flags
+
+
+def _build_vllm_sidecar_args(
+    trainer: "SpeculativeDecodingTrainer",
+    hidden_states_path: str,
+    target_layer_ids: list[int] | None,
+) -> str:
+    """Build the shell script used to launch the managed vLLM sidecar."""
+    speculator_config = trainer.config or SpeculatorConfig()
+    vllm_config = speculator_config.vllm or VLLMSpeculativeConfig()
+    speculative_config = {
+        "method": "extract_hidden_states",
+        "num_speculative_tokens": vllm_config.num_speculative_tokens,
+        "draft_model_config": {
+            "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids or []}
+        },
+    }
+    kv_transfer_config = {
+        "kv_connector": "ExampleHiddenStatesConnector",
+        "kv_role": "kv_producer",
+        "kv_connector_extra_config": {"shared_storage_path": hidden_states_path},
+    }
+    kv_transfer_json = json.dumps(kv_transfer_config, separators=(",", ":"))
+    engine_flags = " ".join(_get_vllm_cli_flags(vllm_config))
+    command = [
+        "TP=${SPECULATOR_VLLM_GPU_COUNT:-1}",
+        'TF=""',
+        '[ "$TP" -gt 1 ] && TF="--tensor-parallel-size $TP"',
+        "python3 -m vllm.entrypoints.cli.main serve \\",
+        '  "$SPECULATOR_VERIFIER_MODEL" \\',
+        f"  --speculative-config {shlex.quote(json.dumps(speculative_config, separators=(',', ':')))} \\",
+        f"  --kv-transfer-config {shlex.quote(kv_transfer_json)} \\",
+        "  --port 8234 \\",
+        '  --gpu-memory-utilization "${SPECULATOR_GPU_MEM_UTIL:-0.9}" \\',
+        "  --no-enable-chunked-prefill \\",
+        "  --trust-remote-code $TF" + (f" {engine_flags}" if engine_flags else ""),
+    ]
+    return "\n".join(command)
 
 
 @dataclass
@@ -286,6 +298,7 @@ class SpeculatorConfig:
         target_layer_ids: Specific layer IDs for hidden state extraction. When ``None``,
             auto-selected from the verifier model architecture.
         from_pretrained: Path to a pretrained draft model to resume training from.
+        vllm: Optional vLLM speculative decoding and engine configuration.
     """
 
     num_layers: int = 1
@@ -305,6 +318,14 @@ class SpeculatorConfig:
     datagen_concurrency: int = 4
     target_layer_ids: list[int] | None = None
     from_pretrained: str | None = None
+    vllm: VLLMSpeculativeConfig | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the optional nested vLLM configuration."""
+        if self.vllm is not None and not isinstance(self.vllm, VLLMSpeculativeConfig):
+            raise ValueError(
+                "SpeculatorConfig.vllm must be a VLLMSpeculativeConfig instance or None."
+            )
 
 
 @dataclass
@@ -335,11 +356,13 @@ class SpeculativeDecodingTrainer:
         training_resources: Resources for the training container. Maps to
             ``resources_per_node`` in the CRD. Example:
             ``{"nvidia.com/gpu": 2, "memory": "64Gi", "cpu": "4"}``.
-        vllm_resources: Resources for the vLLM sidecar container. When ``None``,
-            defaults to 1 GPU. Example:
-            ``{"nvidia.com/gpu": 2, "memory": "96Gi", "cpu": "4"}``.
+        vllm_resources: Resources for the managed vLLM sidecar container. Required in
+            DATA_ONLY and ONLINE modes unless DATA_ONLY uses an external endpoint.
+            Example:
+            ``{"nvidia.com/gpu": 1, "memory": "96Gi", "cpu": "4"}``.
         vllm_gpu_memory_utilization: Fraction of GPU memory for vLLM (default: 0.9).
-        config: Advanced training configuration. See ``SpeculatorConfig``.
+        config: Advanced speculator training/data configuration. Its optional ``vllm``
+            field accepts a ``VLLMSpeculativeConfig`` for sidecar engine settings.
         packages_to_install: Python packages to install before training.
         pip_index_urls: PyPI index URLs for package installation.
         env: Environment variables to set in training pods.
@@ -355,9 +378,6 @@ class SpeculativeDecodingTrainer:
             server to become ready. The server may take longer for large models that
             require downloading or loading into GPU memory. Increase this value if your
             model is large. Must be at least 1 (default: 60).
-        vllm_config: Grouped vLLM configuration. When provided, its values are used as
-            the canonical vLLM settings. The individual ``vllm_*`` arguments remain
-            available for backward compatibility.
         enable_progression_tracking: Enable progression tracking (default: True).
         metrics_port: HTTP server port for metrics endpoint (default: 28080).
         metrics_poll_interval_seconds: How often controller polls metrics (default: 30).
@@ -375,8 +395,8 @@ class SpeculativeDecodingTrainer:
     lr: float = 1e-4
     total_seq_len: int = 2048
     draft_vocab_size: int | None = None
-    vllm_resources: dict | None = SpeculatorVLLMConfig.resources
-    vllm_gpu_memory_utilization: float = SpeculatorVLLMConfig.gpu_memory_utilization
+    vllm_resources: dict | None = None
+    vllm_gpu_memory_utilization: float = 0.9
     config: SpeculatorConfig | None = None
     packages_to_install: list[str] | None = None
     pip_index_urls: list[str] = field(
@@ -385,28 +405,14 @@ class SpeculativeDecodingTrainer:
     env: dict[str, str] | None = None
     output_dir: str | None = None
     regenerate_responses: bool = False
-    vllm_endpoint: str | None = SpeculatorVLLMConfig.endpoint
-    vllm_readiness_timeout_minutes: int = SpeculatorVLLMConfig.readiness_timeout_minutes
+    vllm_endpoint: str | None = None
+    vllm_readiness_timeout_minutes: int = 60
     enable_progression_tracking: bool = True
     metrics_port: int = 28080
     metrics_poll_interval_seconds: int = 30
-    vllm_config: SpeculatorVLLMConfig | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
-        if self.vllm_config is None:
-            self.vllm_config = SpeculatorVLLMConfig(
-                resources=self.vllm_resources,
-                gpu_memory_utilization=self.vllm_gpu_memory_utilization,
-                endpoint=self.vllm_endpoint,
-                readiness_timeout_minutes=self.vllm_readiness_timeout_minutes,
-            )
-        else:
-            self.vllm_resources = self.vllm_config.resources
-            self.vllm_gpu_memory_utilization = self.vllm_config.gpu_memory_utilization
-            self.vllm_endpoint = self.vllm_config.endpoint
-            self.vllm_readiness_timeout_minutes = self.vllm_config.readiness_timeout_minutes
-
         supported_modes = {
             SpeculatorMode.TRAIN_ONLY,
             SpeculatorMode.DATA_ONLY,
@@ -425,7 +431,7 @@ class SpeculativeDecodingTrainer:
                 f"Currently only '{SpeculatorType.EAGLE3.value}' is supported."
             )
 
-        _uses_external_vllm = self.vllm_config.endpoint is not None
+        _uses_external_vllm = self.vllm_endpoint is not None
 
         if (
             self.mode in (SpeculatorMode.TRAIN_ONLY, SpeculatorMode.OFFLINE)
@@ -525,14 +531,14 @@ class SpeculativeDecodingTrainer:
                     "See https://docs.vllm.ai/projects/speculators/en/latest/cli/launch_vllm/#basic-usage"
                 )
 
-        if self.mode == SpeculatorMode.OFFLINE and not self.vllm_config.endpoint:
+        if self.mode == SpeculatorMode.OFFLINE and not self.vllm_endpoint:
             raise ValueError(
                 "vllm_endpoint is required for OFFLINE mode. "
                 "Provide the URL of your self-managed vLLM endpoint "
                 "(e.g. 'http://vllm-svc:8000/v1')."
             )
 
-        if self.vllm_config.endpoint is not None and self.mode not in (
+        if self.vllm_endpoint is not None and self.mode not in (
             SpeculatorMode.OFFLINE,
             SpeculatorMode.DATA_ONLY,
         ):
@@ -544,7 +550,7 @@ class SpeculativeDecodingTrainer:
         if (
             self.mode == SpeculatorMode.DATA_ONLY
             and _uses_external_vllm
-            and self.vllm_config.resources is not None
+            and self.vllm_resources is not None
         ):
             raise ValueError(
                 "vllm_resources cannot be used with vllm_endpoint in DATA_ONLY mode. "
@@ -608,7 +614,7 @@ class SpeculativeDecodingTrainer:
         _needs_sidecar = self.mode in (SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE)
         if self.mode == SpeculatorMode.DATA_ONLY and _uses_external_vllm:
             _needs_sidecar = False
-        if _needs_sidecar and not self.vllm_config.resources:
+        if _needs_sidecar and not self.vllm_resources:
             raise ValueError(
                 f"vllm_resources is required for {self.mode.value} mode. "
                 "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
@@ -620,6 +626,48 @@ class SpeculativeDecodingTrainer:
             raise ValueError(
                 "training_resources must be a non-empty dict when provided. "
                 "Example: {'nvidia.com/gpu': 2, 'memory': '64Gi', 'cpu': '4'}"
+            )
+
+        if self.vllm_resources is not None and (
+            not isinstance(self.vllm_resources, dict) or not self.vllm_resources
+        ):
+            raise ValueError(
+                "vllm_resources must be a non-empty dict when provided. "
+                "Example: {'nvidia.com/gpu': 1, 'memory': '96Gi', 'cpu': '4'}"
+            )
+        if self.vllm_resources is not None:
+            try:
+                vllm_gpus = int(self.vllm_resources.get("nvidia.com/gpu", 1))
+            except (TypeError, ValueError) as error:
+                raise ValueError("vllm_resources['nvidia.com/gpu'] must be an integer.") from error
+            if vllm_gpus != 1:
+                raise ValueError(
+                    f"vLLM sidecar currently supports only 1 GPU, got {vllm_gpus}. "
+                    "Multi-GPU vLLM sidecar is not yet supported."
+                )
+
+        if (
+            isinstance(self.vllm_gpu_memory_utilization, bool)
+            or not isinstance(self.vllm_gpu_memory_utilization, (int, float))
+            or self.vllm_gpu_memory_utilization <= 0
+            or self.vllm_gpu_memory_utilization > 1.0
+        ):
+            raise ValueError(
+                "vllm_gpu_memory_utilization must be in range (0, 1.0], "
+                f"got {self.vllm_gpu_memory_utilization!r}."
+            )
+
+        if isinstance(self.vllm_readiness_timeout_minutes, bool) or not isinstance(
+            self.vllm_readiness_timeout_minutes, int
+        ):
+            raise ValueError(
+                "vllm_readiness_timeout_minutes must be an integer, "
+                f"got {type(self.vllm_readiness_timeout_minutes).__name__}"
+            )
+        if self.vllm_readiness_timeout_minutes < 1:
+            raise ValueError(
+                "vllm_readiness_timeout_minutes must be at least 1, "
+                f"got {self.vllm_readiness_timeout_minutes}"
             )
 
         _valid_schedulers = ("linear", "cosine", "none")
@@ -1764,10 +1812,8 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
 
     from kubeflow.trainer.rhai.constants import VLLM_SIDECAR_ENDPOINT
 
-    _uses_external_vllm = trainer.vllm_config.endpoint is not None
-    data_vllm_endpoint = (
-        trainer.vllm_config.endpoint if _uses_external_vllm else VLLM_SIDECAR_ENDPOINT
-    )
+    _uses_external_vllm = trainer.vllm_endpoint is not None
+    data_vllm_endpoint = trainer.vllm_endpoint if _uses_external_vllm else VLLM_SIDECAR_ENDPOINT
 
     offline_hs_path = resolved_hidden_states if _uses_external_vllm else None
 
@@ -1788,7 +1834,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    concurrency={cfg.datagen_concurrency!r},\n"
         f"    regenerate_responses={trainer.regenerate_responses!r},\n"
         f"    hidden_states_path={offline_hs_path!r},\n"
-        f"    vllm_readiness_timeout_minutes={trainer.vllm_config.readiness_timeout_minutes!r},\n"
+        f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
         f")\n"
     )
 
@@ -1849,7 +1895,7 @@ def _render_speculator_training_script(trainer: SpeculativeDecodingTrainer) -> s
         f"    from_pretrained={cfg.from_pretrained!r},\n"
         f"    target_layer_ids={cfg.target_layer_ids!r},\n"
         f"    vllm_endpoint={VLLM_SIDECAR_ENDPOINT!r},\n"
-        f"    vllm_readiness_timeout_minutes={trainer.vllm_config.readiness_timeout_minutes!r},\n"
+        f"    vllm_readiness_timeout_minutes={trainer.vllm_readiness_timeout_minutes!r},\n"
         f")\n"
     )
 
@@ -1917,10 +1963,10 @@ def apply_speculator_sidecar_overrides(
 ) -> list:
     """Configure the vLLM sidecar init container via runtime patches.
 
-    Sets environment variables, PVC volume mount, and GPU resources on the
-    ``vllm-sidecar`` init container defined in the ClusterTrainingRuntime. When vLLM
-    EngineArgs are configured, serializes them into ``SPECULATOR_VLLM_EXTRA_ARGS``.
-    A compatible runtime entrypoint must convert that JSON into vLLM CLI arguments.
+    Sets the launcher arguments, environment variables, PVC volume mount, and resources
+    on the ``vllm-sidecar`` init container defined in the ClusterTrainingRuntime.
+    The patch carries container ``args`` and ``resources`` directly; applying those
+    fields requires a Trainer Operator RuntimePatch API that supports them.
 
     Args:
         trainer: SpeculativeDecodingTrainer with model path, GPU settings, and output_dir.
@@ -1967,29 +2013,20 @@ def apply_speculator_sidecar_overrides(
 
     cfg = trainer.config or SpeculatorConfig()
 
-    layer_ids_str = ",".join(str(lid) for lid in cfg.target_layer_ids)
+    layer_ids_str = ",".join(str(lid) for lid in (cfg.target_layer_ids or []))
 
-    vllm_gpu_count = int((trainer.vllm_config.resources or {}).get("nvidia.com/gpu", 1))
+    vllm_gpu_count = int((trainer.vllm_resources or {}).get("nvidia.com/gpu", 1))
 
     sidecar_env = [
         {"name": "SPECULATOR_VERIFIER_MODEL", "value": resolved_verifier},
         {"name": "SPECULATOR_HS_PATH", "value": hs_path},
         {
             "name": "SPECULATOR_GPU_MEM_UTIL",
-            "value": str(trainer.vllm_config.gpu_memory_utilization),
+            "value": str(trainer.vllm_gpu_memory_utilization),
         },
         {"name": "SPECULATOR_VLLM_GPU_COUNT", "value": str(vllm_gpu_count)},
         {"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str},
     ]
-
-    vllm_engine_args = _get_vllm_engine_args(trainer.vllm_config)
-    if vllm_engine_args:
-        sidecar_env.append(
-            {
-                "name": "SPECULATOR_VLLM_EXTRA_ARGS",
-                "value": json.dumps(vllm_engine_args, sort_keys=True),
-            }
-        )
 
     if trainer.env and "HF_TOKEN" in trainer.env:
         sidecar_env.append({"name": "HF_TOKEN", "value": trainer.env["HF_TOKEN"]})
@@ -1997,9 +2034,12 @@ def apply_speculator_sidecar_overrides(
     sidecar_override = {
         "name": VLLM_SIDECAR_CONTAINER_NAME,
         "env": sidecar_env,
+        "args": [
+            _build_vllm_sidecar_args(trainer, hs_path, cfg.target_layer_ids),
+        ],
     }
-    if trainer.vllm_config.resources:
-        sidecar_resources = {k: str(v) for k, v in trainer.vllm_config.resources.items()}
+    if trainer.vllm_resources:
+        sidecar_resources = {k: str(v) for k, v in trainer.vllm_resources.items()}
         sidecar_override["resources"] = {
             "limits": sidecar_resources,
             "requests": sidecar_resources,

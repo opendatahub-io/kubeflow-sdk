@@ -77,6 +77,10 @@ RHAI Speculator Training
    :members:
    :show-inheritance:
 
-.. autoclass:: kubeflow.trainer.rhai.SpeculatorVLLMConfig
+.. autoclass:: kubeflow.trainer.rhai.SpeculatorConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: kubeflow.trainer.rhai.VLLMSpeculativeConfig
    :members:
    :show-inheritance:

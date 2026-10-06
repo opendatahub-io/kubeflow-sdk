@@ -28,22 +28,44 @@ class ContainerPatch:
 
     Args:
         name: Name of the container to patch (must exist in the Runtime).
+        args: Arguments to set on the container. These replace the existing args.
         env: Environment variables to add/merge with the container.
              Each dict should have 'name' and 'value' or 'valueFrom' keys.
         volume_mounts: Volume mounts to add/merge with the container.
                       Each dict should have 'name' and 'mountPath' keys at minimum.
         security_context: Security context for the container.
+        resources: Container resource requests and limits, keyed by ``requests`` and
+            ``limits``. RuntimePatch support for these fields depends on the installed
+            Trainer Operator API.
     """
 
     name: str
+    args: list[str] | None = None
     env: list[dict] | None = None
     volume_mounts: list[dict] | None = None
     security_context: dict | None = None
+    resources: dict[str, dict[str, Any]] | None = None
 
     def __post_init__(self):
         """Validate the container patch configuration."""
         if not self.name or not self.name.strip():
             raise ValueError("Container name must be a non-empty string")
+
+        if self.args is not None and (
+            not isinstance(self.args, list) or not all(isinstance(arg, str) for arg in self.args)
+        ):
+            raise ValueError("args must be a list of strings")
+
+        if self.resources is not None:
+            if not isinstance(self.resources, dict):
+                raise ValueError("resources must be a dictionary")
+            if not self.resources:
+                raise ValueError("resources must specify requests and/or limits")
+            if not set(self.resources).issubset({"requests", "limits"}):
+                raise ValueError("resources may contain only 'requests' and 'limits'")
+            for resource_type, resource_values in self.resources.items():
+                if not isinstance(resource_values, dict) or not resource_values:
+                    raise ValueError(f"resources '{resource_type}' must be a non-empty dictionary")
 
         if self.env is not None:
             if not isinstance(self.env, list):

@@ -16,7 +16,6 @@
 
 import json
 
-from kubeflow_trainer_api import models
 import pytest
 
 from kubeflow.trainer.constants import constants
@@ -29,6 +28,7 @@ from kubeflow.trainer.rhai.speculator import (
     SpeculatorMode,
     SpeculatorType,
     SpeculatorVLLMConfig,
+    VLLMSpeculativeConfig,
     _render_speculator_training_script,
     _update_draft_config_for_inference,
     apply_speculator_sidecar_overrides,
@@ -39,61 +39,120 @@ from kubeflow.trainer.types import types
 
 
 def test_vllm_config_defaults():
-    """Test SpeculatorVLLMConfig default values."""
-    config = SpeculatorVLLMConfig()
+    """Test decoding config defaults and compatibility alias."""
+    config = VLLMSpeculativeConfig()
 
-    assert config.resources is None
-    assert config.gpu_memory_utilization == 0.9
-    assert config.endpoint is None
-    assert config.readiness_timeout_minutes == 60
-
-
-@pytest.mark.parametrize("gpu_memory_utilization", [0, -0.1, 1.1, "0.9"])
-def test_vllm_config_rejects_invalid_gpu_memory_utilization(gpu_memory_utilization):
-    """Test SpeculatorVLLMConfig rejects utilization outside the supported range."""
-    with pytest.raises(ValueError, match="gpu_memory_utilization"):
-        SpeculatorVLLMConfig(gpu_memory_utilization=gpu_memory_utilization)
+    assert config.num_speculative_tokens == 1
+    assert config.max_model_len is None
+    assert config.enforce_eager is None
+    assert config.dtype is None
+    assert config.max_num_seqs is None
+    assert config.extra_args is None
+    assert SpeculatorVLLMConfig is VLLMSpeculativeConfig
+    assert SpeculatorConfig().vllm is None
 
 
-@pytest.mark.parametrize("readiness_timeout_minutes", [0, -1, 1.5, "60"])
-def test_vllm_config_rejects_invalid_readiness_timeout(readiness_timeout_minutes):
-    """Test SpeculatorVLLMConfig rejects invalid readiness timeouts."""
-    with pytest.raises(ValueError, match="readiness_timeout_minutes"):
-        SpeculatorVLLMConfig(readiness_timeout_minutes=readiness_timeout_minutes)
+def test_speculator_config_validates_nested_vllm_config_type():
+    """Reject values that are not VLLMSpeculativeConfig instances in config.vllm."""
+    with pytest.raises(ValueError, match="SpeculatorConfig.vllm"):
+        SpeculatorConfig(vllm={"max_model_len": 2048})
 
 
-def test_vllm_config_rejects_invalid_resources():
-    """Test SpeculatorVLLMConfig validates sidecar resources."""
-    with pytest.raises(ValueError, match="non-empty dict"):
-        SpeculatorVLLMConfig(resources={})
-    with pytest.raises(ValueError, match="only 1 GPU"):
-        SpeculatorVLLMConfig(resources={"nvidia.com/gpu": 2})
+@pytest.mark.parametrize("num_speculative_tokens", [0, -1, 1.5, True])
+def test_speculative_config_rejects_invalid_num_speculative_tokens(num_speculative_tokens):
+    """Test speculative token count must be a positive integer."""
+    with pytest.raises(ValueError, match="num_speculative_tokens"):
+        VLLMSpeculativeConfig(num_speculative_tokens=num_speculative_tokens)
 
 
-def test_speculator_trainer_uses_vllm_config():
-    """Test grouped vLLM settings are normalized onto the trainer."""
-    vllm_config = SpeculatorVLLMConfig(
-        resources={"nvidia.com/gpu": 1, "memory": "96Gi"},
-        gpu_memory_utilization=0.85,
-        readiness_timeout_minutes=120,
-    )
+@pytest.mark.parametrize("max_model_len", [0, -2, True, ""])
+def test_speculative_config_rejects_invalid_max_model_len(max_model_len):
+    """Test max_model_len only accepts supported non-empty forms."""
+    with pytest.raises(ValueError, match="max_model_len"):
+        VLLMSpeculativeConfig(max_model_len=max_model_len)
+
+
+@pytest.mark.parametrize("max_model_len", [1, -1, "auto"])
+def test_speculative_config_accepts_supported_max_model_len_forms(max_model_len):
+    """Accept numeric lengths and documented vLLM string values."""
+    assert VLLMSpeculativeConfig(max_model_len=max_model_len).max_model_len == max_model_len
+
+
+@pytest.mark.parametrize("max_num_seqs", [0, -1, 1.5, True])
+def test_speculative_config_rejects_invalid_max_num_seqs(max_num_seqs):
+    """Test max_num_seqs must be a positive integer."""
+    with pytest.raises(ValueError, match="max_num_seqs"):
+        VLLMSpeculativeConfig(max_num_seqs=max_num_seqs)
+
+
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        {"bad-flag": "value"},
+        {"port": "9000"},
+        {"some_flag": 3},
+        {"some_flag": "  "},
+    ],
+)
+def test_speculative_config_rejects_unsafe_or_conflicting_extra_args(extra_args):
+    """Reject malformed, duplicate, managed, or non-string passthrough arguments."""
+    with pytest.raises(ValueError, match="extra_args"):
+        VLLMSpeculativeConfig(extra_args=extra_args)
+
+    with pytest.raises(ValueError, match="duplicates"):
+        VLLMSpeculativeConfig(max_num_seqs=4, extra_args={"max_num_seqs": "8"})
+
+
+def test_speculator_trainer_keeps_vllm_settings_at_root():
+    """Test legacy vLLM settings stay at the trainer root."""
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=SpeculatorMode.DATA_ONLY,
-        vllm_config=vllm_config,
+        vllm_resources={"nvidia.com/gpu": 1, "memory": "96Gi"},
+        vllm_gpu_memory_utilization=0.85,
+        vllm_readiness_timeout_minutes=120,
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
         config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
-    assert trainer.vllm_config is vllm_config
-    assert trainer.vllm_resources == vllm_config.resources
+    assert trainer.vllm_resources == {"nvidia.com/gpu": 1, "memory": "96Gi"}
     assert trainer.vllm_gpu_memory_utilization == 0.85
     assert trainer.vllm_readiness_timeout_minutes == 120
 
     script = _render_speculator_training_script(trainer)
     assert "vllm_readiness_timeout_minutes=120" in script
+
+
+@pytest.mark.parametrize("gpu_memory_utilization", [0, -0.1, 1.1, "0.9", True])
+def test_trainer_rejects_invalid_vllm_gpu_memory_utilization(gpu_memory_utilization):
+    """Test root-level vLLM memory utilization validation."""
+    with pytest.raises(ValueError, match="vllm_gpu_memory_utilization"):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/data",
+            output_dir="pvc://test-pvc/output",
+            vllm_gpu_memory_utilization=gpu_memory_utilization,
+        )
+
+
+@pytest.mark.parametrize("readiness_timeout_minutes", [0, -1, 1.5, "60", True])
+def test_trainer_rejects_invalid_vllm_readiness_timeout(readiness_timeout_minutes):
+    """Test root-level vLLM readiness timeout validation."""
+    with pytest.raises(ValueError, match="vllm_readiness_timeout_minutes"):
+        SpeculativeDecodingTrainer(
+            verifier_model="Qwen/Qwen3-8B",
+            mode=SpeculatorMode.TRAIN_ONLY,
+            training_resources={"nvidia.com/gpu": 1},
+            hidden_states_path="pvc://test-pvc/hidden_states",
+            data_path="pvc://test-pvc/data",
+            output_dir="pvc://test-pvc/output",
+            vllm_readiness_timeout_minutes=readiness_timeout_minutes,
+        )
 
 
 def test_speculator_trainer_initialization():
@@ -120,6 +179,8 @@ def test_speculator_trainer_initialization():
     assert trainer.training_resources == {"nvidia.com/gpu": 1}
     assert trainer.vllm_resources is None
     assert trainer.vllm_gpu_memory_utilization == 0.9
+    assert trainer.vllm_endpoint is None
+    assert trainer.vllm_readiness_timeout_minutes == 60
     assert trainer.config.target_layer_ids == [2, 16, 29, 31]
     assert trainer.packages_to_install is None
     assert trainer.pip_index_urls == list(constants.DEFAULT_PIP_INDEX_URLS)
@@ -634,8 +695,6 @@ def test_train_only_script_includes_config_fix():
 
 def test_update_draft_config_for_inference(tmp_path):
     """Test that only unpatched Eagle3 draft configs are updated atomically."""
-    import json
-
     draft_path = tmp_path / "0"
     draft_path.mkdir()
     draft_config_path = draft_path / "config.json"
@@ -1631,7 +1690,10 @@ def test_apply_speculator_sidecar_overrides():
     assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "1"
     assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
     assert "command" not in sidecar
-    assert "args" not in sidecar
+    assert len(sidecar["args"]) == 1
+    assert "--speculative-config" in sidecar["args"][0]
+    assert '"num_speculative_tokens":1' in sidecar["args"][0]
+    assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
 
     assert sidecar["volumeMounts"][0]["name"] == "checkpoint-storage"
     assert sidecar["volumeMounts"][0]["mountPath"] == "/mnt/kubeflow-checkpoints"
@@ -1647,71 +1709,76 @@ def test_apply_speculator_sidecar_overrides():
 @pytest.mark.parametrize(
     "test_case",
     [
-        TestCase(name="defaults", expected_output={}),
-        TestCase(name="empty-extra-args", config={"extra_args": {}}, expected_output={}),
+        TestCase(name="defaults", config={}, expected_output=[]),
+        TestCase(name="empty-extra-args", config={"extra_args": {}}, expected_output=[]),
         TestCase(
-            name="named-and-extra-args",
+            name="num-tokens-and-engine-flags",
             config={
+                "num_speculative_tokens": 3,
                 "max_model_len": 8192,
                 "enforce_eager": True,
                 "dtype": "bfloat16",
                 "max_num_seqs": 16,
                 "extra_args": {"max_num_batched_tokens": "8192"},
             },
-            expected_output={
-                "max_model_len": 8192,
-                "enforce_eager": True,
-                "dtype": "bfloat16",
-                "max_num_seqs": 16,
-                "max_num_batched_tokens": "8192",
-            },
+            expected_output=[
+                '"num_speculative_tokens":3',
+                "--max-model-len 8192",
+                "--enforce-eager",
+                "--dtype bfloat16",
+                "--max-num-seqs 16",
+                "--max-num-batched-tokens 8192",
+            ],
         ),
         TestCase(
             name="false-is-not-omitted",
             config={"enforce_eager": False},
-            expected_output={"enforce_eager": False},
+            expected_output=[],
         ),
         TestCase(
             name="extra-args-only",
             config={"extra_args": {"max_num_batched_tokens": "8192", "served_model_name": "a b"}},
-            expected_output={"max_num_batched_tokens": "8192", "served_model_name": "a b"},
+            expected_output=["--max-num-batched-tokens 8192", "--served-model-name 'a b'"],
+        ),
+        TestCase(
+            name="shell-metacharacters-are-quoted",
+            config={"extra_args": {"served_model_name": "$(touch /tmp/not-executed)"}},
+            expected_output=["--served-model-name '$(touch /tmp/not-executed)'"],
         ),
     ],
     ids=lambda test_case: test_case.name,
 )
-def test_speculator_vllm_engine_args_survive_patch_serialization(
+def test_speculator_vllm_config_generates_sidecar_args(
     mode: SpeculatorMode, test_case: TestCase
 ) -> None:
-    """Forward engine settings through the API without overriding the runtime launcher."""
+    """Patch the sidecar launcher with vLLM speculative and engine arguments."""
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=mode,
         training_resources={"nvidia.com/gpu": 1},
         dataset_name="ultrachat",
         output_dir="pvc://test-pvc/output",
-        vllm_config=SpeculatorVLLMConfig(
-            resources={"nvidia.com/gpu": 1},
-            **test_case.config,
+        vllm_resources={"nvidia.com/gpu": 1},
+        config=SpeculatorConfig(
+            target_layer_ids=[2, 16, 29, 31],
+            vllm=VLLMSpeculativeConfig(**test_case.config),
         ),
-        config=SpeculatorConfig(target_layer_ids=[2, 16, 29, 31]),
     )
 
     raw_patch = apply_speculator_sidecar_overrides(trainer, [])[0]
-    serialized_patch = models.TrainerV1alpha1RuntimePatch.from_dict(raw_patch).to_dict()
-
-    for patch in (raw_patch, serialized_patch):
-        pod_spec = patch["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
-            "template"
-        ]["spec"]["template"]["spec"]
-        sidecar = pod_spec["initContainers"][0]
-        assert sidecar["name"] == "vllm-sidecar"
-        assert "command" not in sidecar
-        assert "args" not in sidecar
-        env_dict = {env["name"]: env["value"] for env in sidecar["env"]}
-        if test_case.expected_output:
-            assert json.loads(env_dict["SPECULATOR_VLLM_EXTRA_ARGS"]) == test_case.expected_output
-        else:
-            assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
+    pod_spec = raw_patch["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+        "template"
+    ]["spec"]["template"]["spec"]
+    sidecar = pod_spec["initContainers"][0]
+    assert sidecar["name"] == "vllm-sidecar"
+    assert "command" not in sidecar
+    assert len(sidecar["args"]) == 1
+    args = sidecar["args"][0]
+    for expected_arg in test_case.expected_output:
+        assert expected_arg in args
+    env_dict = {env["name"]: env["value"] for env in sidecar["env"]}
+    assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
+    assert sidecar["resources"]["limits"] == {"nvidia.com/gpu": "1"}
 
 
 def test_apply_speculator_sidecar_overrides_preserves_existing():
