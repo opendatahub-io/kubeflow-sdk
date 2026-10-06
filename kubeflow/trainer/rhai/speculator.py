@@ -24,7 +24,6 @@ from enum import Enum
 import inspect
 import json
 import re
-import shlex
 import textwrap
 
 from kubeflow_trainer_api import models
@@ -90,9 +89,9 @@ class VLLMSpeculativeConfig:
             When ``None``, vLLM uses its default.
         extra_args: Additional vLLM EngineArgs as a mapping from argument names in
             Python ``snake_case`` to string values, for example
-            ``{"max_num_batched_tokens": "8192"}``. Values are converted into
-            command-line flags for the managed vLLM sidecar. Applying these requires
-            a Trainer Operator RuntimePatch API that supports container ``args``.
+            ``{"max_num_batched_tokens": "8192"}``. The SDK sends configured
+            values in the ``SPECULATOR_VLLM_EXTRA_ARGS`` environment variable.
+            A compatible runtime launcher must consume this JSON to apply them.
 
     Example:
         VLLMSpeculativeConfig(
@@ -210,9 +209,17 @@ class VLLMSpeculativeConfig:
 SpeculatorVLLMConfig = VLLMSpeculativeConfig
 
 
-def _get_vllm_cli_flags(config: VLLMSpeculativeConfig) -> list[str]:
-    """Build CLI flags for the configured vLLM EngineArgs."""
-    cli_flags: list[str] = []
+def _get_vllm_sidecar_config(config: VLLMSpeculativeConfig) -> dict[str, bool | int | str]:
+    """Collect configured vLLM values for the sidecar JSON environment payload.
+
+    num_speculative_tokens is a control value for the speculative config, not a
+    standalone vLLM CLI flag. A runtime launcher must handle that key separately
+    from EngineArgs passed as CLI flags.
+    """
+    sidecar_config: dict[str, bool | int | str] = {}
+    if config.num_speculative_tokens != 1:
+        sidecar_config["num_speculative_tokens"] = config.num_speculative_tokens
+
     named_args = {
         "max_model_len": config.max_model_len,
         "dtype": config.dtype,
@@ -220,53 +227,13 @@ def _get_vllm_cli_flags(config: VLLMSpeculativeConfig) -> list[str]:
     }
     for name, value in named_args.items():
         if value is not None:
-            cli_flags.extend((f"--{name.replace('_', '-')}", shlex.quote(str(value))))
+            sidecar_config[name] = value
 
-    if config.enforce_eager:
-        cli_flags.append("--enforce-eager")
+    if config.enforce_eager is not None:
+        sidecar_config["enforce_eager"] = config.enforce_eager
 
-    for name, value in sorted((config.extra_args or {}).items()):
-        cli_flags.extend((f"--{name.replace('_', '-')}", shlex.quote(value)))
-
-    return cli_flags
-
-
-def _build_vllm_sidecar_args(
-    trainer: "SpeculativeDecodingTrainer",
-    hidden_states_path: str,
-    target_layer_ids: list[int] | None,
-) -> str:
-    """Build the shell script used to launch the managed vLLM sidecar."""
-    speculator_config = trainer.config or SpeculatorConfig()
-    vllm_config = speculator_config.vllm or VLLMSpeculativeConfig()
-    speculative_config = {
-        "method": "extract_hidden_states",
-        "num_speculative_tokens": vllm_config.num_speculative_tokens,
-        "draft_model_config": {
-            "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids or []}
-        },
-    }
-    kv_transfer_config = {
-        "kv_connector": "ExampleHiddenStatesConnector",
-        "kv_role": "kv_producer",
-        "kv_connector_extra_config": {"shared_storage_path": hidden_states_path},
-    }
-    kv_transfer_json = json.dumps(kv_transfer_config, separators=(",", ":"))
-    engine_flags = " ".join(_get_vllm_cli_flags(vllm_config))
-    command = [
-        "TP=${SPECULATOR_VLLM_GPU_COUNT:-1}",
-        'TF=""',
-        '[ "$TP" -gt 1 ] && TF="--tensor-parallel-size $TP"',
-        "python3 -m vllm.entrypoints.cli.main serve \\",
-        '  "$SPECULATOR_VERIFIER_MODEL" \\',
-        f"  --speculative-config {shlex.quote(json.dumps(speculative_config, separators=(',', ':')))} \\",
-        f"  --kv-transfer-config {shlex.quote(kv_transfer_json)} \\",
-        "  --port 8234 \\",
-        '  --gpu-memory-utilization "${SPECULATOR_GPU_MEM_UTIL:-0.9}" \\',
-        "  --no-enable-chunked-prefill \\",
-        "  --trust-remote-code $TF" + (f" {engine_flags}" if engine_flags else ""),
-    ]
-    return "\n".join(command)
+    sidecar_config.update(config.extra_args or {})
+    return sidecar_config
 
 
 @dataclass
@@ -1963,10 +1930,11 @@ def apply_speculator_sidecar_overrides(
 ) -> list:
     """Configure the vLLM sidecar init container via runtime patches.
 
-    Sets the launcher arguments, environment variables, PVC volume mount, and resources
-    on the ``vllm-sidecar`` init container defined in the ClusterTrainingRuntime.
-    The patch carries container ``args`` and ``resources`` directly; applying those
-    fields requires a Trainer Operator RuntimePatch API that supports them.
+    Sets environment variables and the PVC volume mount on the ``vllm-sidecar`` init
+    container defined in the ClusterTrainingRuntime. Configured vLLM options are
+    serialized to ``SPECULATOR_VLLM_EXTRA_ARGS`` through the supported RuntimePatch
+    environment-variable path. A compatible runtime launcher must consume this JSON;
+    this patch does not replace container arguments.
 
     Args:
         trainer: SpeculativeDecodingTrainer with model path, GPU settings, and output_dir.
@@ -2028,15 +1996,22 @@ def apply_speculator_sidecar_overrides(
         {"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str},
     ]
 
+    if cfg.vllm is not None:
+        vllm_sidecar_config = _get_vllm_sidecar_config(cfg.vllm)
+        if vllm_sidecar_config:
+            sidecar_env.append(
+                {
+                    "name": "SPECULATOR_VLLM_EXTRA_ARGS",
+                    "value": json.dumps(vllm_sidecar_config, sort_keys=True),
+                }
+            )
+
     if trainer.env and "HF_TOKEN" in trainer.env:
         sidecar_env.append({"name": "HF_TOKEN", "value": trainer.env["HF_TOKEN"]})
 
     sidecar_override = {
         "name": VLLM_SIDECAR_CONTAINER_NAME,
         "env": sidecar_env,
-        "args": [
-            _build_vllm_sidecar_args(trainer, hs_path, cfg.target_layer_ids),
-        ],
     }
     if trainer.vllm_resources:
         sidecar_resources = {k: str(v) for k, v in trainer.vllm_resources.items()}

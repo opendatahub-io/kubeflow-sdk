@@ -16,6 +16,7 @@
 
 import json
 
+from kubeflow_trainer_api import models
 import pytest
 
 from kubeflow.trainer.constants import constants
@@ -1690,9 +1691,7 @@ def test_apply_speculator_sidecar_overrides():
     assert env_dict["SPECULATOR_VLLM_GPU_COUNT"] == "1"
     assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
     assert "command" not in sidecar
-    assert len(sidecar["args"]) == 1
-    assert "--speculative-config" in sidecar["args"][0]
-    assert '"num_speculative_tokens":1' in sidecar["args"][0]
+    assert "args" not in sidecar
     assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
 
     assert sidecar["volumeMounts"][0]["name"] == "checkpoint-storage"
@@ -1709,8 +1708,8 @@ def test_apply_speculator_sidecar_overrides():
 @pytest.mark.parametrize(
     "test_case",
     [
-        TestCase(name="defaults", config={}, expected_output=[]),
-        TestCase(name="empty-extra-args", config={"extra_args": {}}, expected_output=[]),
+        TestCase(name="defaults", config={}, expected_output=None),
+        TestCase(name="empty-extra-args", config={"extra_args": {}}, expected_output=None),
         TestCase(
             name="num-tokens-and-engine-flags",
             config={
@@ -1721,37 +1720,37 @@ def test_apply_speculator_sidecar_overrides():
                 "max_num_seqs": 16,
                 "extra_args": {"max_num_batched_tokens": "8192"},
             },
-            expected_output=[
-                '"num_speculative_tokens":3',
-                "--max-model-len 8192",
-                "--enforce-eager",
-                "--dtype bfloat16",
-                "--max-num-seqs 16",
-                "--max-num-batched-tokens 8192",
-            ],
+            expected_output={
+                "num_speculative_tokens": 3,
+                "max_model_len": 8192,
+                "enforce_eager": True,
+                "dtype": "bfloat16",
+                "max_num_seqs": 16,
+                "max_num_batched_tokens": "8192",
+            },
         ),
         TestCase(
             name="false-is-not-omitted",
             config={"enforce_eager": False},
-            expected_output=[],
+            expected_output={"enforce_eager": False},
         ),
         TestCase(
             name="extra-args-only",
             config={"extra_args": {"max_num_batched_tokens": "8192", "served_model_name": "a b"}},
-            expected_output=["--max-num-batched-tokens 8192", "--served-model-name 'a b'"],
+            expected_output={"max_num_batched_tokens": "8192", "served_model_name": "a b"},
         ),
         TestCase(
             name="shell-metacharacters-are-quoted",
             config={"extra_args": {"served_model_name": "$(touch /tmp/not-executed)"}},
-            expected_output=["--served-model-name '$(touch /tmp/not-executed)'"],
+            expected_output={"served_model_name": "$(touch /tmp/not-executed)"},
         ),
     ],
     ids=lambda test_case: test_case.name,
 )
-def test_speculator_vllm_config_generates_sidecar_args(
+def test_speculator_vllm_config_serializes_to_sidecar_env(
     mode: SpeculatorMode, test_case: TestCase
 ) -> None:
-    """Patch the sidecar launcher with vLLM speculative and engine arguments."""
+    """Send vLLM settings through the supported sidecar env RuntimePatch."""
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=mode,
@@ -1766,19 +1765,21 @@ def test_speculator_vllm_config_generates_sidecar_args(
     )
 
     raw_patch = apply_speculator_sidecar_overrides(trainer, [])[0]
-    pod_spec = raw_patch["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
-        "template"
-    ]["spec"]["template"]["spec"]
-    sidecar = pod_spec["initContainers"][0]
-    assert sidecar["name"] == "vllm-sidecar"
-    assert "command" not in sidecar
-    assert len(sidecar["args"]) == 1
-    args = sidecar["args"][0]
-    for expected_arg in test_case.expected_output:
-        assert expected_arg in args
-    env_dict = {env["name"]: env["value"] for env in sidecar["env"]}
-    assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
-    assert sidecar["resources"]["limits"] == {"nvidia.com/gpu": "1"}
+    typed_patch = models.TrainerV1alpha1RuntimePatch.from_dict(raw_patch).to_dict()
+
+    for patch in (raw_patch, typed_patch):
+        pod_spec = patch["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0][
+            "template"
+        ]["spec"]["template"]["spec"]
+        sidecar = pod_spec["initContainers"][0]
+        assert sidecar["name"] == "vllm-sidecar"
+        assert "command" not in sidecar
+        assert "args" not in sidecar
+        env_dict = {env["name"]: env["value"] for env in sidecar["env"]}
+        if test_case.expected_output is None:
+            assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
+        else:
+            assert json.loads(env_dict["SPECULATOR_VLLM_EXTRA_ARGS"]) == test_case.expected_output
 
 
 def test_apply_speculator_sidecar_overrides_preserves_existing():
