@@ -29,8 +29,7 @@ from kubeflow.trainer.rhai.speculator import (
     SpeculatorMode,
     SpeculatorType,
     SpeculatorVLLMConfig,
-    VLLMEngineConfig,
-    VLLMSpeculativeConfig,
+    SpeculatorVLLMEngineConfig,
     _render_speculator_training_script,
     _update_draft_config_for_inference,
     apply_speculator_sidecar_overrides,
@@ -41,9 +40,9 @@ from kubeflow.trainer.types import types
 
 
 def test_vllm_config_defaults():
-    """Test defaults for split vLLM configs and the legacy combined config."""
-    speculative = VLLMSpeculativeConfig()
-    engine = VLLMEngineConfig()
+    """Test defaults for both split vLLM configs."""
+    speculative = SpeculatorVLLMConfig()
+    engine = SpeculatorVLLMEngineConfig()
     config = SpeculatorConfig()
 
     assert speculative.num_speculative_tokens == 1
@@ -55,7 +54,6 @@ def test_vllm_config_defaults():
     assert config.vllm is None
     assert config.vllm_speculative is None
     assert config.vllm_engine is None
-    assert SpeculatorVLLMConfig is not VLLMSpeculativeConfig
 
 
 @pytest.mark.parametrize(
@@ -75,31 +73,19 @@ def test_speculator_config_validates_nested_vllm_config_types(
 
 
 def test_legacy_vllm_config_is_normalized_to_split_configs():
-    """Keep the deprecated combined config usable while normalizing its values."""
+    """Keep the old vllm field as a shortcut for speculative settings."""
     config = SpeculatorConfig(
-        vllm=SpeculatorVLLMConfig(
-            num_speculative_tokens=2,
-            enforce_eager=True,
-            max_model_len=4096,
-            dtype="bfloat16",
-            max_num_seqs=8,
-            extra_args={"max_num_batched_tokens": "4096"},
-        )
+        vllm=SpeculatorVLLMConfig(num_speculative_tokens=2, enforce_eager=True)
     )
 
-    assert config.vllm_speculative == VLLMSpeculativeConfig(
+    assert config.vllm_speculative == SpeculatorVLLMConfig(
         num_speculative_tokens=2,
         enforce_eager=True,
     )
-    assert config.vllm_engine == VLLMEngineConfig(
-        max_model_len=4096,
-        dtype="bfloat16",
-        max_num_seqs=8,
-        extra_args={"max_num_batched_tokens": "4096"},
-    )
+    assert config.vllm_engine is None
 
-    speculative_only = SpeculatorConfig(vllm=VLLMSpeculativeConfig(num_speculative_tokens=3))
-    assert speculative_only.vllm_speculative == VLLMSpeculativeConfig(num_speculative_tokens=3)
+    speculative_only = SpeculatorConfig(vllm=SpeculatorVLLMConfig(num_speculative_tokens=3))
+    assert speculative_only.vllm_speculative == SpeculatorVLLMConfig(num_speculative_tokens=3)
     assert speculative_only.vllm_engine is None
 
 
@@ -108,7 +94,7 @@ def test_speculator_config_rejects_legacy_and_split_vllm_configs_together():
     with pytest.raises(ValueError, match="cannot be combined"):
         SpeculatorConfig(
             vllm=SpeculatorVLLMConfig(),
-            vllm_engine=VLLMEngineConfig(max_model_len=4096),
+            vllm_engine=SpeculatorVLLMEngineConfig(max_model_len=4096),
         )
 
 
@@ -116,34 +102,34 @@ def test_speculator_config_rejects_legacy_and_split_vllm_configs_together():
 def test_speculative_config_rejects_invalid_num_speculative_tokens(num_speculative_tokens):
     """Test speculative token count must be a positive integer."""
     with pytest.raises(ValueError, match="num_speculative_tokens"):
-        VLLMSpeculativeConfig(num_speculative_tokens=num_speculative_tokens)
+        SpeculatorVLLMConfig(num_speculative_tokens=num_speculative_tokens)
 
 
 @pytest.mark.parametrize("enforce_eager", ["true", 1])
 def test_speculative_config_rejects_invalid_enforce_eager(enforce_eager):
     """Test speculative eager override must be a boolean or None."""
     with pytest.raises(ValueError, match="enforce_eager"):
-        VLLMSpeculativeConfig(enforce_eager=enforce_eager)
+        SpeculatorVLLMConfig(enforce_eager=enforce_eager)
 
 
 @pytest.mark.parametrize("max_model_len", [0, -2, True, ""])
 def test_speculative_config_rejects_invalid_max_model_len(max_model_len):
     """Test max_model_len only accepts supported non-empty forms."""
     with pytest.raises(ValueError, match="max_model_len"):
-        VLLMEngineConfig(max_model_len=max_model_len)
+        SpeculatorVLLMEngineConfig(max_model_len=max_model_len)
 
 
 @pytest.mark.parametrize("max_model_len", [1, -1, "auto"])
 def test_speculative_config_accepts_supported_max_model_len_forms(max_model_len):
     """Accept numeric lengths and documented vLLM string values."""
-    assert VLLMEngineConfig(max_model_len=max_model_len).max_model_len == max_model_len
+    assert SpeculatorVLLMEngineConfig(max_model_len=max_model_len).max_model_len == max_model_len
 
 
 @pytest.mark.parametrize("max_num_seqs", [0, -1, 1.5, True])
 def test_speculative_config_rejects_invalid_max_num_seqs(max_num_seqs):
     """Test max_num_seqs must be a positive integer."""
     with pytest.raises(ValueError, match="max_num_seqs"):
-        VLLMEngineConfig(max_num_seqs=max_num_seqs)
+        SpeculatorVLLMEngineConfig(max_num_seqs=max_num_seqs)
 
 
 @pytest.mark.parametrize(
@@ -158,10 +144,10 @@ def test_speculative_config_rejects_invalid_max_num_seqs(max_num_seqs):
 def test_speculative_config_rejects_unsafe_or_conflicting_extra_args(extra_args):
     """Reject malformed, duplicate, managed, or non-string passthrough arguments."""
     with pytest.raises(ValueError, match="extra_args"):
-        VLLMEngineConfig(extra_args=extra_args)
+        SpeculatorVLLMEngineConfig(extra_args=extra_args)
 
     with pytest.raises(ValueError, match="duplicates"):
-        VLLMEngineConfig(max_num_seqs=4, extra_args={"max_num_seqs": "8"})
+        SpeculatorVLLMEngineConfig(max_num_seqs=4, extra_args={"max_num_seqs": "8"})
 
 
 def test_speculator_trainer_keeps_vllm_settings_at_root():
@@ -1852,12 +1838,12 @@ def test_speculator_vllm_config_serializes_to_sidecar_env(
         config=SpeculatorConfig(
             target_layer_ids=[2, 16, 29, 31],
             vllm_speculative=(
-                VLLMSpeculativeConfig(**test_case.config["vllm_speculative"])
+                SpeculatorVLLMConfig(**test_case.config["vllm_speculative"])
                 if "vllm_speculative" in test_case.config
                 else None
             ),
             vllm_engine=(
-                VLLMEngineConfig(**test_case.config["vllm_engine"])
+                SpeculatorVLLMEngineConfig(**test_case.config["vllm_engine"])
                 if "vllm_engine" in test_case.config
                 else None
             ),
