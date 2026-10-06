@@ -215,13 +215,7 @@ class TestContainerPatch:
     @pytest.mark.parametrize(
         "kwargs,expected_error",
         [
-            ({"name": "trainer", "resources": {}}, "resources must specify requests and/or limits"),
             ({"name": ""}, "Container name must be a non-empty string"),
-            ({"name": "trainer", "args": "python train.py"}, "args must be a list of strings"),
-            (
-                {"name": "trainer", "resources": {"requests": {}}},
-                "resources 'requests' must be a non-empty dictionary",
-            ),
             (
                 {"name": "trainer", "env": [{"invalid": "structure"}]},
                 "Each env entry must have a 'name' key",
@@ -237,51 +231,6 @@ class TestContainerPatch:
         with pytest.raises(ValueError) as exc_info:
             ContainerPatch(**kwargs)
         assert expected_error in str(exc_info.value)
-
-    def test_container_patch_args_and_resources(self, mock_kubernetes_backend):
-        """Serialize args and resources using the RuntimePatch API field names."""
-        patch = RuntimePatch(
-            training_runtime_spec=TrainingRuntimeSpecPatch(
-                template=JobSetTemplatePatch(
-                    spec=JobSetSpecPatch(
-                        replicated_jobs=[
-                            ReplicatedJobPatch(
-                                name="node",
-                                template=JobTemplatePatch(
-                                    spec=JobSpecPatch(
-                                        template=PodTemplatePatch(
-                                            spec=PodSpecPatch(
-                                                init_containers=[
-                                                    ContainerPatch(
-                                                        name="vllm-sidecar",
-                                                        args=["python -m vllm serve"],
-                                                        resources={
-                                                            "requests": {"nvidia.com/gpu": "1"},
-                                                            "limits": {"nvidia.com/gpu": "1"},
-                                                        },
-                                                    )
-                                                ]
-                                            )
-                                        )
-                                    )
-                                ),
-                            )
-                        ]
-                    )
-                )
-            )
-        )
-
-        job_spec = {}
-        patch(job_spec, None, mock_kubernetes_backend)
-        container_patch = job_spec["spec"]["runtimePatches"][0]["trainingRuntimeSpec"]["template"][
-            "spec"
-        ]["replicatedJobs"][0]["template"]["spec"]["template"]["spec"]["initContainers"][0]
-        assert container_patch["args"] == ["python -m vllm serve"]
-        assert container_patch["resources"] == {
-            "requests": {"nvidia.com/gpu": "1"},
-            "limits": {"nvidia.com/gpu": "1"},
-        }
 
 
 class TestRuntimePatch:

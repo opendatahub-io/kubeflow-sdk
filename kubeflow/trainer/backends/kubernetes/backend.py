@@ -42,22 +42,6 @@ from kubeflow.trainer.types import types
 logger = logging.getLogger(__name__)
 
 
-def _serialize_train_job_with_runtime_patches(
-    train_job: models.TrainerV1alpha1TrainJob,
-    runtime_patches: list[dict[str, Any]] | None,
-) -> dict[str, Any]:
-    """Serialize a TrainJob without dropping RuntimePatch fields unknown to this client.
-
-    The generated API client may lag the RuntimePatch CRD. Replacing the serialized
-    patch objects with the original dictionaries preserves forward-compatible fields
-    such as container ``args`` and ``resources`` in the request body.
-    """
-    train_job_dict = train_job.to_dict()
-    if runtime_patches:
-        train_job_dict.setdefault("spec", {})["runtimePatches"] = runtime_patches
-    return train_job_dict
-
-
 class KubernetesBackend(RuntimeBackend):
     def __init__(self, cfg: KubernetesBackendConfig):
         if cfg.namespace is None:
@@ -328,7 +312,7 @@ class KubernetesBackend(RuntimeBackend):
         annotations = None
         name = None
         trainer_overrides = {}
-        runtime_patches: list[dict[str, Any]] = []
+        runtime_patches = None
 
         if options:
             for option in options:
@@ -342,7 +326,7 @@ class KubernetesBackend(RuntimeBackend):
             # Extract spec-level configurations
             spec_section = job_spec.get("spec", {})
             trainer_overrides = spec_section.get("trainer", {})
-            runtime_patches = spec_section.get("runtimePatches") or []
+            runtime_patches = spec_section.get("runtimePatches")
 
         train_job_name = name or (
             random.choice(string.ascii_lowercase)
@@ -380,7 +364,7 @@ class KubernetesBackend(RuntimeBackend):
                 constants.VERSION,
                 self.namespace,
                 constants.TRAINJOB_PLURAL,
-                _serialize_train_job_with_runtime_patches(train_job, runtime_patches),
+                train_job.to_dict(),
             )
         except multiprocessing.TimeoutError as e:
             raise TimeoutError(
