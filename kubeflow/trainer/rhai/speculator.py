@@ -92,8 +92,8 @@ class SpeculatorVLLMConfig:
 
     The runtime's hidden-state extraction settings, including its fixed one-token
     speculative configuration, remain in ``--speculative-config``. Settings from this
-    class are sent as engine arguments and emitted as regular ``vllm serve`` flags by a
-    compatible runtime launcher consuming ``SPECULATOR_VLLM_EXTRA_ARGS``. See the
+    class are serialized as a pre-built JSON array of ``vllm serve`` CLI flags in
+    ``SPECULATOR_VLLM_EXTRA_ARGS``. See the
     `vLLM serve CLI reference <https://docs.vllm.ai/en/v0.24.0/cli/serve/>`_ for
     available engine options. Since the hidden-state extraction runtime disables
     chunked prefill, configure ``max_num_batched_tokens`` above ``max_model_len`` when
@@ -199,23 +199,22 @@ class SpeculatorVLLMConfig:
 
 def _get_vllm_sidecar_config(
     config: SpeculatorVLLMConfig | None,
-) -> dict[str, dict[str, bool | int | str]]:
-    """Collect configured vLLM engine values for the sidecar JSON environment payload."""
-    sidecar_config: dict[str, dict[str, bool | int | str]] = {}
-    if config is not None:
-        engine_args: dict[str, bool | int | str] = {}
-        if config.enforce_eager is not None:
-            engine_args["enforce_eager"] = config.enforce_eager
-
-        for name in ("max_model_len", "max_num_seqs"):
-            value = getattr(config, name)
-            if value is not None:
-                engine_args[name] = value
-        engine_args.update(config.extra_args or {})
-        if engine_args:
-            sidecar_config["engine_args"] = engine_args
-
-    return sidecar_config
+) -> list[str]:
+    """Convert vLLM engine settings to a pre-built list of CLI flag strings."""
+    if config is None:
+        return []
+    args: list[str] = []
+    if config.enforce_eager is True:
+        args.append("--enforce-eager")
+    elif config.enforce_eager is False:
+        args.append("--no-enforce-eager")
+    if config.max_model_len is not None:
+        args.extend(["--max-model-len", str(config.max_model_len)])
+    if config.max_num_seqs is not None:
+        args.extend(["--max-num-seqs", str(config.max_num_seqs)])
+    for name, value in (config.extra_args or {}).items():
+        args.extend(["--" + name.replace("_", "-"), value])
+    return args
 
 
 @dataclass
@@ -1914,9 +1913,8 @@ def apply_speculator_sidecar_overrides(
 
     Sets environment variables and the PVC volume mount on the ``vllm-sidecar`` init
     container defined in the ClusterTrainingRuntime. Configured vLLM options are
-    serialized to ``SPECULATOR_VLLM_EXTRA_ARGS`` through the supported RuntimePatch
-    environment-variable path. A compatible runtime launcher must consume this JSON;
-    this patch does not replace container arguments.
+    serialized as a JSON array of pre-built CLI flags in ``SPECULATOR_VLLM_EXTRA_ARGS``
+    through the supported RuntimePatch environment-variable path.
 
     Args:
         trainer: SpeculativeDecodingTrainer with model path, GPU settings, and output_dir.
@@ -1979,12 +1977,12 @@ def apply_speculator_sidecar_overrides(
     ]
 
     if cfg.vllm is not None:
-        vllm_sidecar_config = _get_vllm_sidecar_config(cfg.vllm)
-        if vllm_sidecar_config:
+        vllm_extra_args = _get_vllm_sidecar_config(cfg.vllm)
+        if vllm_extra_args:
             sidecar_env.append(
                 {
                     "name": "SPECULATOR_VLLM_EXTRA_ARGS",
-                    "value": json.dumps(vllm_sidecar_config, sort_keys=True),
+                    "value": json.dumps(vllm_extra_args),
                 }
             )
 

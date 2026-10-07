@@ -1736,21 +1736,24 @@ def test_apply_speculator_sidecar_overrides():
                     },
                 },
             },
-            expected_output={
-                "engine_args": {
-                    "enforce_eager": True,
-                    "max_model_len": 40960,
-                    "max_num_seqs": 16,
-                    "dtype": "bfloat16",
-                    "max_num_batched_tokens": "49160",
-                    "quantization": "fp8",
-                },
-            },
+            expected_output=[
+                "--enforce-eager",
+                "--max-model-len",
+                "40960",
+                "--max-num-seqs",
+                "16",
+                "--dtype",
+                "bfloat16",
+                "--max-num-batched-tokens",
+                "49160",
+                "--quantization",
+                "fp8",
+            ],
         ),
         TestCase(
             name="false-is-not-omitted",
             config={"vllm": {"enforce_eager": False}},
-            expected_output={"engine_args": {"enforce_eager": False}},
+            expected_output=["--no-enforce-eager"],
         ),
         TestCase(
             name="extra-args-only",
@@ -1762,19 +1765,20 @@ def test_apply_speculator_sidecar_overrides():
                     }
                 }
             },
-            expected_output={
-                "engine_args": {
-                    "max_num_batched_tokens": "49160",
-                    "served_model_name": "a b",
-                },
-            },
+            expected_output=[
+                "--max-num-batched-tokens",
+                "49160",
+                "--served-model-name",
+                "a b",
+            ],
         ),
         TestCase(
             name="shell-metacharacters-are-quoted",
             config={"vllm": {"extra_args": {"served_model_name": "$(touch /tmp/not-executed)"}}},
-            expected_output={
-                "engine_args": {"served_model_name": "$(touch /tmp/not-executed)"},
-            },
+            expected_output=[
+                "--served-model-name",
+                "$(touch /tmp/not-executed)",
+            ],
         ),
     ],
     ids=lambda test_case: test_case.name,
