@@ -1727,17 +1727,23 @@ def test_apply_speculator_sidecar_overrides():
             config={
                 "vllm": {
                     "enforce_eager": True,
-                    "max_model_len": 8192,
+                    "max_model_len": 40960,
                     "max_num_seqs": 16,
-                    "extra_args": {"max_num_batched_tokens": "8192"},
+                    "extra_args": {
+                        "dtype": "bfloat16",
+                        "max_num_batched_tokens": "49160",
+                        "quantization": "fp8",
+                    },
                 },
             },
             expected_output={
                 "engine_args": {
                     "enforce_eager": True,
-                    "max_model_len": 8192,
+                    "max_model_len": 40960,
                     "max_num_seqs": 16,
-                    "max_num_batched_tokens": "8192",
+                    "dtype": "bfloat16",
+                    "max_num_batched_tokens": "49160",
+                    "quantization": "fp8",
                 },
             },
         ),
@@ -1751,14 +1757,14 @@ def test_apply_speculator_sidecar_overrides():
             config={
                 "vllm": {
                     "extra_args": {
-                        "max_num_batched_tokens": "8192",
+                        "max_num_batched_tokens": "49160",
                         "served_model_name": "a b",
                     }
                 }
             },
             expected_output={
                 "engine_args": {
-                    "max_num_batched_tokens": "8192",
+                    "max_num_batched_tokens": "49160",
                     "served_model_name": "a b",
                 },
             },

@@ -95,16 +95,18 @@ class SpeculatorVLLMConfig:
     class are sent as engine arguments and emitted as regular ``vllm serve`` flags by a
     compatible runtime launcher consuming ``SPECULATOR_VLLM_EXTRA_ARGS``. See the
     `vLLM serve CLI reference <https://docs.vllm.ai/en/v0.24.0/cli/serve/>`_ for
-    available engine options.
+    available engine options. Since the hidden-state extraction runtime disables
+    chunked prefill, configure ``max_num_batched_tokens`` above ``max_model_len`` when
+    setting both values.
 
     Example:
         SpeculatorVLLMConfig(
             enforce_eager=True,
-            max_model_len=8192,
+            max_model_len=40960,
             max_num_seqs=16,
             extra_args={
-                "max_num_batched_tokens": "8192",
-                "swap_space": "8",
+                "dtype": "bfloat16",
+                "max_num_batched_tokens": "49160",
                 "quantization": "fp8",
             },
         )
