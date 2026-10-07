@@ -43,7 +43,6 @@ def test_vllm_config_defaults():
     vllm = SpeculatorVLLMConfig()
     config = SpeculatorConfig()
 
-    assert vllm.num_speculative_tokens == 1
     assert vllm.enforce_eager is None
     assert vllm.max_model_len is None
     assert vllm.max_num_seqs is None
@@ -61,11 +60,10 @@ def test_speculator_config_validates_nested_vllm_config_type(field_value):
         SpeculatorConfig(vllm=field_value)
 
 
-@pytest.mark.parametrize("num_speculative_tokens", [0, -1, 1.5, True])
-def test_speculative_config_rejects_invalid_num_speculative_tokens(num_speculative_tokens):
-    """Test speculative token count must be a positive integer."""
-    with pytest.raises(ValueError, match="num_speculative_tokens"):
-        SpeculatorVLLMConfig(num_speculative_tokens=num_speculative_tokens)
+def test_num_speculative_tokens_is_not_configurable():
+    """Keep the extract-hidden-states runtime's one-token setting fixed."""
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        SpeculatorVLLMConfig(num_speculative_tokens=2)
 
 
 @pytest.mark.parametrize("enforce_eager", ["true", 1])
@@ -100,6 +98,7 @@ def test_speculative_config_rejects_invalid_max_num_seqs(max_num_seqs):
     [
         {"bad-flag": "value"},
         {"port": "9000"},
+        {"num_speculative_tokens": "2"},
         {"some_flag": 3},
         {"some_flag": "  "},
     ],
@@ -1721,13 +1720,12 @@ def test_apply_speculator_sidecar_overrides():
         TestCase(
             name="empty-extra-args",
             config={"vllm": {"extra_args": {}}},
-            expected_output={"speculative_config": {"num_speculative_tokens": 1}},
+            expected_output=None,
         ),
         TestCase(
             name="speculative-and-engine-settings",
             config={
                 "vllm": {
-                    "num_speculative_tokens": 3,
                     "enforce_eager": True,
                     "max_model_len": 8192,
                     "max_num_seqs": 16,
@@ -1735,10 +1733,7 @@ def test_apply_speculator_sidecar_overrides():
                 },
             },
             expected_output={
-                "speculative_config": {
-                    "num_speculative_tokens": 3,
-                    "enforce_eager": True,
-                },
+                "speculative_config": {"enforce_eager": True},
                 "engine_args": {
                     "max_model_len": 8192,
                     "max_num_seqs": 16,
@@ -1749,12 +1744,7 @@ def test_apply_speculator_sidecar_overrides():
         TestCase(
             name="false-is-not-omitted",
             config={"vllm": {"enforce_eager": False}},
-            expected_output={
-                "speculative_config": {
-                    "num_speculative_tokens": 1,
-                    "enforce_eager": False,
-                }
-            },
+            expected_output={"speculative_config": {"enforce_eager": False}},
         ),
         TestCase(
             name="extra-args-only",
@@ -1767,7 +1757,6 @@ def test_apply_speculator_sidecar_overrides():
                 }
             },
             expected_output={
-                "speculative_config": {"num_speculative_tokens": 1},
                 "engine_args": {
                     "max_num_batched_tokens": "8192",
                     "served_model_name": "a b",
@@ -1778,7 +1767,6 @@ def test_apply_speculator_sidecar_overrides():
             name="shell-metacharacters-are-quoted",
             config={"vllm": {"extra_args": {"served_model_name": "$(touch /tmp/not-executed)"}}},
             expected_output={
-                "speculative_config": {"num_speculative_tokens": 1},
                 "engine_args": {"served_model_name": "$(touch /tmp/not-executed)"},
             },
         ),

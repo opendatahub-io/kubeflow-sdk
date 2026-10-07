@@ -76,9 +76,10 @@ _SUPPORTED_DTYPES = {"bfloat16", "float16", "float32"}
 class SpeculatorVLLMConfig:
     """Configuration for speculative decoding and engine options on the vLLM sidecar.
 
+    The ``extract_hidden_states`` method requires exactly one speculative token. The
+    runtime keeps this value fixed at ``1``; it is not configurable through this class.
+
     Args:
-        num_speculative_tokens: Number of speculative tokens used by the vLLM
-            speculative decoding configuration (default: 1).
         enforce_eager: Whether vLLM should run eagerly instead of using CUDA graphs.
         max_model_len: Maximum context length, or a vLLM-supported string such as
             ``"auto"``. When ``None``, vLLM derives the length from the model.
@@ -97,7 +98,6 @@ class SpeculatorVLLMConfig:
 
     Example:
         SpeculatorVLLMConfig(
-            num_speculative_tokens=2,
             enforce_eager=True,
             max_model_len=8192,
             max_num_seqs=16,
@@ -109,7 +109,6 @@ class SpeculatorVLLMConfig:
         )
     """
 
-    num_speculative_tokens: int = 1
     enforce_eager: bool | None = None
     max_model_len: int | str | None = None
     max_num_seqs: int | None = None
@@ -117,16 +116,6 @@ class SpeculatorVLLMConfig:
 
     def __post_init__(self) -> None:
         """Validate vLLM speculative and engine settings."""
-        if (
-            isinstance(self.num_speculative_tokens, bool)
-            or not isinstance(self.num_speculative_tokens, int)
-            or self.num_speculative_tokens < 1
-        ):
-            raise ValueError(
-                "SpeculatorVLLMConfig.num_speculative_tokens must be a positive integer, "
-                f"got {self.num_speculative_tokens!r}."
-            )
-
         if self.enforce_eager is not None and not isinstance(self.enforce_eager, bool):
             raise ValueError(
                 "SpeculatorVLLMConfig.enforce_eager must be a boolean or None, "
@@ -215,12 +204,11 @@ def _get_vllm_sidecar_config(
     """
     sidecar_config: dict[str, dict[str, bool | int | str]] = {}
     if config is not None:
-        speculative_args: dict[str, bool | int | str] = {
-            "num_speculative_tokens": config.num_speculative_tokens
-        }
+        speculative_args: dict[str, bool | int | str] = {}
         if config.enforce_eager is not None:
             speculative_args["enforce_eager"] = config.enforce_eager
-        sidecar_config["speculative_config"] = speculative_args
+        if speculative_args:
+            sidecar_config["speculative_config"] = speculative_args
 
         engine_args: dict[str, bool | int | str] = {}
         for name in ("max_model_len", "max_num_seqs"):
