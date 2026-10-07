@@ -74,25 +74,49 @@ _SUPPORTED_DTYPES = {"bfloat16", "float16", "float32"}
 
 @dataclass
 class SpeculatorVLLMConfig:
-    """Configuration for vLLM speculative decoding.
+    """Configuration for speculative decoding and engine options on the vLLM sidecar.
 
     Args:
         num_speculative_tokens: Number of speculative tokens used by the vLLM
             speculative decoding configuration (default: 1).
         enforce_eager: Whether vLLM should run eagerly instead of using CUDA graphs.
+        max_model_len: Maximum context length, or a vLLM-supported string such as
+            ``"auto"``. When ``None``, vLLM derives the length from the model.
+        max_num_seqs: Maximum sequences processed in one scheduler iteration. When
+            ``None``, vLLM uses its default.
+        extra_args: Additional vLLM engine arguments, mapping snake_case names to
+            string values. Multiple arguments can be provided, such as
+            ``max_num_batched_tokens``, ``swap_space``, and ``quantization``.
 
-    This config is serialized under ``--speculative-config``. General serving
-    options such as model length and dtype belong in :class:`SpeculatorVLLMEngineConfig`.
+    Speculative options are serialized into vLLM's ``--speculative-config`` JSON;
+    engine options are emitted as regular ``vllm serve`` flags by a compatible runtime
+    launcher consuming ``SPECULATOR_VLLM_EXTRA_ARGS``.
+    See the `vLLM SpeculativeConfig API documentation
+    <https://docs.vllm.ai/en/stable/api/vllm/config/speculative/>`_ for available
+    speculative decoding options.
 
     Example:
-        SpeculatorVLLMConfig(num_speculative_tokens=2, enforce_eager=True)
+        SpeculatorVLLMConfig(
+            num_speculative_tokens=2,
+            enforce_eager=True,
+            max_model_len=8192,
+            max_num_seqs=16,
+            extra_args={
+                "max_num_batched_tokens": "8192",
+                "swap_space": "8",
+                "quantization": "fp8",
+            },
+        )
     """
 
     num_speculative_tokens: int = 1
     enforce_eager: bool | None = None
+    max_model_len: int | str | None = None
+    max_num_seqs: int | None = None
+    extra_args: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
-        """Validate speculative decoding settings."""
+        """Validate vLLM speculative and engine settings."""
         if (
             isinstance(self.num_speculative_tokens, bool)
             or not isinstance(self.num_speculative_tokens, int)
@@ -109,47 +133,11 @@ class SpeculatorVLLMConfig:
                 f"got {type(self.enforce_eager).__name__}"
             )
 
-
-@dataclass
-class SpeculatorVLLMEngineConfig:
-    """Configuration for general vLLM serving engine arguments.
-
-    Args:
-        dtype: Model data type supported by the installed vLLM version. When ``None``,
-            vLLM chooses the dtype.
-        max_model_len: Maximum context length for the verifier/target model, or a
-            vLLM-supported string such as ``"auto"``. When ``None``, vLLM derives the
-            length from the model.
-        max_num_seqs: Maximum number of sequences processed in one scheduler iteration.
-            When ``None``, vLLM uses its default.
-        extra_args: Additional vLLM EngineArgs as a mapping from argument names in
-            Python ``snake_case`` to string values, for example
-            ``{"max_num_batched_tokens": "8192"}``. The SDK sends configured
-            values in the ``SPECULATOR_VLLM_EXTRA_ARGS`` environment variable.
-            A compatible runtime launcher must consume the ``engine_args`` object in
-            this JSON to apply them.
-
-    Example:
-        SpeculatorVLLMEngineConfig(
-            max_model_len=8192,
-            dtype="bfloat16",
-            max_num_seqs=16,
-            extra_args={"max_num_batched_tokens": "8192"},
-        )
-    """
-
-    max_model_len: int | str | None = None
-    dtype: str | None = None
-    max_num_seqs: int | None = None
-    extra_args: dict[str, str] | None = None
-
-    def __post_init__(self) -> None:
-        """Validate general engine arguments."""
         if isinstance(self.max_model_len, bool) or not isinstance(
             self.max_model_len, (int, str, type(None))
         ):
             raise ValueError(
-                "SpeculatorVLLMEngineConfig.max_model_len must be an integer, string, or None, "
+                "SpeculatorVLLMConfig.max_model_len must be an integer, string, or None, "
                 f"got {type(self.max_model_len).__name__}"
             )
         if (
@@ -158,14 +146,11 @@ class SpeculatorVLLMEngineConfig:
             and (self.max_model_len < 1)
         ):
             raise ValueError(
-                "SpeculatorVLLMEngineConfig.max_model_len must be positive or -1 for "
+                "SpeculatorVLLMConfig.max_model_len must be positive or -1 for "
                 f"automatic selection, got {self.max_model_len}"
             )
         if isinstance(self.max_model_len, str) and not self.max_model_len.strip():
-            raise ValueError("SpeculatorVLLMEngineConfig.max_model_len cannot be empty.")
-
-        if self.dtype is not None and (not isinstance(self.dtype, str) or not self.dtype.strip()):
-            raise ValueError("SpeculatorVLLMEngineConfig.dtype must be a non-empty string or None.")
+            raise ValueError("SpeculatorVLLMConfig.max_model_len cannot be empty.")
 
         if self.max_num_seqs is not None and (
             isinstance(self.max_num_seqs, bool)
@@ -173,57 +158,55 @@ class SpeculatorVLLMEngineConfig:
             or self.max_num_seqs < 1
         ):
             raise ValueError(
-                "SpeculatorVLLMEngineConfig.max_num_seqs must be a positive integer or None, "
+                "SpeculatorVLLMConfig.max_num_seqs must be a positive integer or None, "
                 f"got {self.max_num_seqs!r}"
             )
 
         if self.extra_args is not None:
             if not isinstance(self.extra_args, dict):
-                raise ValueError("SpeculatorVLLMEngineConfig.extra_args must be a dict or None.")
+                raise ValueError("SpeculatorVLLMConfig.extra_args must be a dict or None.")
 
             reserved_args = {
                 "model",
                 "port",
                 "gpu_memory_utilization",
                 "speculative_config",
-                "num_speculative_tokens",
-                "enforce_eager",
                 "kv_transfer_config",
                 "trust_remote_code",
                 "enable_chunked_prefill",
                 "tensor_parallel_size",
+                "num_speculative_tokens",
+                "enforce_eager",
             }
             named_args = {
                 "max_model_len": self.max_model_len,
-                "dtype": self.dtype,
                 "max_num_seqs": self.max_num_seqs,
             }
             for name, value in self.extra_args.items():
                 if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", name):
                     raise ValueError(
-                        "SpeculatorVLLMEngineConfig.extra_args keys must be vLLM argument "
+                        "SpeculatorVLLMConfig.extra_args keys must be vLLM argument "
                         f"names in snake_case, got {name!r}"
                     )
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError(
-                        "SpeculatorVLLMEngineConfig.extra_args values must be non-empty strings, "
+                        "SpeculatorVLLMConfig.extra_args values must be non-empty strings, "
                         f"got {type(value).__name__} for {name!r}"
                     )
                 if name in reserved_args:
                     raise ValueError(
-                        f"SpeculatorVLLMEngineConfig.extra_args cannot override managed "
+                        f"SpeculatorVLLMConfig.extra_args cannot override managed "
                         f"argument {name!r}."
                     )
                 if name in named_args and named_args[name] is not None:
                     raise ValueError(
-                        f"SpeculatorVLLMEngineConfig.extra_args[{name!r}] duplicates the "
+                        f"SpeculatorVLLMConfig.extra_args[{name!r}] duplicates the "
                         "corresponding named field."
                     )
 
 
 def _get_vllm_sidecar_config(
-    speculative_config: SpeculatorVLLMConfig | None,
-    engine_config: SpeculatorVLLMEngineConfig | None,
+    config: SpeculatorVLLMConfig | None,
 ) -> dict[str, dict[str, bool | int | str]]:
     """Collect configured vLLM values for the sidecar JSON environment payload.
 
@@ -231,21 +214,20 @@ def _get_vllm_sidecar_config(
     vLLM EngineArgs so a runtime launcher can route each group to the right place.
     """
     sidecar_config: dict[str, dict[str, bool | int | str]] = {}
-    if speculative_config is not None:
+    if config is not None:
         speculative_args: dict[str, bool | int | str] = {
-            "num_speculative_tokens": speculative_config.num_speculative_tokens
+            "num_speculative_tokens": config.num_speculative_tokens
         }
-        if speculative_config.enforce_eager is not None:
-            speculative_args["enforce_eager"] = speculative_config.enforce_eager
+        if config.enforce_eager is not None:
+            speculative_args["enforce_eager"] = config.enforce_eager
         sidecar_config["speculative_config"] = speculative_args
 
-    if engine_config is not None:
         engine_args: dict[str, bool | int | str] = {}
-        for name in ("max_model_len", "dtype", "max_num_seqs"):
-            value = getattr(engine_config, name)
+        for name in ("max_model_len", "max_num_seqs"):
+            value = getattr(config, name)
             if value is not None:
                 engine_args[name] = value
-        engine_args.update(engine_config.extra_args or {})
+        engine_args.update(config.extra_args or {})
         if engine_args:
             sidecar_config["engine_args"] = engine_args
 
@@ -281,10 +263,7 @@ class SpeculatorConfig:
         target_layer_ids: Specific layer IDs for hidden state extraction. When ``None``,
             auto-selected from the verifier model architecture.
         from_pretrained: Path to a pretrained draft model to resume training from.
-        vllm_speculative: Optional settings serialized under vLLM's
-            ``--speculative-config`` argument.
-        vllm_engine: Optional regular ``vllm serve`` engine arguments.
-        vllm: Deprecated alias for ``vllm_speculative``.
+        vllm: Optional vLLM speculative-decoding and engine settings for the managed sidecar.
     """
 
     num_layers: int = 1
@@ -305,36 +284,13 @@ class SpeculatorConfig:
     target_layer_ids: list[int] | None = None
     from_pretrained: str | None = None
     vllm: SpeculatorVLLMConfig | None = None
-    vllm_speculative: SpeculatorVLLMConfig | None = None
-    vllm_engine: SpeculatorVLLMEngineConfig | None = None
 
     def __post_init__(self) -> None:
-        """Validate and normalize nested vLLM configurations."""
+        """Validate the nested vLLM configuration."""
         if self.vllm is not None and not isinstance(self.vllm, SpeculatorVLLMConfig):
             raise ValueError(
                 "SpeculatorConfig.vllm must be a SpeculatorVLLMConfig instance or None."
             )
-        if self.vllm_speculative is not None and not isinstance(
-            self.vllm_speculative, SpeculatorVLLMConfig
-        ):
-            raise ValueError(
-                "SpeculatorConfig.vllm_speculative must be a SpeculatorVLLMConfig instance or None."
-            )
-        if self.vllm_engine is not None and not isinstance(
-            self.vllm_engine, SpeculatorVLLMEngineConfig
-        ):
-            raise ValueError(
-                "SpeculatorConfig.vllm_engine must be a SpeculatorVLLMEngineConfig "
-                "instance or None."
-            )
-
-        if self.vllm is not None:
-            if self.vllm_speculative is not None or self.vllm_engine is not None:
-                raise ValueError(
-                    "SpeculatorConfig.vllm cannot be combined with vllm_speculative or "
-                    "vllm_engine; migrate the values to the split fields."
-                )
-            self.vllm_speculative = self.vllm
 
 
 @dataclass
@@ -370,9 +326,8 @@ class SpeculativeDecodingTrainer:
             Example:
             ``{"nvidia.com/gpu": 1, "memory": "96Gi", "cpu": "4"}``.
         vllm_gpu_memory_utilization: Fraction of GPU memory for vLLM (default: 0.9).
-        config: Advanced speculator training/data configuration. Its ``vllm_speculative``
-            and ``vllm_engine`` fields accept ``SpeculatorVLLMConfig`` and
-            ``SpeculatorVLLMEngineConfig`` respectively.
+        config: Advanced speculator training/data configuration, optionally including
+            a ``SpeculatorVLLMConfig`` for the managed vLLM sidecar.
         packages_to_install: Python packages to install before training.
         pip_index_urls: PyPI index URLs for package installation.
         env: Environment variables to set in training pods.
@@ -2039,11 +1994,8 @@ def apply_speculator_sidecar_overrides(
         {"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str},
     ]
 
-    if cfg.vllm_speculative is not None or cfg.vllm_engine is not None:
-        vllm_sidecar_config = _get_vllm_sidecar_config(
-            cfg.vllm_speculative,
-            cfg.vllm_engine,
-        )
+    if cfg.vllm is not None:
+        vllm_sidecar_config = _get_vllm_sidecar_config(cfg.vllm)
         if vllm_sidecar_config:
             sidecar_env.append(
                 {
