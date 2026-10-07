@@ -68,7 +68,7 @@ def test_num_speculative_tokens_is_not_configurable():
 
 @pytest.mark.parametrize("enforce_eager", ["true", 1])
 def test_speculative_config_rejects_invalid_enforce_eager(enforce_eager):
-    """Test speculative eager override must be a boolean or None."""
+    """Test eager-mode setting must be a boolean or None."""
     with pytest.raises(ValueError, match="enforce_eager"):
         SpeculatorVLLMConfig(enforce_eager=enforce_eager)
 
@@ -1723,7 +1723,7 @@ def test_apply_speculator_sidecar_overrides():
             expected_output=None,
         ),
         TestCase(
-            name="speculative-and-engine-settings",
+            name="engine-settings-including-eager-mode",
             config={
                 "vllm": {
                     "enforce_eager": True,
@@ -1733,8 +1733,8 @@ def test_apply_speculator_sidecar_overrides():
                 },
             },
             expected_output={
-                "speculative_config": {"enforce_eager": True},
                 "engine_args": {
+                    "enforce_eager": True,
                     "max_model_len": 8192,
                     "max_num_seqs": 16,
                     "max_num_batched_tokens": "8192",
@@ -1744,7 +1744,7 @@ def test_apply_speculator_sidecar_overrides():
         TestCase(
             name="false-is-not-omitted",
             config={"vllm": {"enforce_eager": False}},
-            expected_output={"speculative_config": {"enforce_eager": False}},
+            expected_output={"engine_args": {"enforce_eager": False}},
         ),
         TestCase(
             name="extra-args-only",

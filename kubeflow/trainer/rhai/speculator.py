@@ -80,7 +80,8 @@ class SpeculatorVLLMConfig:
     runtime keeps this value fixed at ``1``; it is not configurable through this class.
 
     Args:
-        enforce_eager: Whether vLLM should run eagerly instead of using CUDA graphs.
+        enforce_eager: Whether the target vLLM engine should always execute in eager
+            mode instead of using CUDA graphs.
         max_model_len: Maximum context length, or a vLLM-supported string such as
             ``"auto"``. When ``None``, vLLM derives the length from the model.
         max_num_seqs: Maximum sequences processed in one scheduler iteration. When
@@ -89,12 +90,12 @@ class SpeculatorVLLMConfig:
             string values. Multiple arguments can be provided, such as
             ``max_num_batched_tokens``, ``swap_space``, and ``quantization``.
 
-    Speculative options are serialized into vLLM's ``--speculative-config`` JSON;
-    engine options are emitted as regular ``vllm serve`` flags by a compatible runtime
-    launcher consuming ``SPECULATOR_VLLM_EXTRA_ARGS``.
-    See the `vLLM SpeculativeConfig API documentation
-    <https://docs.vllm.ai/en/stable/api/vllm/config/speculative/>`_ for available
-    speculative decoding options.
+    The runtime's hidden-state extraction settings, including its fixed one-token
+    speculative configuration, remain in ``--speculative-config``. Settings from this
+    class are sent as engine arguments and emitted as regular ``vllm serve`` flags by a
+    compatible runtime launcher consuming ``SPECULATOR_VLLM_EXTRA_ARGS``. See the
+    `vLLM serve CLI reference <https://docs.vllm.ai/en/v0.24.0/cli/serve/>`_ for
+    available engine options.
 
     Example:
         SpeculatorVLLMConfig(
@@ -197,20 +198,13 @@ class SpeculatorVLLMConfig:
 def _get_vllm_sidecar_config(
     config: SpeculatorVLLMConfig | None,
 ) -> dict[str, dict[str, bool | int | str]]:
-    """Collect configured vLLM values for the sidecar JSON environment payload.
-
-    The resulting object keeps speculative decoding fields separate from regular
-    vLLM EngineArgs so a runtime launcher can route each group to the right place.
-    """
+    """Collect configured vLLM engine values for the sidecar JSON environment payload."""
     sidecar_config: dict[str, dict[str, bool | int | str]] = {}
     if config is not None:
-        speculative_args: dict[str, bool | int | str] = {}
-        if config.enforce_eager is not None:
-            speculative_args["enforce_eager"] = config.enforce_eager
-        if speculative_args:
-            sidecar_config["speculative_config"] = speculative_args
-
         engine_args: dict[str, bool | int | str] = {}
+        if config.enforce_eager is not None:
+            engine_args["enforce_eager"] = config.enforce_eager
+
         for name in ("max_model_len", "max_num_seqs"):
             value = getattr(config, name)
             if value is not None:
