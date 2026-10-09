@@ -100,10 +100,15 @@ class VLLMSpeculativeConfig:
             or compatibility guarantee. Values retain their JSON types.
 
     Example:
-        VLLMSpeculativeConfig(
-            enforce_eager=True,
-            max_model_len=2048,
-            parallel_drafting=False,
+        from kubeflow.trainer.rhai import SpeculatorConfig, VLLMSpeculativeConfig
+
+        config = SpeculatorConfig(
+            target_layer_ids=[0, 7, 14, 27],
+            vllm=VLLMSpeculativeConfig(
+                enforce_eager=True,
+                max_model_len=2048,
+                parallel_drafting=False,
+            ),
         )
     """
 
