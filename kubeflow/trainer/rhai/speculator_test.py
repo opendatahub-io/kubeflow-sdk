@@ -28,7 +28,7 @@ from kubeflow.trainer.rhai.speculator import (
     SpeculatorConfig,
     SpeculatorMode,
     SpeculatorType,
-    SpeculatorVLLMConfig,
+    VLLMSpeculativeConfig,
     _render_speculator_training_script,
     _update_draft_config_for_inference,
     apply_speculator_sidecar_overrides,
@@ -39,14 +39,14 @@ from kubeflow.trainer.types import types
 
 
 def test_vllm_config_defaults():
-    """Test defaults for the unified vLLM config."""
-    vllm = SpeculatorVLLMConfig()
+    """Test unset named options are omitted from the vLLM JSON object."""
+    vllm = VLLMSpeculativeConfig()
     config = SpeculatorConfig()
 
     assert vllm.enforce_eager is None
     assert vllm.max_model_len is None
     assert vllm.max_num_seqs is None
-    assert vllm.extra_args is None
+    assert vllm.to_dict() == {}
     assert config.vllm is None
 
 
@@ -55,61 +55,89 @@ def test_vllm_config_defaults():
     [{"max_model_len": 2048}, "invalid"],
 )
 def test_speculator_config_validates_nested_vllm_config_type(field_value):
-    """Reject values that are not SpeculatorVLLMConfig instances."""
+    """Reject values that are not VLLMSpeculativeConfig instances."""
     with pytest.raises(ValueError, match="SpeculatorConfig.vllm"):
         SpeculatorConfig(vllm=field_value)
 
 
-def test_num_speculative_tokens_is_not_configurable():
-    """Keep the extract-hidden-states runtime's one-token setting fixed."""
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        SpeculatorVLLMConfig(num_speculative_tokens=2)
+def test_vllm_config_accepts_kwargs_and_preserves_json_types():
+    """Accept version-dependent attributes without validation or type coercion."""
+    config = VLLMSpeculativeConfig(
+        enforce_eager=True,
+        max_model_len=2048,
+        max_num_seqs=0,
+        parallel_drafting=False,
+        future_zero_option=0,
+        future_speculative_option_v999={"enabled": True},
+        acceptance_schedule=[1, 0, False],
+        nested_config={"enabled": True, "threshold": None},
+        custom_null=None,
+    )
+
+    expected = {
+        "enforce_eager": True,
+        "max_model_len": 2048,
+        "max_num_seqs": 0,
+        "parallel_drafting": False,
+        "future_zero_option": 0,
+        "future_speculative_option_v999": {"enabled": True},
+        "acceptance_schedule": [1, 0, False],
+        "nested_config": {"enabled": True, "threshold": None},
+        "custom_null": None,
+    }
+    assert config.to_dict() == expected
+    assert json.loads(json.dumps(config.to_dict())) == expected
 
 
-@pytest.mark.parametrize("enforce_eager", ["true", 1])
-def test_speculative_config_rejects_invalid_enforce_eager(enforce_eager):
-    """Test eager-mode setting must be a boolean or None."""
-    with pytest.raises(ValueError, match="enforce_eager"):
-        SpeculatorVLLMConfig(enforce_eager=enforce_eager)
+def test_vllm_config_is_keyword_only():
+    """Require named speculative options to be passed by keyword."""
+    with pytest.raises(TypeError):
+        VLLMSpeculativeConfig(True)
 
 
-@pytest.mark.parametrize("max_model_len", [0, -2, True, ""])
-def test_vllm_config_rejects_invalid_max_model_len(max_model_len):
-    """Test max_model_len only accepts supported non-empty forms."""
-    with pytest.raises(ValueError, match="max_model_len"):
-        SpeculatorVLLMConfig(max_model_len=max_model_len)
+def test_empty_vllm_config_sends_extraction_defaults():
+    """Send the complete extraction config when an empty config object is supplied."""
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.DATA_ONLY,
+        dataset_name="ultrachat",
+        output_dir="pvc://test-pvc/speculator-output",
+        vllm_resources={"nvidia.com/gpu": 1},
+        config=SpeculatorConfig(
+            target_layer_ids=[0, 7, 14, 27],
+            vllm=VLLMSpeculativeConfig(),
+        ),
+    )
+
+    patch = apply_speculator_sidecar_overrides(trainer, [])[0]
+    pod_spec = patch["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"][0]["template"][
+        "spec"
+    ]["template"]["spec"]
+    env = {entry["name"]: entry["value"] for entry in pod_spec["initContainers"][0]["env"]}
+
+    assert json.loads(env["SPECULATOR_VLLM_SPECULATIVE_CONFIG"]) == {
+        "method": "extract_hidden_states",
+        "num_speculative_tokens": 1,
+        "draft_model_config": {"hf_config": {"eagle_aux_hidden_state_layer_ids": [0, 7, 14, 27]}},
+    }
 
 
-@pytest.mark.parametrize("max_model_len", [1, -1, "auto"])
-def test_speculative_config_accepts_supported_max_model_len_forms(max_model_len):
-    """Accept numeric lengths and documented vLLM string values."""
-    assert SpeculatorVLLMConfig(max_model_len=max_model_len).max_model_len == max_model_len
+def test_non_json_speculative_value_raises_native_serialization_error():
+    """Let json.dumps report values that cannot be serialized to the RuntimePatch env."""
+    trainer = SpeculativeDecodingTrainer(
+        verifier_model="Qwen/Qwen3-8B",
+        mode=SpeculatorMode.DATA_ONLY,
+        dataset_name="ultrachat",
+        output_dir="pvc://test-pvc/speculator-output",
+        vllm_resources={"nvidia.com/gpu": 1},
+        config=SpeculatorConfig(
+            target_layer_ids=[2, 16, 29, 31],
+            vllm=VLLMSpeculativeConfig(custom_value=object()),
+        ),
+    )
 
-
-@pytest.mark.parametrize("max_num_seqs", [0, -1, 1.5, True])
-def test_speculative_config_rejects_invalid_max_num_seqs(max_num_seqs):
-    """Test max_num_seqs must be a positive integer."""
-    with pytest.raises(ValueError, match="max_num_seqs"):
-        SpeculatorVLLMConfig(max_num_seqs=max_num_seqs)
-
-
-@pytest.mark.parametrize(
-    "extra_args",
-    [
-        {"bad-flag": "value"},
-        {"port": "9000"},
-        {"num_speculative_tokens": "2"},
-        {"some_flag": 3},
-        {"some_flag": "  "},
-    ],
-)
-def test_speculative_config_rejects_unsafe_or_conflicting_extra_args(extra_args):
-    """Reject malformed, duplicate, managed, or non-string passthrough arguments."""
-    with pytest.raises(ValueError, match="extra_args"):
-        SpeculatorVLLMConfig(extra_args=extra_args)
-
-    with pytest.raises(ValueError, match="duplicates"):
-        SpeculatorVLLMConfig(max_num_seqs=4, extra_args={"max_num_seqs": "8"})
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        apply_speculator_sidecar_overrides(trainer, [])
 
 
 def test_speculator_trainer_keeps_vllm_settings_at_root():
@@ -1700,7 +1728,7 @@ def test_apply_speculator_sidecar_overrides():
     assert env_dict["SPECULATOR_TARGET_LAYER_IDS"] == "2,18,33,35"
     assert "command" not in sidecar
     assert "args" not in sidecar
-    assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
+    assert "SPECULATOR_VLLM_SPECULATIVE_CONFIG" not in env_dict
 
     assert sidecar["volumeMounts"][0]["name"] == "checkpoint-storage"
     assert sidecar["volumeMounts"][0]["mountPath"] == "/mnt/kubeflow-checkpoints"
@@ -1713,80 +1741,8 @@ def test_apply_speculator_sidecar_overrides():
 @pytest.mark.parametrize(
     "mode", [SpeculatorMode.DATA_ONLY, SpeculatorMode.ONLINE], ids=lambda mode: mode.value
 )
-@pytest.mark.parametrize(
-    "test_case",
-    [
-        TestCase(name="defaults", config={}, expected_output=None),
-        TestCase(
-            name="empty-extra-args",
-            config={"vllm": {"extra_args": {}}},
-            expected_output=None,
-        ),
-        TestCase(
-            name="engine-settings-including-eager-mode",
-            config={
-                "vllm": {
-                    "enforce_eager": True,
-                    "max_model_len": 40960,
-                    "max_num_seqs": 16,
-                    "extra_args": {
-                        "dtype": "bfloat16",
-                        "max_num_batched_tokens": "49160",
-                        "quantization": "fp8",
-                    },
-                },
-            },
-            expected_output=[
-                "--enforce-eager",
-                "--max-model-len",
-                "40960",
-                "--max-num-seqs",
-                "16",
-                "--dtype",
-                "bfloat16",
-                "--max-num-batched-tokens",
-                "49160",
-                "--quantization",
-                "fp8",
-            ],
-        ),
-        TestCase(
-            name="false-is-not-omitted",
-            config={"vllm": {"enforce_eager": False}},
-            expected_output=["--no-enforce-eager"],
-        ),
-        TestCase(
-            name="extra-args-only",
-            config={
-                "vllm": {
-                    "extra_args": {
-                        "max_num_batched_tokens": "49160",
-                        "served_model_name": "a b",
-                    }
-                }
-            },
-            expected_output=[
-                "--max-num-batched-tokens",
-                "49160",
-                "--served-model-name",
-                "a b",
-            ],
-        ),
-        TestCase(
-            name="shell-metacharacters-are-quoted",
-            config={"vllm": {"extra_args": {"served_model_name": "$(touch /tmp/not-executed)"}}},
-            expected_output=[
-                "--served-model-name",
-                "$(touch /tmp/not-executed)",
-            ],
-        ),
-    ],
-    ids=lambda test_case: test_case.name,
-)
-def test_speculator_vllm_config_serializes_to_sidecar_env(
-    mode: SpeculatorMode, test_case: TestCase
-) -> None:
-    """Send vLLM settings through the supported sidecar env RuntimePatch."""
+def test_speculative_config_merges_into_runtime_patch(mode: SpeculatorMode) -> None:
+    """Send complete speculative JSON through and preserve native RuntimePatch values."""
     trainer = SpeculativeDecodingTrainer(
         verifier_model="Qwen/Qwen3-8B",
         mode=mode,
@@ -1796,13 +1752,33 @@ def test_speculator_vllm_config_serializes_to_sidecar_env(
         vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(
             target_layer_ids=[2, 16, 29, 31],
-            vllm=(
-                SpeculatorVLLMConfig(**test_case.config["vllm"])
-                if "vllm" in test_case.config
-                else None
+            vllm=VLLMSpeculativeConfig(
+                enforce_eager=True,
+                max_model_len=2048,
+                max_num_seqs=3,
+                num_speculative_tokens=2,
+                parallel_drafting=False,
+                draft_model_config={"hf_config": {"custom_setting": [0, False, None]}},
+                optional_attribute=None,
             ),
         ),
     )
+
+    expected_speculative_config = {
+        "method": "extract_hidden_states",
+        "num_speculative_tokens": 1,
+        "draft_model_config": {
+            "hf_config": {
+                "eagle_aux_hidden_state_layer_ids": [2, 16, 29, 31],
+                "custom_setting": [0, False, None],
+            }
+        },
+        "enforce_eager": True,
+        "max_model_len": 2048,
+        "max_num_seqs": 3,
+        "parallel_drafting": False,
+        "optional_attribute": None,
+    }
 
     raw_patch = apply_speculator_sidecar_overrides(trainer, [])[0]
     typed_patch = models.TrainerV1alpha1RuntimePatch.from_dict(raw_patch).to_dict()
@@ -1816,10 +1792,10 @@ def test_speculator_vllm_config_serializes_to_sidecar_env(
         assert "command" not in sidecar
         assert "args" not in sidecar
         env_dict = {env["name"]: env["value"] for env in sidecar["env"]}
-        if test_case.expected_output is None:
-            assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
-        else:
-            assert json.loads(env_dict["SPECULATOR_VLLM_EXTRA_ARGS"]) == test_case.expected_output
+        assert "SPECULATOR_VLLM_EXTRA_ARGS" not in env_dict
+        assert json.loads(env_dict["SPECULATOR_VLLM_SPECULATIVE_CONFIG"]) == (
+            expected_speculative_config
+        )
 
 
 def test_apply_speculator_sidecar_overrides_preserves_existing():

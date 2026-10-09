@@ -24,7 +24,7 @@ from kubeflow.trainer.rhai.speculator import (
     SpeculatorConfig,
     SpeculatorMode,
     SpeculatorType,
-    SpeculatorVLLMConfig,
+    VLLMSpeculativeConfig,
 )
 from kubeflow.trainer.rhai.traininghub import TrainingHubAlgorithms, TrainingHubTrainer
 from kubeflow.trainer.rhai.transformers import TransformersTrainer
@@ -35,7 +35,7 @@ __all__ = (
     "SpeculatorConfig",
     "SpeculatorMode",
     "SpeculatorType",
-    "SpeculatorVLLMConfig",
+    "VLLMSpeculativeConfig",
     "TrainingHubAlgorithms",
     "TrainingHubTrainer",
     "TransformersTrainer",
