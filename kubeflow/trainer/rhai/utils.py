@@ -318,7 +318,7 @@ def apply_output_dir_uri_to_pod_overrides(
     resolved_output_dir, volume_mount_specs = parse_output_dir_uri(output_dir)
 
     if volume_mount_specs is None:
-        return resolved_output_dir, runtime_patches or []
+        return resolved_output_dir, runtime_patches if runtime_patches is not None else []
 
     if runtime_patches is None:
         runtime_patches = []
@@ -530,7 +530,8 @@ def setup_rhai_trainer_storage(
                 pvc_paths[0], runtime_patches
             )
         else:
-            runtime_patches = runtime_patches or []
+            if runtime_patches is None:
+                runtime_patches = []
 
         _needs_sidecar = trainer.mode in (
             speculator.SpeculatorMode.DATA_ONLY,
@@ -548,7 +549,8 @@ def setup_rhai_trainer_storage(
             trainer.output_dir, runtime_patches
         )
     else:
-        runtime_patches = runtime_patches or []
+        if runtime_patches is None:
+            runtime_patches = []
 
     # Inject cloud storage credentials if applicable
     trainer_cr = inject_cloud_storage_credentials(trainer, trainer_cr, core_api, namespace)
