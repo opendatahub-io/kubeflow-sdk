@@ -45,8 +45,12 @@ from kubeflow.optimizer.types.search_types import (
     Distribution,
     Search,
 )
+<<<<<<< HEAD
 import kubeflow.trainer.constants.constants as trainer_constants
 from kubeflow.trainer.test.common import (
+=======
+from kubeflow.test.common import (
+>>>>>>> upstream/main
     DEFAULT_NAMESPACE,
     FAILED,
     RUNTIME,
@@ -54,6 +58,10 @@ from kubeflow.trainer.test.common import (
     TIMEOUT,
     TestCase,
 )
+<<<<<<< HEAD
+=======
+import kubeflow.trainer.constants.constants as trainer_constants
+>>>>>>> upstream/main
 from kubeflow.trainer.types import types as trainer_types
 from kubeflow.trainer.types.types import (
     CustomTrainer,

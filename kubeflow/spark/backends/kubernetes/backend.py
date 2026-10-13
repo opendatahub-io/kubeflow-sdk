@@ -14,7 +14,10 @@
 
 """Kubernetes backend for Spark operations."""
 
+<<<<<<< HEAD
 import ast
+=======
+>>>>>>> upstream/main
 from collections.abc import Iterator
 import contextlib
 import inspect
@@ -37,6 +40,10 @@ from pyspark.sql import SparkSession
 
 from kubeflow.common import constants as common_constants
 from kubeflow.common.types import KubernetesBackendConfig
+<<<<<<< HEAD
+=======
+from kubeflow.common.utils import validate_python_function
+>>>>>>> upstream/main
 from kubeflow.spark.backends.base import RuntimeBackend
 from kubeflow.spark.backends.kubernetes import constants
 from kubeflow.spark.backends.kubernetes.utils import (
@@ -50,7 +57,10 @@ from kubeflow.spark.backends.kubernetes.utils import (
     get_spark_connect_info_from_cr,
     read_pod_logs,
 )
+<<<<<<< HEAD
 from kubeflow.spark.types.options import Name
+=======
+>>>>>>> upstream/main
 from kubeflow.spark.types.types import (
     Driver,
     Executor,
@@ -119,6 +129,7 @@ class KubernetesBackend(RuntimeBackend):
     # Spark Connect sessions
     # ------------------------------------------------------------------
 
+<<<<<<< HEAD
     def _extract_name_option(self, options: list | None) -> tuple[str, list]:
         """Extract Name option from options list, or generate name if absent.
 
@@ -148,6 +159,8 @@ class KubernetesBackend(RuntimeBackend):
 
         return session_name, filtered_options
 
+=======
+>>>>>>> upstream/main
     def _create_session(
         self,
         num_executors: int | None = None,
@@ -176,8 +189,12 @@ class KubernetesBackend(RuntimeBackend):
             RuntimeError:
                 If the SparkConnect resource cannot be created.
         """
+<<<<<<< HEAD
         # Extract Name option if present, or auto-generate
         name, filtered_options = self._extract_name_option(options)
+=======
+        name = generate_session_name()
+>>>>>>> upstream/main
 
         spark_connect = build_spark_connect_cr(
             name=name,
@@ -187,7 +204,11 @@ class KubernetesBackend(RuntimeBackend):
             spark_conf=spark_conf,
             driver=driver,
             executor=executor,
+<<<<<<< HEAD
             options=filtered_options,  # Use filtered list
+=======
+            options=options,
+>>>>>>> upstream/main
             backend=self,  # Pass backend for option validation
         )
 
@@ -360,6 +381,7 @@ class KubernetesBackend(RuntimeBackend):
 
             TimeoutError:
                 If the session does not become ready within the timeout.
+<<<<<<< HEAD
         """
         start_time = time.monotonic()
         last_log_time = start_time
@@ -396,12 +418,102 @@ class KubernetesBackend(RuntimeBackend):
                 last_log_time = now
 
             if now - start_time >= timeout:
+=======
+
+            Exception:
+                If getting the session fails with a non-transient error.
+        """
+        start_time = time.monotonic()
+        last_log_time = start_time
+        deadline = start_time + timeout
+
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+>>>>>>> upstream/main
                 raise TimeoutError(
                     f"Timeout waiting for {constants.SPARK_CONNECT_KIND} to be ready: "
                     f"{self.namespace}/{name} (timeout: {timeout}s)"
                 )
 
+<<<<<<< HEAD
             time.sleep(polling_interval)
+=======
+            try:
+                info = self.get_session(name)
+            except TimeoutError as e:
+                # The request itself timed out. This is transient, so retry
+                # as long as the overall wait deadline has not expired.
+                logger.warning(
+                    "Timeout getting session %s/%s, retrying: %s",
+                    self.namespace,
+                    name,
+                    e,
+                )
+            except RuntimeError as e:
+                # get_session wraps ApiException in RuntimeError, so inspect the cause.
+                cause = e.__cause__
+                if not isinstance(cause, client.ApiException) or cause.status not in {
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                }:
+                    raise
+
+                logger.warning(
+                    "Transient HTTP %s getting session %s/%s, retrying: %s",
+                    cause.status,
+                    self.namespace,
+                    name,
+                    e,
+                )
+            else:
+                if info.state == SparkConnectState.READY:
+                    logger.info(
+                        "Session ready: %s/%s state=%s serviceName=%s (%.0fs)",
+                        self.namespace,
+                        name,
+                        info.state,
+                        info.service_name,
+                        time.monotonic() - start_time,
+                    )
+                    return info
+
+                if info.state == SparkConnectState.FAILED:
+                    raise RuntimeError(
+                        f"{constants.SPARK_CONNECT_KIND} failed: {self.namespace}/{name}"
+                    )
+
+                now = time.monotonic()
+                if now - last_log_time >= 10.0:
+                    logger.info(
+                        "Waiting for session: %s/%s state=%s serviceName=%s elapsed=%.0fs",
+                        self.namespace,
+                        name,
+                        info.state,
+                        info.service_name,
+                        now - start_time,
+                    )
+                    last_log_time = now
+
+                if now >= deadline:
+                    raise TimeoutError(
+                        f"Timeout waiting for {constants.SPARK_CONNECT_KIND} to be ready: "
+                        f"{self.namespace}/{name} (timeout: {timeout}s)"
+                    )
+
+            # Don't sleep beyond the overall deadline.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Timeout waiting for {constants.SPARK_CONNECT_KIND} to be ready: "
+                    f"{self.namespace}/{name} (timeout: {timeout}s)"
+                )
+
+            time.sleep(min(polling_interval, remaining))
+>>>>>>> upstream/main
 
     def _wait_for_connect_port(
         self, host: str, port: int, timeout_sec: int = 60, interval_sec: float = 2.0
@@ -409,6 +521,7 @@ class KubernetesBackend(RuntimeBackend):
         """Wait until a Spark Connect server becomes reachable.
 
         Args:
+<<<<<<< HEAD
             host:
                 Hostname or IP address of the Spark Connect server.
 
@@ -420,6 +533,12 @@ class KubernetesBackend(RuntimeBackend):
 
             interval_sec:
                 Time in seconds between connection attempts.
+=======
+            host: Hostname or IP address of the Spark Connect server.
+            port: TCP port of the Spark Connect server.
+            timeout_sec: Maximum time in seconds to wait.
+            interval_sec: Time in seconds between connection attempts.
+>>>>>>> upstream/main
 
         Returns:
             True if the server becomes reachable before the timeout, otherwise False.
@@ -448,6 +567,14 @@ class KubernetesBackend(RuntimeBackend):
         Returns:
             (connect_url, port_forward_process or None). Caller may keep process reference;
             process exits when the Python process exits.
+<<<<<<< HEAD
+=======
+
+        Raises:
+            RuntimeError: If the session reports no port-forward target, if
+                build_service_url cannot resolve an in-cluster host, or if
+                port-forward fails for every candidate.
+>>>>>>> upstream/main
         """
         if os.environ.get("KUBERNETES_SERVICE_HOST"):
             url = build_service_url(info)
@@ -457,6 +584,7 @@ class KubernetesBackend(RuntimeBackend):
         if port is None:
             port_str = os.environ.get("SPARK_CONNECT_LOCAL_PORT")
             port = int(port_str) if port_str else random.randint(15002, 16002)
+<<<<<<< HEAD
         # Prefer pod when available (bypasses Service/EndpointSlice); then try svc names
         candidates: list[tuple[str, str]] = []
         if info.driver_pod_name:
@@ -470,6 +598,22 @@ class KubernetesBackend(RuntimeBackend):
             if key in seen:
                 continue
             seen.add(key)
+=======
+        # Prefer pod when available (bypasses Service/EndpointSlice); then try svc name
+        candidates: list[tuple[str, str]] = []
+        if info.driver_pod_name:
+            candidates.append(("pod", info.driver_pod_name))
+        if info.service_name:
+            candidates.append(("svc", info.service_name))
+        if not candidates:
+            raise RuntimeError(
+                f"No port-forward target for {info.namespace}/{info.name}: neither "
+                "status.server.podName nor status.server.serviceName is populated. "
+                "The session is not ready."
+            )
+        for kind, target in candidates:
+            key = f"{kind}/{target}"
+>>>>>>> upstream/main
             # Use 127.0.0.1 instead of localhost to force IPv4 (gRPC may prefer IPv6 which can fail)
             url = f"sc://127.0.0.1:{port}"
             cmd = [
@@ -626,6 +770,7 @@ class KubernetesBackend(RuntimeBackend):
         thread.start()
         thread.join(timeout=connect_timeout)
 
+<<<<<<< HEAD
         if not thread.is_alive():
             if exc_holder:
                 raise exc_holder[0]
@@ -649,6 +794,38 @@ class KubernetesBackend(RuntimeBackend):
                 f"(code={pf_proc.returncode}). stderr: {stderr_str}"
             )
         raise TimeoutError(base_msg)
+=======
+        try:
+            if not thread.is_alive():
+                if exc_holder:
+                    raise exc_holder[0]
+                if result:
+                    return result[0]
+
+            # Connection timed out
+            base_msg = (
+                f"Spark Connect connection to {connect_url} did not complete "
+                f"within {connect_timeout}s. "
+                "Verify: (1) port-forward target is the Spark Connect server pod, "
+                "(2) PySpark and server Spark major.minor match, "
+                "(3) driver pod logs for gRPC/auth errors; "
+                "see Spark sql/connect for server config."
+            )
+            if pf_proc is not None and pf_proc.poll() is not None:
+                stderr_b = pf_proc.stderr.read() if pf_proc.stderr else b""
+                stderr_str = stderr_b.decode("utf-8", errors="replace").strip() if stderr_b else ""
+                base_msg += (
+                    f" Port-forward process exited during connect "
+                    f"(code={pf_proc.returncode}). stderr: {stderr_str}"
+                )
+            raise TimeoutError(base_msg)
+        except Exception:
+            if pf_proc is not None and pf_proc.poll() is None:
+                pf_proc.terminate()
+                with contextlib.suppress(Exception):
+                    pf_proc.wait(timeout=2)
+            raise
+>>>>>>> upstream/main
 
     def create_and_connect(
         self,
@@ -703,10 +880,48 @@ class KubernetesBackend(RuntimeBackend):
             timeout,
         )
 
+<<<<<<< HEAD
         info = self._wait_for_session_ready(info.name, timeout=timeout)
         logger.info("Session ready, connecting (service_name=%s)", info.service_name)
 
         return self.connect(info, connect_timeout=connect_timeout)
+=======
+        success = False
+
+        try:
+            info = self._wait_for_session_ready(info.name, timeout=timeout)
+
+            logger.info(
+                "Session ready, connecting (service_name=%s)",
+                info.service_name,
+            )
+
+            session = self.connect(
+                info,
+                connect_timeout=connect_timeout,
+            )
+
+            success = True
+            return session
+
+        finally:
+            if not success:
+                logger.warning(
+                    "Failed to setup or connect to SparkConnect session %s/%s. "
+                    "Cleaning up SparkConnect session.",
+                    info.namespace,
+                    info.name,
+                )
+
+                try:
+                    self.delete_session(info.name)
+                except Exception:
+                    logger.exception(
+                        "Failed to clean up SparkConnect session %s/%s",
+                        info.namespace,
+                        info.name,
+                    )
+>>>>>>> upstream/main
 
     def get_session_logs(
         self,
@@ -853,6 +1068,7 @@ class KubernetesBackend(RuntimeBackend):
                 If the function or function arguments are invalid.
         """
 
+<<<<<<< HEAD
         if not inspect.isfunction(job.func):
             raise ValueError("`job.func` must be a Python function.")
 
@@ -876,6 +1092,15 @@ class KubernetesBackend(RuntimeBackend):
                 "not supported; define it in a Python module."
             ) from e
 
+=======
+        # Validate generic Python function properties.
+        validate_python_function(job.func)
+
+        # Get the function source for Spark-specific validation.
+        func_source = textwrap.dedent(inspect.getsource(job.func))
+
+        # Ensure the function source does not contain the reserved heredoc delimiter.
+>>>>>>> upstream/main
         if any(
             line.strip() == constants.FUNC_JOB_SCRIPT_DELIMITER for line in func_source.splitlines()
         ):
@@ -884,6 +1109,7 @@ class KubernetesBackend(RuntimeBackend):
                 f"{constants.FUNC_JOB_SCRIPT_DELIMITER!r}, which is not supported."
             )
 
+<<<<<<< HEAD
         try:
             func_tree = ast.parse(func_source)
         except SyntaxError as e:
@@ -895,6 +1121,8 @@ class KubernetesBackend(RuntimeBackend):
         ):
             raise ValueError("Decorated functions are not supported.")
 
+=======
+>>>>>>> upstream/main
         if job.func_args is not None:
             if not isinstance(job.func_args, dict):
                 raise ValueError("`job.func_args` must be a dictionary.")
@@ -917,6 +1145,11 @@ class KubernetesBackend(RuntimeBackend):
         job: FileJob | FuncJob,
         num_executors: int | None = None,
         resources_per_executor: dict[str, str] | None = None,
+<<<<<<< HEAD
+=======
+        options: list | None = None,
+        spark_conf: dict[str, str] | None = None,
+>>>>>>> upstream/main
     ) -> SparkJob:
         """Submit a SparkApplication for batch execution.
 
@@ -930,6 +1163,14 @@ class KubernetesBackend(RuntimeBackend):
             resources_per_executor:
                 Resource requirements per executor.
 
+<<<<<<< HEAD
+=======
+            options:
+                List of additional Spark configuration options.
+            spark_conf:
+                Spark configuration properties to set on the SparkApplication.
+
+>>>>>>> upstream/main
         Returns:
             SparkJob information object.
 
@@ -947,11 +1188,14 @@ class KubernetesBackend(RuntimeBackend):
 
         job_name = generate_job_name()
 
+<<<<<<< HEAD
         logger.info(
             "Submitting SparkApplication '%s'",
             job_name,
         )
 
+=======
+>>>>>>> upstream/main
         if isinstance(job, FileJob):
             spark_application = get_spark_application_cr_from_file_job(
                 name=job_name,
@@ -960,6 +1204,12 @@ class KubernetesBackend(RuntimeBackend):
                 arguments=job.args,
                 num_executors=num_executors,
                 resources_per_executor=resources_per_executor,
+<<<<<<< HEAD
+=======
+                options=options,
+                backend=self,
+                spark_conf=spark_conf,
+>>>>>>> upstream/main
             )
 
         else:
@@ -970,8 +1220,24 @@ class KubernetesBackend(RuntimeBackend):
                 func_args=job.func_args,
                 num_executors=num_executors,
                 resources_per_executor=resources_per_executor,
+<<<<<<< HEAD
             )
 
+=======
+                options=options,
+                backend=self,
+                spark_conf=spark_conf,
+            )
+
+        # The Name option may override the auto-generated name.
+        job_name = spark_application.metadata.name
+
+        logger.info(
+            "Submitting SparkApplication '%s'",
+            job_name,
+        )
+
+>>>>>>> upstream/main
         try:
             thread = self.custom_api.create_namespaced_custom_object(
                 group=constants.SPARK_APPLICATION_GROUP,

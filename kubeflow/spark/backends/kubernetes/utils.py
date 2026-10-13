@@ -30,6 +30,10 @@ from kubeflow_spark_api import models
 from kubernetes import client
 
 from kubeflow.common import constants as common_constants
+<<<<<<< HEAD
+=======
+from kubeflow.common.utils import validate_python_function
+>>>>>>> upstream/main
 from kubeflow.spark.backends.kubernetes import constants
 from kubeflow.spark.types.types import (
     Driver,
@@ -140,12 +144,26 @@ def _resolve_executor_resources(
     """Resolve executor configuration.
 
     Args:
+<<<<<<< HEAD
         executor: Executor configuration.
         num_executors: Number of executor instances.
         resources_per_executor: Resource requirements.
 
     Returns:
         Tuple containing (instances, cores, memory).
+=======
+        executor:
+            Executor configuration.
+
+        num_executors:
+            Number of executor instances.
+
+        resources_per_executor:
+            Resource requirements.
+
+    Returns:
+        Tuple containing ``(instances, cores, memory)``.
+>>>>>>> upstream/main
 
     Raises:
         ValueError:
@@ -292,6 +310,76 @@ def _validate_cpu_value(cpu: str | int | None) -> int:
     return cores
 
 
+<<<<<<< HEAD
+=======
+def apply_options(
+    resource: models.SparkV1alpha1SparkConnect | models.SparkV1beta2SparkApplication,
+    options: list | None,
+    backend: Any | None = None,
+) -> None:
+    """Apply configuration options to a Spark resource.
+
+    Args:
+        resource:
+            Spark resource to configure.
+
+        options:
+            List of configuration options.
+
+        backend:
+            Backend used for option validation.
+
+        Raises:
+            ValueError:
+                If options are provided without a backend instance.
+
+            TypeError:
+                If an option is not callable.
+    """
+    if not options:
+        return
+
+    if backend is None:
+        raise ValueError("A backend instance is required to apply Spark options.")
+
+    for option in options:
+        if not callable(option):
+            raise TypeError(
+                f"Invalid Spark option: {option!r}. Options must be callable, "
+                "for example: Name, Labels, Annotations, NodeSelector or Toleration."
+            )
+
+        option(resource, backend)
+
+
+def _validate_spark_conf(
+    spark_conf: dict[str, str] | None,
+) -> None:
+    """Validate Spark configuration.
+
+    Args:
+        spark_conf:
+            Spark configuration properties.
+
+    Raises:
+        ValueError:
+            If ``spark_conf`` is not a dictionary of string keys and values.
+    """
+    if spark_conf is None:
+        return
+
+    if not isinstance(spark_conf, dict):
+        raise ValueError("spark_conf must be a dictionary.")
+
+    for key, value in spark_conf.items():
+        if not isinstance(key, str):
+            raise ValueError("All spark_conf keys must be strings.")
+
+        if not isinstance(value, str):
+            raise ValueError("All spark_conf values must be strings.")
+
+
+>>>>>>> upstream/main
 # ----------------------------------------------------------------------
 # Spark Connect session utility functions
 # ----------------------------------------------------------------------
@@ -322,22 +410,59 @@ def validate_spark_connect_url(url: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme != "sc":
         raise ValueError(f"Invalid scheme '{parsed.scheme}'. Expected 'sc://'")
+<<<<<<< HEAD
+=======
+    if not parsed.hostname:
+        raise ValueError("Host is required in Spark Connect URL")
+>>>>>>> upstream/main
     if not parsed.port:
         raise ValueError("Port is required in Spark Connect URL")
     return True
 
 
 def build_service_url(info: SparkConnectInfo) -> str:
+<<<<<<< HEAD
     """Build Spark Connect URL from session info.
+=======
+    """Build the in-cluster Spark Connect URL from session info.
+
+    Relies on the operator-reported Service name. The operator records the
+    actual Service name (default "<name>-server" or a user-customized name via
+    .spec.server.service) in Status.Server.ServiceName, so this is correct for
+    both default and customized Services. Callers are expected to have waited
+    for readiness (wait_for_ready), by which point the operator has populated
+    this field in the same atomic status write that set the Ready state.
+>>>>>>> upstream/main
 
     Args:
         info: SparkConnectInfo with service details.
 
     Returns:
+<<<<<<< HEAD
         Spark Connect URL (e.g., "sc://service-name:15002").
     """
     service = info.service_name or f"{info.name}-svc"
     return f"sc://{service}.{info.namespace}.svc.cluster.local:{constants.SPARK_CONNECT_PORT}"
+=======
+        Spark Connect URL
+        (e.g., "sc://my-session-server.default.svc.cluster.local:15002").
+
+    Raises:
+        RuntimeError: If ``info.service_name`` is not populated. An empty value
+            means the session is not ready yet, not a name we should guess;
+            callers should wait for readiness before building the URL.
+    """
+    if not info.service_name:
+        raise RuntimeError(
+            f"Cannot build Spark Connect URL for {info.namespace}/{info.name}: "
+            "status.server.serviceName is not populated yet. The session is not "
+            "ready to accept in-cluster connections."
+        )
+    return (
+        f"sc://{info.service_name}.{info.namespace}.svc.cluster.local"
+        f":{constants.SPARK_CONNECT_PORT}"
+    )
+>>>>>>> upstream/main
 
 
 def get_spark_connect_driver_spec(
@@ -449,6 +574,11 @@ def build_spark_connect_cr(
         ValueError:
             If the provided driver or executor resource configuration is invalid.
     """
+<<<<<<< HEAD
+=======
+    _validate_spark_conf(spark_conf)
+
+>>>>>>> upstream/main
     spark_version = spark_version or constants.DEFAULT_SPARK_VERSION
 
     # Build server spec using conversion function
@@ -465,6 +595,7 @@ def build_spark_connect_cr(
 
     image = driver.image if driver and driver.image else default_image
 
+<<<<<<< HEAD
     # Use direct JAR URL to avoid Ivy cache (container may not have writable ~/.ivy2)
     connect_jar_url = (
         f"https://repo1.maven.org/maven2/org/apache/spark/"
@@ -483,6 +614,15 @@ def build_spark_connect_cr(
         for k, v in spark_conf.items():
             if k != "spark.jars":
                 base_conf[k] = v
+=======
+    # Server listens on all interfaces so port-forward and in-cluster access work (Spark Connect config)
+    base_conf: dict[str, str] = {
+        "spark.connect.grpc.binding.address": "0.0.0.0",
+    }
+
+    if spark_conf:
+        base_conf.update(spark_conf)
+>>>>>>> upstream/main
 
     # Build the typed SparkConnect model
     spark_connect = models.SparkV1alpha1SparkConnect(
@@ -502,10 +642,18 @@ def build_spark_connect_cr(
     )
 
     # Apply options - extensibility without API changes (callable pattern)
+<<<<<<< HEAD
     if options and backend is not None:
         for option in options:
             if callable(option):
                 option(spark_connect, backend)
+=======
+    apply_options(
+        spark_connect,
+        options,
+        backend,
+    )
+>>>>>>> upstream/main
 
     return spark_connect
 
@@ -533,7 +681,11 @@ def get_spark_connect_info_from_cr(
         try:
             state = SparkConnectState(spark_connect_cr.status.state)
         except ValueError:
+<<<<<<< HEAD
             state = SparkConnectState.PROVISIONING
+=======
+            state = common_constants.UNKNOWN
+>>>>>>> upstream/main
 
     # Extract server status
     server_status = None
@@ -583,7 +735,10 @@ def get_spark_job_driver_spec(
     return models.SparkV1beta2DriverSpec(
         cores=cores,
         memory=memory,
+<<<<<<< HEAD
         service_account=constants.DEFAULT_SERVICE_ACCOUNT,
+=======
+>>>>>>> upstream/main
     )
 
 
@@ -673,10 +828,16 @@ def get_command_using_spark_func(
 
     Raises:
         ValueError:
+<<<<<<< HEAD
             If ``func`` is not callable.
     """
     if not callable(func):
         raise ValueError(f"Expected a callable function, got {type(func)}.")
+=======
+            If ``func`` is not a supported Python function.
+    """
+    validate_python_function(func)
+>>>>>>> upstream/main
 
     func_code = textwrap.dedent(
         inspect.getsource(func),
@@ -705,6 +866,12 @@ def get_spark_application_cr_from_file_job(
     arguments: list[str] | None = None,
     num_executors: int | None = None,
     resources_per_executor: dict[str, str] | None = None,
+<<<<<<< HEAD
+=======
+    options: list | None = None,
+    backend: Any | None = None,
+    spark_conf: dict[str, str] | None = None,
+>>>>>>> upstream/main
 ) -> models.SparkV1beta2SparkApplication:
     """Build a SparkApplication custom resource for a file-based Spark job.
 
@@ -715,6 +882,12 @@ def get_spark_application_cr_from_file_job(
         arguments: Command-line arguments passed to the Spark application.
         num_executors: Number of executor instances.
         resources_per_executor: Resource requirements for each executor.
+<<<<<<< HEAD
+=======
+        options: List of configuration options.
+        backend: Backend instance used for option validation.
+        spark_conf: Spark configuration properties.
+>>>>>>> upstream/main
 
     Returns:
         SparkApplication custom resource model.
@@ -723,7 +896,11 @@ def get_spark_application_cr_from_file_job(
         ValueError:
             If the executor resource configuration is invalid.
     """
+<<<<<<< HEAD
     return models.SparkV1beta2SparkApplication(
+=======
+    spark_application = models.SparkV1beta2SparkApplication(
+>>>>>>> upstream/main
         api_version=f"{constants.SPARK_APPLICATION_GROUP}/{constants.SPARK_APPLICATION_VERSION}",
         kind=constants.SPARK_APPLICATION_KIND,
         metadata=models.IoK8sApimachineryPkgApisMetaV1ObjectMeta(
@@ -742,9 +919,24 @@ def get_spark_application_cr_from_file_job(
                 num_executors=num_executors,
                 resources_per_executor=resources_per_executor,
             ),
+<<<<<<< HEAD
         ),
     )
 
+=======
+            spark_conf=spark_conf or None,
+        ),
+    )
+
+    apply_options(
+        spark_application,
+        options,
+        backend,
+    )
+
+    return spark_application
+
+>>>>>>> upstream/main
 
 def get_spark_application_cr_from_func_job(
     name: str,
@@ -753,6 +945,12 @@ def get_spark_application_cr_from_func_job(
     func_args: dict[str, Any] | None = None,
     num_executors: int | None = None,
     resources_per_executor: dict[str, str] | None = None,
+<<<<<<< HEAD
+=======
+    options: list | None = None,
+    backend: Any | None = None,
+    spark_conf: dict[str, str] | None = None,
+>>>>>>> upstream/main
 ) -> models.SparkV1beta2SparkApplication:
     """Build a SparkApplication custom resource for a function-based Spark job.
 
@@ -763,6 +961,12 @@ def get_spark_application_cr_from_func_job(
         func_args: Keyword arguments passed to the function.
         num_executors: Number of executor instances.
         resources_per_executor: Resource requirements for each executor.
+<<<<<<< HEAD
+=======
+        options: List of configuration options.
+        backend: Backend instance used for option validation.
+        spark_conf: Spark configuration properties.
+>>>>>>> upstream/main
 
     Returns:
         SparkApplication custom resource model.
@@ -772,6 +976,10 @@ def get_spark_application_cr_from_func_job(
             If the provided function is invalid or the executor resource
             configuration is invalid.
     """
+<<<<<<< HEAD
+=======
+    _validate_spark_conf(spark_conf)
+>>>>>>> upstream/main
 
     command = get_command_using_spark_func(
         func=func,
@@ -796,6 +1004,10 @@ def get_spark_application_cr_from_func_job(
                 num_executors=num_executors,
                 resources_per_executor=resources_per_executor,
             ),
+<<<<<<< HEAD
+=======
+            spark_conf=spark_conf or None,
+>>>>>>> upstream/main
         ),
     )
 
@@ -817,6 +1029,15 @@ def get_spark_application_cr_from_func_job(
         ),
     ]
 
+<<<<<<< HEAD
+=======
+    apply_options(
+        spark_application,
+        options,
+        backend,
+    )
+
+>>>>>>> upstream/main
     return spark_application
 
 

@@ -21,7 +21,11 @@ import random
 import re
 import string
 import time
+<<<<<<< HEAD
 from typing import Any, get_args
+=======
+from typing import Any
+>>>>>>> upstream/main
 import uuid
 
 from kubeflow_trainer_api import models
@@ -313,6 +317,10 @@ class KubernetesBackend(RuntimeBackend):
         name = None
         trainer_overrides = {}
         runtime_patches = None
+<<<<<<< HEAD
+=======
+        active_deadline_seconds = None
+>>>>>>> upstream/main
 
         if options:
             for option in options:
@@ -327,6 +335,10 @@ class KubernetesBackend(RuntimeBackend):
             spec_section = job_spec.get("spec", {})
             trainer_overrides = spec_section.get("trainer", {})
             runtime_patches = spec_section.get("runtimePatches")
+<<<<<<< HEAD
+=======
+            active_deadline_seconds = spec_section.get("activeDeadlineSeconds")
+>>>>>>> upstream/main
 
         train_job_name = name or (
             random.choice(string.ascii_lowercase)
@@ -340,6 +352,10 @@ class KubernetesBackend(RuntimeBackend):
             trainer=trainer,
             trainer_overrides=trainer_overrides,
             runtime_patches=runtime_patches,
+<<<<<<< HEAD
+=======
+            active_deadline_seconds=active_deadline_seconds,
+>>>>>>> upstream/main
         )
 
         # Apply RHAI trainer progression tracking annotations to metadata
@@ -804,6 +820,10 @@ class KubernetesBackend(RuntimeBackend):
         | None = None,
         trainer_overrides: dict[str, Any] | None = None,
         runtime_patches: list[dict[str, Any]] | None = None,
+<<<<<<< HEAD
+=======
+        active_deadline_seconds: int | None = None,
+>>>>>>> upstream/main
     ) -> models.TrainerV1alpha1TrainJobSpec:
         """Get TrainJob spec from the given parameters."""
 
@@ -853,6 +873,7 @@ class KubernetesBackend(RuntimeBackend):
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
 
+<<<<<<< HEAD
         # Setup RHAI trainer storage: parse output_dir for volume mounts (PVC/S3)
         # and inject cloud storage credentials from data connection secret
         if is_rhai_trainer:
@@ -860,6 +881,8 @@ class KubernetesBackend(RuntimeBackend):
                 trainer, trainer_cr, runtime_patches, self.core_api, self.namespace
             )
 
+=======
+>>>>>>> upstream/main
         # Convert runtime patches dicts to native model objects.
         runtime_patch_models = None
         if runtime_patches:
@@ -871,6 +894,10 @@ class KubernetesBackend(RuntimeBackend):
             runtimeRef=models.TrainerV1alpha1RuntimeRef(name=runtime.name, kind=runtime.kind.value),
             trainer=trainer_cr if trainer_cr != models.TrainerV1alpha1Trainer() else None,
             runtimePatches=runtime_patch_models,
+<<<<<<< HEAD
+=======
+            activeDeadlineSeconds=active_deadline_seconds,
+>>>>>>> upstream/main
         )
 
         # Add initializer if users define it.

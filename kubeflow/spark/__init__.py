@@ -16,12 +16,19 @@
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.spark.api.spark_client import SparkClient
+<<<<<<< HEAD
 from kubeflow.spark.types.options import (
+=======
+from kubeflow.spark.options import (
+>>>>>>> upstream/main
     Annotations,
     Labels,
     Name,
     NodeSelector,
+<<<<<<< HEAD
     PodTemplateOverride,
+=======
+>>>>>>> upstream/main
     Toleration,
 )
 from kubeflow.spark.types.types import (
@@ -52,7 +59,10 @@ __all__ = [
     "Labels",
     "Name",
     "NodeSelector",
+<<<<<<< HEAD
     "PodTemplateOverride",
+=======
+>>>>>>> upstream/main
     "Toleration",
     # Configuration
     "KubernetesBackendConfig",

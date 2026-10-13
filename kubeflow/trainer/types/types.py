@@ -274,7 +274,11 @@ class RuntimeTrainer:
 class Runtime:
     name: str
     trainer: RuntimeTrainer
+<<<<<<< HEAD
     kind: RuntimeKind | None = None
+=======
+    kind: RuntimeKind
+>>>>>>> upstream/main
     pretrained_model: str | None = None
 
 
@@ -341,12 +345,15 @@ class HuggingFaceDatasetInitializer(BaseInitializer):
     ignore_patterns: list[str] | None = None
     access_token: str | None = None
 
+<<<<<<< HEAD
     def __post_init__(self):
         """Validate HuggingFaceDatasetInitializer parameters."""
 
         if not self.storage_uri.startswith("hf://"):
             raise ValueError(f"storage_uri must start with 'hf://', got {self.storage_uri}")
 
+=======
+>>>>>>> upstream/main
 
 @dataclass
 class S3DatasetInitializer(BaseInitializer):
@@ -436,12 +443,15 @@ class HuggingFaceModelInitializer(BaseInitializer):
         default_factory=lambda: constants.INITIALIZER_DEFAULT_IGNORE_PATTERNS
     )
     access_token: str | None = None
+<<<<<<< HEAD
 
     def __post_init__(self):
         """Validate HuggingFaceModelInitializer parameters."""
 
         if not self.storage_uri.startswith("hf://"):
             raise ValueError(f"storage_uri must start with 'hf://', got {self.storage_uri}")
+=======
+>>>>>>> upstream/main
 
 
 @dataclass

@@ -50,8 +50,12 @@ kubeflow/                        # Main Python package
 │   │   └── localprocess/              # Subprocess backend for quick prototyping
 │   ├── constants/                   # Common trainer constants and defaults
 │   ├── options/                     # Backend configuration options (KubernetesOptions, etc.)
+<<<<<<< HEAD
 │   ├── types/                       # Common trainer types (e.g. TrainJob, CustomTrainer, BuiltinTrainer)
 │   └── test/                        # Shared test fixtures (common.py)
+=======
+│   └── types/                       # Common trainer types (e.g. TrainJob, CustomTrainer, BuiltinTrainer)
+>>>>>>> upstream/main
 │
 ├── optimizer/                     # Kubeflow Optimizer
 │   ├── api/                         # OptimizerClient - main user interface
@@ -66,9 +70,17 @@ kubeflow/                        # Main Python package
 │   │   └── kubernetes/                # Kubernetes backend
 │   └── types/                       # Spark types and options
 │
+<<<<<<< HEAD
 └── hub/                           # Kubeflow Hub
     ├── api/                         # ModelRegistryClient - main user interface
     └── types/                       # Hub types
+=======
+├── hub/                           # Kubeflow Hub
+│   ├── api/                         # ModelRegistryClient - main user interface
+│   └── types/                       # Hub types
+│
+└── test/                          # Shared test helpers (common.py)
+>>>>>>> upstream/main
 ```
 
 ## Environment & Tooling
@@ -165,6 +177,7 @@ uv run pre-commit run --all-files           # Run all hooks
 
 ### 2. Code Quality Standards
 
+<<<<<<< HEAD
 **All Python code MUST include type hints and return types.**
 
 ❌ **Bad:**
@@ -191,6 +204,9 @@ def filter_completed_jobs(jobs: list[str], completed: set[str]) -> list[str]:
 ```
 
 **Style Requirements:**
+=======
+- All Python code MUST include type hints and return types
+>>>>>>> upstream/main
 - Line length 100, Python 3.10 target, double quotes, spaces indent
 - Imports: isort via ruff; first-party is `kubeflow`; prefer absolute imports
 - Naming: pep8-naming; functions/vars `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE_CASE`; prefix private with `_`
@@ -203,7 +219,11 @@ def filter_completed_jobs(jobs: list[str], completed: set[str]) -> list[str]:
 - Every new feature or bugfix MUST be covered by unit tests
 - Unit tests: `kubeflow/trainer/**/*_test.py` (no network calls allowed)
 - Use `pytest` with `TestCase` dataclass for parametrized tests (see `kubeflow/trainer/backends/kubernetes/backend_test.py` for the reference pattern)
+<<<<<<< HEAD
 - See `kubeflow/trainer/test/common.py` for fixtures and patterns
+=======
+- See `kubeflow/test/common.py` for shared fixtures and patterns
+>>>>>>> upstream/main
 
 ### 4. Security
 

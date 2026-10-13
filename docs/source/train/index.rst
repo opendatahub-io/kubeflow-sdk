@@ -73,6 +73,15 @@ Guides
 
       Download datasets and pre-trained models before training starts.
 
+<<<<<<< HEAD
+=======
+   .. grid-item-card:: Training Options
+      :link: options
+      :link-type: doc
+
+      Configure advanced settings like labels, annotations, and runtime patches.
+
+>>>>>>> upstream/main
 Common Patterns
 ---------------
 
