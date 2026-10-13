@@ -44,8 +44,6 @@ def _build_runtime() -> types.Runtime:
         trainer=runtime_trainer,
         kind=types.RuntimeKind.TRAINING_RUNTIME,
     )
-<<<<<<< HEAD
-=======
 
 
 def sample_train_func() -> None:
@@ -61,7 +59,6 @@ def sample_train_func_kwargs(a: int, b: str, c: float) -> str:
 # --------------------------
 # Tests
 # --------------------------
->>>>>>> upstream/main
 
 
 @pytest.mark.parametrize(
@@ -569,46 +566,15 @@ def test_get_script_for_python_packages(test_case):
             ],
         ),
         TestCase(
-            name="with packages to install",
-            expected_status=SUCCESS,
+            name="lambda rejected even with packages to install",
+            expected_status=FAILED,
             config={
-                "func": (lambda: print("Hello World")),
+                "func": lambda: print("Hello World"),
                 "func_args": None,
                 "runtime": _build_runtime(),
                 "packages_to_install": ["requests"],
             },
-            expected_output=[
-                "bash",
-                "-c",
-                (
-                    '\nif ! [ -x "$(command -v pip)" ]; then\n'
-                    "    python -m ensurepip || python -m ensurepip --user || "
-                    "apt-get install python-pip\n"
-                    "fi\n\n\n"
-                    "PACKAGES=(requests)\n"
-                    "PIP_OPTS=(--index-url https://pypi.org/simple)\n"
-                    'LOG_FILE="pip_install.log"\n'
-                    'rm -f "$LOG_FILE"\n'
-                    "\n"
-                    "if PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_BREAK_SYSTEM_PACKAGES=1 python -m pip install --quiet \\\n"
-                    '    --no-warn-script-location "${PIP_OPTS[@]}" --user "${PACKAGES[@]}" >"$LOG_FILE" 2>&1; then\n'
-                    '    echo "Successfully installed Python packages (user): ${PACKAGES[*]}"\n'
-                    "elif PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_BREAK_SYSTEM_PACKAGES=1 python -m pip install --quiet \\\n"
-                    '    --no-warn-script-location "${PIP_OPTS[@]}" "${PACKAGES[@]}" >>"$LOG_FILE" 2>&1; then\n'
-                    '    echo "Successfully installed Python packages (system-wide): ${PACKAGES[*]}"\n'
-                    "else\n"
-                    '    echo "ERROR: Failed to install Python packages: ${PACKAGES[*]}" >&2\n'
-                    '    cat "$LOG_FILE" >&2\n'
-                    "    exit 1\n"
-                    "fi\n\n"
-                    "\nread -r -d '' SCRIPT << EOM\n\n"
-                    '"func": (lambda: print("Hello World")),\n\n'
-                    "<lambda>()\n\n"
-                    "EOM\n"
-                    'printf "%s" "$SCRIPT" > "utils_test.py"\n'
-                    'python "utils_test.py"'
-                ),
-            ],
+            expected_error=ValueError,
         ),
     ],
 )

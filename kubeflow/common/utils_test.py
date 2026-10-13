@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-<<<<<<< HEAD
 
 """Unit tests for kubeflow.common.utils module."""
 
@@ -21,7 +20,7 @@ import pytest
 
 from kubeflow.common import constants, utils
 from kubeflow.common.utils import get_default_target_namespace, is_running_in_k8s
-from kubeflow.trainer.test.common import SUCCESS, TestCase
+from kubeflow.test.common import SUCCESS, TestCase
 
 # --------------------------
 # is_running_in_k8s tests
@@ -160,12 +159,6 @@ def test_get_default_target_namespace(test_case: TestCase):
 
 # --------------------------
 # validate_wait_for_job_status tests
-=======
-import pytest
-
-from kubeflow.common import utils
-from kubeflow.test.common import SUCCESS, TestCase
-
 # --------------------------
 # Test Helpers
 # --------------------------
@@ -194,7 +187,6 @@ def sample_decorated_function() -> None:
 
 # --------------------------
 # Tests
->>>>>>> upstream/main
 # --------------------------
 
 
@@ -248,8 +240,6 @@ def test_validate_wait_for_job_status(test_case):
             utils.validate_wait_for_job_status(polling_interval, timeout)
     else:
         utils.validate_wait_for_job_status(polling_interval, timeout)
-<<<<<<< HEAD
-=======
 
 
 @pytest.mark.parametrize(
@@ -301,4 +291,28 @@ def test_validate_python_function(test_case):
             utils.validate_python_function(func)
     else:
         utils.validate_python_function(func)
->>>>>>> upstream/main
+
+
+@pytest.mark.parametrize(
+    "source_error,message",
+    [
+        (OSError("source unavailable"), "Function source could not be read"),
+        (TypeError("not pure Python"), "Function must be a pure-Python function"),
+    ],
+)
+def test_validate_python_function_uninspectable_source(source_error, message) -> None:
+    """Source-inspection failures are explicit validation errors, not silent acceptance."""
+    with (
+        patch("kubeflow.common.utils.inspect.getsource", side_effect=source_error),
+        pytest.raises(ValueError, match=message),
+    ):
+        utils.validate_python_function(sample_function)
+
+
+def test_validate_python_function_unparseable_source() -> None:
+    """Malformed inspected source cannot be serialized into a training job."""
+    with (
+        patch("kubeflow.common.utils.inspect.getsource", return_value="def invalid("),
+        pytest.raises(ValueError, match="Function source could not be parsed"),
+    ):
+        utils.validate_python_function(sample_function)

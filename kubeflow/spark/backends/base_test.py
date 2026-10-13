@@ -66,13 +66,15 @@ class ConcreteBackend(RuntimeBackend):
         job: FileJob | FuncJob,
         num_executors: int | None = None,
         resources_per_executor: dict[str, str] | None = None,
+        options: list | None = None,
+        spark_conf: dict[str, str] | None = None,
     ) -> SparkJob:
         return SparkJob(name="test-job", namespace="default", status=SparkJobStatus.CREATED)
 
     def get_job(self, name: str) -> SparkJob:
         return SparkJob(name=name, namespace="default", status=SparkJobStatus.CREATED)
 
-    def list_jobs(self) -> list[SparkJob]:
+    def list_jobs(self, status: set[SparkJobStatus] | None = None) -> list[SparkJob]:
         return []
 
     def delete_job(self, name: str) -> None:
@@ -261,16 +263,22 @@ class PartialBackend(RuntimeBackend):
         job: FileJob | FuncJob,
         num_executors: int | None = None,
         resources_per_executor: dict[str, str] | None = None,
+        options: list | None = None,
+        spark_conf: dict[str, str] | None = None,
     ) -> SparkJob:
         return super().submit_job(
-            job, num_executors=num_executors, resources_per_executor=resources_per_executor
+            job,
+            num_executors=num_executors,
+            resources_per_executor=resources_per_executor,
+            options=options,
+            spark_conf=spark_conf,
         )
 
     def get_job(self, name: str) -> SparkJob:
         return super().get_job(name)
 
-    def list_jobs(self) -> list[SparkJob]:
-        return super().list_jobs()
+    def list_jobs(self, status: set[SparkJobStatus] | None = None) -> list[SparkJob]:
+        return super().list_jobs(status=status)
 
     def delete_job(self, name: str) -> None:
         return super().delete_job(name)

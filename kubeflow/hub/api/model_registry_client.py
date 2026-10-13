@@ -69,19 +69,12 @@ class ModelRegistryClient:
 
         Raises:
             ImportError: If model-registry is not installed.
-<<<<<<< HEAD
-        Examples:
-            ModelRegistryClient("https://example.org", port=456)  # port kwarg
-            ModelRegistryClient("https://example.org:456")        # base_url (including port)
-            ModelRegistryClient("https://example.org")            # default port (`443` for https, `8080` for http)
-=======
 
         Examples:
             >>> from kubeflow.hub import ModelRegistryClient
             >>> client = ModelRegistryClient("https://example.org", port=456)
             >>> client = ModelRegistryClient("https://example.org:456")
             >>> client = ModelRegistryClient("https://example.org")
->>>>>>> upstream/main
         """
         try:
             from model_registry import ModelRegistry
@@ -126,16 +119,9 @@ class ModelRegistryClient:
         must be stored in remote storage (e.g., S3, GCS) before registration.
 
         Most models can be registered using their URI, along with an optional
-<<<<<<< HEAD
-        `storage_config` describing how KServe should fetch the model at
-        inference time. URI builder utilities are recommended when referring to
-        specialized storage; for example `utils.s3_uri_from` when using S3
-        object storage data connections.
-=======
         `storage_config` describing how KServe should fetch the model at inference time.
         URI builder utilities are recommended when referring to specialized storage; for
         example `utils.s3_uri_from` when using S3 object storage data connections.
->>>>>>> upstream/main
 
         Args:
             name: Name of the model.
@@ -148,19 +134,10 @@ class ModelRegistryClient:
             model_format_version: Version of the model format (e.g., "2.0"). Defaults to None.
             author: Author of the model. Defaults to the client author.
             owner: Owner of the model. Defaults to the client author.
-<<<<<<< HEAD
-            version_description: Description of the model version.
-            metadata: Additional version metadata.
-            storage_config: Storage credentials for the model artifact. Groups
-                           `storage_key`, `storage_path`, and
-                           `service_account_name` used by KServe's
-                           StorageInitializer. See `StorageConfig` for details.
-=======
             version_description: Description of the model version. Defaults to None.
             metadata: Additional model version metadata. Defaults to None.
             storage_config: Storage credentials configuration for the model artifact.
                 See `StorageConfig` for details. Defaults to None.
->>>>>>> upstream/main
 
         Returns:
             The registered model object.

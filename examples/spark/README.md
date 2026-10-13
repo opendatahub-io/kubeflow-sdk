@@ -2,22 +2,6 @@
 
 This directory contains examples for using the Kubeflow Spark SDK.
 
-<<<<<<< HEAD
-## Examples
-
-- **spark_connect_simple.py** - Basic SparkClient usage with simple API
-- **spark_advanced_options.py** - Advanced configuration with Driver/Executor objects
-- **demo_existing_sparkconnect.py** - Connect to existing SparkConnect cluster
-- **test_connect_url.py** - Test URL-based connection to Spark Connect
-
-## Prerequisites
-
-Install spark dependencies:
-```bash
-uv pip install kubeflow[spark]
-```
-
-=======
 The Spark SDK supports two ways to run Spark, matching the [Spark SDK documentation](https://sdk.kubeflow.org/en/latest/spark/index.html):
 
 - **Interactive Sessions** - Connect to Spark from a notebook or script using Spark Connect.
@@ -53,15 +37,10 @@ uv sync --extra spark --group notebooks
 The Spark examples run against a Kubernetes cluster with the Spark Operator installed. The SDK does not set a ServiceAccount on the driver spec, so the Spark Operator must be configured with a fallback ServiceAccount that can create executor pods in the target namespace (`controller.defaultServiceAccount` in the Helm chart). See the [Spark SDK docs](https://sdk.kubeflow.org/en/latest/spark/index.html) for prerequisites.
 
 
->>>>>>> upstream/main
 ## Running Examples
 
 ```bash
 # Run from repository root
-<<<<<<< HEAD
-uv run python examples/spark/spark_connect_simple.py
-```
-=======
 
 # Launch Jupyter to explore and run the interactive notebooks:
 jupyter lab examples/spark/
@@ -93,4 +72,3 @@ Batch job examples use `submit_job()` with either `FileJob` or `FuncJob`, then m
 - `delete_job()` - Delete a batch job
 
 See the [Spark SDK API reference](https://sdk.kubeflow.org/en/latest/spark/api.html) for the current API surface.
->>>>>>> upstream/main

@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-Options Reference
-=================
-=======
 Training Options
 ================
 
@@ -183,7 +179,6 @@ API Reference
 -------------
 
 Below is the complete list of options available in the ``kubeflow.trainer.options`` module.
->>>>>>> upstream/main
 
 .. autoclass:: kubeflow.trainer.options.Name
    :members:
@@ -205,13 +200,10 @@ Below is the complete list of options available in the ``kubeflow.trainer.option
    :members:
    :show-inheritance:
 
-<<<<<<< HEAD
-=======
 .. autoclass:: kubeflow.trainer.options.ActiveDeadlineSeconds
    :members:
    :show-inheritance:
 
->>>>>>> upstream/main
 .. autoclass:: kubeflow.trainer.options.RuntimePatch
    :members:
    :show-inheritance:

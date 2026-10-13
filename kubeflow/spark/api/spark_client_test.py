@@ -20,20 +20,13 @@ import pytest
 
 from kubeflow.common.types import KubernetesBackendConfig
 from kubeflow.spark.api.spark_client import SparkClient
-<<<<<<< HEAD
-from kubeflow.spark.test.common import FAILED, SUCCESS, TestCase
-=======
 from kubeflow.spark.options import Labels
->>>>>>> upstream/main
 from kubeflow.spark.types.types import (
     FileJob,
     FuncJob,
     SparkJob,
 )
-<<<<<<< HEAD
-=======
 from kubeflow.test.common import FAILED, SUCCESS, TestCase
->>>>>>> upstream/main
 
 
 @pytest.mark.parametrize(
@@ -107,24 +100,10 @@ def test_create_and_connect(test_case: TestCase):
         ),
         (
             FileJob(file_source="s3://bucket/job.py"),
-<<<<<<< HEAD
-            {"spark.executor.memory": "4g"},
-            None,
-            None,
-            NotImplementedError,
-        ),
-        (
-            FileJob(file_source="s3://bucket/job.py"),
-            None,
-            [object()],
-            None,
-            NotImplementedError,
-=======
             [],
             None,
             ValueError("spark_conf must be a dictionary."),
             ValueError,
->>>>>>> upstream/main
         ),
     ],
 )
@@ -154,19 +133,6 @@ def test_submit_job_validation(
 
 
 @pytest.mark.parametrize(
-<<<<<<< HEAD
-    "job",
-    [
-        FileJob(
-            file_source="s3://bucket/job.py",
-        ),
-        FuncJob(
-            func=lambda: None,
-        ),
-    ],
-)
-def test_submit_job_success(job):
-=======
     "job,options",
     [
         (
@@ -184,7 +150,6 @@ def test_submit_job_success(job):
     ],
 )
 def test_submit_job_success(job, options):
->>>>>>> upstream/main
     """Test successful submit_job."""
 
     with patch("kubeflow.spark.api.spark_client.KubernetesBackend") as mock_backend:
@@ -197,11 +162,7 @@ def test_submit_job_success(job, options):
 
         client = SparkClient()
 
-<<<<<<< HEAD
-        name = client.submit_job(job=job)
-=======
         name = client.submit_job(job=job, options=options)
->>>>>>> upstream/main
 
         assert name == "spark-job-123"
 
@@ -209,9 +170,6 @@ def test_submit_job_success(job, options):
             job=job,
             num_executors=None,
             resources_per_executor=None,
-<<<<<<< HEAD
-=======
             spark_conf=None,
             options=options,
->>>>>>> upstream/main
         )

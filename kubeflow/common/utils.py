@@ -15,10 +15,7 @@ import ast
 from collections.abc import Callable
 import inspect
 import os
-<<<<<<< HEAD
-=======
 import textwrap
->>>>>>> upstream/main
 
 from kubernetes import config
 
@@ -43,11 +40,7 @@ def get_default_target_namespace(context: str | None = None) -> str:
         except Exception:
             return constants.DEFAULT_NAMESPACE
     with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
-<<<<<<< HEAD
         return f.readline().strip()
-=======
-        return f.readline()
->>>>>>> upstream/main
 
 
 def validate_wait_for_job_status(polling_interval: int, timeout: int) -> None:
@@ -72,8 +65,6 @@ def validate_wait_for_job_status(polling_interval: int, timeout: int) -> None:
             "Polling interval must be strictly less than timeout. "
             f"Received polling_interval={polling_interval}, timeout={timeout}"
         )
-<<<<<<< HEAD
-=======
 
 
 def validate_python_function(func: Callable) -> None:
@@ -118,4 +109,3 @@ def validate_python_function(func: Callable) -> None:
         for node in func_tree.body
     ):
         raise ValueError("Decorated functions are not supported.")
->>>>>>> upstream/main

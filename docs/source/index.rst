@@ -181,13 +181,10 @@ Getting Involved
    :caption: Spark
 
    spark/index
-<<<<<<< HEAD
-=======
    spark/sessions
    spark/batch-jobs
    spark/lifecycle
    spark/options
->>>>>>> upstream/main
    spark/api
 
 .. toctree::

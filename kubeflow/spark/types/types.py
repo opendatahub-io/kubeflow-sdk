@@ -21,11 +21,8 @@ from enum import Enum
 import logging
 from typing import Any
 
-<<<<<<< HEAD
-=======
 import kubeflow.common.constants as common_constants
 
->>>>>>> upstream/main
 logger = logging.getLogger(__name__)
 
 
@@ -34,10 +31,6 @@ class SparkConnectState(str, Enum):
 
     PROVISIONING = "Provisioning"
     READY = "Ready"
-<<<<<<< HEAD
-    RUNNING = "Running"  # Operator may set this when server is up; treated as ready
-=======
->>>>>>> upstream/main
     NOT_READY = "NotReady"
     FAILED = "Failed"
 
@@ -59,11 +52,7 @@ class SparkConnectInfo:
 
     name: str
     namespace: str
-<<<<<<< HEAD
-    state: SparkConnectState
-=======
     state: str = common_constants.UNKNOWN
->>>>>>> upstream/main
     driver_pod_name: str | None = None
     pod_ip: str | None = None
     service_name: str | None = None
@@ -83,12 +72,6 @@ class Driver:
         java_options: JVM options for the driver (e.g., "-Xmx4g -XX:+UseG1GC").
         service_account: Kubernetes service account name for RBAC.
 
-<<<<<<< HEAD
-    Example:
-        driver = Driver(
-            resources={"cpu": "4", "memory": "8Gi"},
-            service_account="spark-driver-prod"
-=======
     Example::
 
         driver = Driver(
@@ -97,7 +80,6 @@ class Driver:
                 "memory": "8Gi",
             },
             service_account="spark-driver-prod",
->>>>>>> upstream/main
         )
 
     Note:
@@ -124,12 +106,6 @@ class Executor:
             (e.g., {"cpu": "4", "memory": "8Gi"}).
         java_options: JVM options for executors (e.g., "-Xmx28g -XX:+UseG1GC").
 
-<<<<<<< HEAD
-    Example:
-        executor = Executor(
-            num_instances=20,
-            resources_per_executor={"cpu": "8", "memory": "32Gi"}
-=======
     Example::
 
         executor = Executor(
@@ -138,7 +114,6 @@ class Executor:
                 "cpu": "8",
                 "memory": "32Gi",
             },
->>>>>>> upstream/main
         )
 
     Note:
@@ -232,11 +207,7 @@ class SparkJob:
 
     name: str
     namespace: str
-<<<<<<< HEAD
-    status: SparkJobStatus | None = None
-=======
     status: str = common_constants.UNKNOWN
->>>>>>> upstream/main
     creation_timestamp: datetime | None = None
     num_executors: int | None = None
     driver_pod_name: str | None = None

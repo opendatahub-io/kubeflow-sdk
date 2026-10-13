@@ -84,7 +84,6 @@ release: ## Create a release commit. Usage: make release VERSION=X.Y.Z GITHUB_TO
 		MAJOR_MINOR=$$(echo "$(VERSION)" | cut -d. -f1,2); \
 		CHANGELOG_PATH="CHANGELOG/CHANGELOG-$$MAJOR_MINOR.md"; \
 		RELEASE_BRANCH="release-$$MAJOR_MINOR"; \
-<<<<<<< HEAD
 		RELEASE_SHA=$$(git rev-parse --verify --quiet "refs/remotes/upstream/$$RELEASE_BRANCH"); \
 		if [ -n "$$RELEASE_SHA" ]; then \
 			PREV_TAG=$$(git describe --tags --abbrev=0 --match '[0-9]*' --exclude '*rc*' "$$RELEASE_SHA" 2>/dev/null || true); \
@@ -113,33 +112,6 @@ release: ## Create a release commit. Usage: make release VERSION=X.Y.Z GITHUB_TO
 			$$CLIFF_CMD -o "$$CHANGELOG_PATH"; \
 			printf '%s\n' "$$(cat "$$CHANGELOG_PATH")" > "$$CHANGELOG_PATH"; \
 		fi; \
-=======
-		RELEASE_SHA=$$(git rev-parse --verify --quiet "refs/remotes/upstream/$$RELEASE_BRANCH" || true); \
-		if [ -z "$$RELEASE_SHA" ]; then \
-			if [ -f "$$CHANGELOG_PATH" ]; then \
-				echo "Error: branch $$RELEASE_BRANCH not found on upstream, but $$CHANGELOG_PATH exists. Run: git fetch upstream $$RELEASE_BRANCH"; \
-				exit 1; \
-			fi; \
-			RELEASE_SHA=$$(git rev-parse HEAD); \
-			echo "Branch $$RELEASE_BRANCH does not exist yet (new release line $$MAJOR_MINOR, created by the release workflow); using HEAD"; \
-		fi; \
-		PATCH=$$(echo "$(VERSION)" | cut -d. -f3); \
-		if [ "$$PATCH" -gt 0 ]; then \
-			PREV_TAG="$$(echo "$(VERSION)" | cut -d. -f1,2).$$((PATCH - 1))"; \
-		else \
-			PREV_MINOR=$$(( $$(echo "$(VERSION)" | cut -d. -f2) - 1 )); \
-			PREV_TAG=$$(git tag --list "$$(echo "$(VERSION)" | cut -d. -f1).$$PREV_MINOR.*" | grep -vE -- '(rc)' | sort -t. -k3,3nr | head -1 || true); \
-		fi; \
-		if [ -z "$$PREV_TAG" ]; then \
-			echo "Error: cannot determine the previous release tag for $(VERSION)"; \
-			exit 1; \
-		fi; \
-		echo "Generating changelog for $(VERSION) (range: $$PREV_TAG..$$RELEASE_SHA)"; \
-		touch "$$CHANGELOG_PATH"; \
-		docker run --rm -u $$(id -u):$$(id -g) -e HOME=/tmp -e GITHUB_TOKEN \
-			-v $(PROJECT_DIR):/app -w /app ghcr.io/orhun/git-cliff/git-cliff:latest \
-			"$$PREV_TAG..$$RELEASE_SHA" --tag $(VERSION) --prepend "$$CHANGELOG_PATH"; \
->>>>>>> upstream/main
 		echo "Changelog generated at $$CHANGELOG_PATH"; \
 	fi
 	@echo ""
@@ -161,24 +133,6 @@ else
 endif
 
 ##@ E2E Testing
-<<<<<<< HEAD
-
-.PHONY: test-e2e-setup-cluster
-test-e2e-setup-cluster:  ## Setup Kind cluster for Spark E2E tests
-	@echo "Setting up E2E test cluster..."
-	@K8S_VERSION=$(K8S_VERSION) \
-	 SPARK_TEST_CLUSTER=$(SPARK_TEST_CLUSTER) \
-	 SPARK_TEST_NAMESPACE=$(SPARK_TEST_NAMESPACE) \
-	 SPARK_OPERATOR_VERSION=$(SPARK_OPERATOR_VERSION) \
-	 KIND=$(KIND) \
-	 ./hack/e2e-setup-cluster.sh
-.PHONY: test-scripts
-test-scripts: uv-venv  ## Run GitHub Actions script tests
-	@uv sync
-	@uv run pytest .github/scripts/test_scripts.py -v
-
-=======
->>>>>>> upstream/main
 
 .PHONY: test-e2e-setup-cluster
 test-e2e-setup-cluster:  ## Setup Kind cluster for Spark E2E tests

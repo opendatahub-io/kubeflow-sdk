@@ -426,8 +426,6 @@ class TestRuntimePatchApplication:
                 },
             },
         }
-<<<<<<< HEAD
-=======
 
 
 class TestActiveDeadlineSeconds:
@@ -447,4 +445,3 @@ class TestActiveDeadlineSeconds:
         with pytest.raises(ValueError) as exc_info:
             ActiveDeadlineSeconds(seconds=seconds)
         assert expected_error in str(exc_info.value)
->>>>>>> upstream/main

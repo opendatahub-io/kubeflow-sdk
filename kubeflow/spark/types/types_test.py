@@ -19,10 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
-<<<<<<< HEAD
-=======
 from kubeflow.common import constants as common_constants
->>>>>>> upstream/main
 from kubeflow.spark.types.types import (
     Driver,
     Executor,
@@ -33,11 +30,7 @@ from kubeflow.spark.types.types import (
     SparkJob,
     SparkJobStatus,
 )
-<<<<<<< HEAD
-from kubeflow.trainer.test.common import SUCCESS, TestCase
-=======
 from kubeflow.test.common import SUCCESS, TestCase
->>>>>>> upstream/main
 
 
 @pytest.mark.parametrize(
@@ -45,10 +38,6 @@ from kubeflow.test.common import SUCCESS, TestCase
     [
         (SparkConnectState.PROVISIONING, "Provisioning"),
         (SparkConnectState.READY, "Ready"),
-<<<<<<< HEAD
-        (SparkConnectState.RUNNING, "Running"),
-=======
->>>>>>> upstream/main
         (SparkConnectState.NOT_READY, "NotReady"),
         (SparkConnectState.FAILED, "Failed"),
     ],
@@ -63,10 +52,6 @@ def test_spark_connect_state_values(state, expected):
     [
         SparkConnectState.PROVISIONING,
         SparkConnectState.READY,
-<<<<<<< HEAD
-        SparkConnectState.RUNNING,
-=======
->>>>>>> upstream/main
         SparkConnectState.NOT_READY,
         SparkConnectState.FAILED,
     ],
@@ -369,11 +354,7 @@ def test_spark_job(test_case: TestCase):
         assert getattr(job, key) == value
 
     if test_case.name == "default spark job":
-<<<<<<< HEAD
-        assert job.status is None
-=======
         assert job.status == common_constants.UNKNOWN
->>>>>>> upstream/main
         assert job.creation_timestamp is None
         assert job.num_executors is None
         assert job.driver_pod_name is None

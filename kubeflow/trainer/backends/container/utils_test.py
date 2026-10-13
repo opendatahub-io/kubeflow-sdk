@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-<<<<<<< HEAD
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -50,17 +49,6 @@ def _sample_train_func():
     return x
 
 
-=======
-import pytest
-
-from kubeflow.common.constants import UNKNOWN
-from kubeflow.test.common import FAILED, SUCCESS, TestCase
-from kubeflow.trainer.backends.container import utils as container_utils
-from kubeflow.trainer.constants import constants
-from kubeflow.trainer.types import types
-
-
->>>>>>> upstream/main
 def simple_train_func():
     print("Training...")
 
@@ -69,7 +57,6 @@ def simple_train_func():
     "test_case",
     [
         TestCase(
-<<<<<<< HEAD
             name="training script without func_args",
             expected_status=SUCCESS,
             config={"func_args": None},
@@ -140,8 +127,6 @@ def test_build_environment(test_case: TestCase):
     "test_case",
     [
         TestCase(
-=======
->>>>>>> upstream/main
             name="no packages returns empty string",
             expected_status=SUCCESS,
             config={"packages": None},
@@ -224,7 +209,6 @@ def test_build_pip_install_cmd(test_case: TestCase):
     print("test execution complete")
 
 
-<<<<<<< HEAD
 # -------------------------------------------------------
 # container_status_to_trainjob_status
 # -------------------------------------------------------
@@ -279,8 +263,6 @@ def test_container_status_to_trainjob_status(test_case: TestCase):
 # -------------------------------------------------------
 # aggregate_status_from_containers
 # -------------------------------------------------------
-=======
->>>>>>> upstream/main
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -336,17 +318,13 @@ def test_aggregate_status_from_containers(test_case: TestCase):
     print("test execution complete")
 
 
-<<<<<<< HEAD
 # -------------------------------------------------------
 # maybe_pull_image
 # -------------------------------------------------------
-=======
->>>>>>> upstream/main
 @pytest.mark.parametrize(
     "test_case",
     [
         TestCase(
-<<<<<<< HEAD
             name="IfNotPresent when image exists",
             expected_status=SUCCESS,
             config={
@@ -594,7 +572,12 @@ def test_get_model_initializer(test_case: TestCase):
         assert result.image == cfg.model_initializer_image
 
     print("test execution complete")
-=======
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
             name="valid function",
             expected_status=SUCCESS,
             config={"func": simple_train_func},
@@ -615,7 +598,7 @@ def test_get_model_initializer(test_case: TestCase):
         ),
     ],
 )
-def test_get_training_script_code(test_case: TestCase):
+def test_get_training_script_code_validation(test_case: TestCase):
     """Test training script generation."""
 
     trainer = types.CustomTrainer(func=test_case.config["func"])
@@ -631,4 +614,3 @@ def test_get_training_script_code(test_case: TestCase):
             match=test_case.expected_output,
         ):
             container_utils.get_training_script_code(trainer)
->>>>>>> upstream/main

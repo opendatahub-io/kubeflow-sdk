@@ -15,14 +15,8 @@
 """Unit tests for KubernetesBackend."""
 
 from datetime import datetime
-<<<<<<< HEAD
-from functools import wraps
-import multiprocessing
-from unittest.mock import Mock, patch
-=======
 import multiprocessing
 from unittest.mock import MagicMock, Mock, patch
->>>>>>> upstream/main
 
 from kubeflow_spark_api import models
 from kubernetes import client
@@ -35,22 +29,7 @@ from kubeflow.spark.backends.kubernetes.backend import KubernetesBackend
 from kubeflow.spark.backends.kubernetes.utils import (
     validate_spark_connect_url,
 )
-<<<<<<< HEAD
-from kubeflow.spark.test.common import (
-    DEFAULT_NAMESPACE,
-    FAILED,
-    RUNTIME,
-    SPARK_CONNECT_FAILED,
-    SPARK_CONNECT_PROVISIONING,
-    SPARK_CONNECT_READY,
-    SUCCESS,
-    TIMEOUT,
-    TestCase,
-)
-from kubeflow.spark.types.options import Labels, Name
-=======
 from kubeflow.spark.options import Labels, Name
->>>>>>> upstream/main
 from kubeflow.spark.types.types import (
     FileJob,
     FuncJob,
@@ -58,8 +37,6 @@ from kubeflow.spark.types.types import (
     SparkConnectState,
     SparkJobStatus,
 )
-<<<<<<< HEAD
-=======
 from kubeflow.test.common import (
     DEFAULT_NAMESPACE,
     FAILED,
@@ -73,7 +50,6 @@ from kubeflow.test.common import (
 SPARK_CONNECT_READY = "spark-connect-ready"
 SPARK_CONNECT_PROVISIONING = "spark-connect-provisioning"
 SPARK_CONNECT_FAILED = "spark-connect-failed"
->>>>>>> upstream/main
 
 # --------------------------
 # Fixtures
@@ -397,16 +373,8 @@ def sample_func_with_args(
 
 
 def _decorator(func: callable) -> callable:
-<<<<<<< HEAD
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    return wrapper
-=======
     """Pass-through decorator for testing."""
     return func
->>>>>>> upstream/main
 
 
 @_decorator
@@ -728,12 +696,6 @@ def test_get_session_logs(kubernetes_backend, test_case):
             config={"in_cluster": False},
             expected_output={"url": "sc://127.0.0.1:15002", "proc_is_none": False},
         ),
-<<<<<<< HEAD
-    ],
-)
-def test_get_connect_url(kubernetes_backend, test_case):
-    """Test get_connect_url for in-cluster and port-forward scenarios."""
-=======
         TestCase(
             name="out-of-cluster without pod or service name raises",
             expected_status=FAILED,
@@ -745,17 +707,12 @@ def test_get_connect_url(kubernetes_backend, test_case):
 )
 def test_get_connect_url(kubernetes_backend, test_case):
     """Test get_connect_url for in-cluster, port-forward, and not-ready scenarios."""
->>>>>>> upstream/main
     print("Executing test:", test_case.name)
     info = SparkConnectInfo(
         name="test-session",
         namespace="default",
         state=SparkConnectState.READY,
-<<<<<<< HEAD
-        service_name="test-session-svc",
-=======
         service_name=test_case.config.get("service_name", "test-session-server"),
->>>>>>> upstream/main
     )
 
     if test_case.config["in_cluster"]:
@@ -777,8 +734,6 @@ def test_get_connect_url(kubernetes_backend, test_case):
             patch("kubeflow.spark.backends.kubernetes.backend.time.sleep"),
             patch.object(kubernetes_backend, "_wait_for_connect_port", return_value=True),
         ):
-<<<<<<< HEAD
-=======
             if test_case.expected_status == FAILED:
                 with pytest.raises(
                     test_case.expected_error,
@@ -787,7 +742,6 @@ def test_get_connect_url(kubernetes_backend, test_case):
                     kubernetes_backend.get_connect_url(info)
                 print("test execution complete")
                 return
->>>>>>> upstream/main
             url, proc = kubernetes_backend.get_connect_url(info)
 
     if "url_contains" in test_case.expected_output:
@@ -861,8 +815,6 @@ def test_wait_for_connect_port(kubernetes_backend, test_case):
             config={"url": ""},
             expected_error=ValueError,
         ),
-<<<<<<< HEAD
-=======
         TestCase(
             name="missing hostname error",
             expected_status=FAILED,
@@ -875,7 +827,6 @@ def test_wait_for_connect_port(kubernetes_backend, test_case):
             config={"url": "sc://:abc"},
             expected_error=ValueError,
         ),
->>>>>>> upstream/main
     ],
 )
 def test_validate_spark_connect_url(test_case):
@@ -903,8 +854,6 @@ def test_validate_spark_connect_url(test_case):
             expected_status=SUCCESS,
             config={"session_name": None},
         ),
-<<<<<<< HEAD
-=======
         TestCase(
             name="create succeeds, wait fails",
             expected_status=FAILED,
@@ -926,96 +875,11 @@ def test_validate_spark_connect_url(test_case):
             config={"session_name": "test-session", "create_error": RuntimeError("Create failed")},
             expected_error=RuntimeError,
         ),
->>>>>>> upstream/main
     ],
 )
 def test_create_and_connect(kubernetes_backend, test_case):
     """Test create_and_connect with and without Name option."""
     print("Executing test:", test_case.name)
-<<<<<<< HEAD
-    try:
-        options = (
-            [Name(test_case.config["session_name"])] if test_case.config["session_name"] else None
-        )
-        ready_info = SparkConnectInfo(
-            name=test_case.config["session_name"] or "spark-connect-abc",
-            namespace=DEFAULT_NAMESPACE,
-            state=SparkConnectState.READY,
-            service_name="svc",
-        )
-
-        with (
-            patch.object(
-                kubernetes_backend, "_create_session", return_value=ready_info
-            ) as mock_create,
-            patch.object(kubernetes_backend, "_wait_for_session_ready", return_value=ready_info),
-            patch.object(
-                kubernetes_backend, "get_connect_url", return_value=("sc://localhost:15002", None)
-            ),
-            patch("kubeflow.spark.backends.kubernetes.backend.SparkSession"),
-        ):
-            kubernetes_backend.create_and_connect(options=options)
-            mock_create.assert_called_once()
-            assert mock_create.call_args.kwargs.get("options") == options
-
-        assert test_case.expected_status == SUCCESS
-
-    except Exception as e:
-        assert type(e) is test_case.expected_error
-    print("test execution complete")
-
-
-@pytest.mark.parametrize(
-    "test_case",
-    [
-        TestCase(
-            name="valid flow with name option provided",
-            expected_status=SUCCESS,
-            config={"options": [Name("test-name"), Labels({"app": "spark"})]},
-            expected_output={"name": "test-name", "remaining_count": 1, "remaining_type": Labels},
-        ),
-        TestCase(
-            name="valid flow with no name option auto generates",
-            expected_status=SUCCESS,
-            config={"options": [Labels({"app": "spark"})]},
-            expected_output={
-                "name_prefix": "spark-connect-",
-                "remaining_count": 1,
-                "remaining_type": Labels,
-            },
-        ),
-        TestCase(
-            name="valid flow with none options auto generates",
-            expected_status=SUCCESS,
-            config={"options": None},
-            expected_output={"name_prefix": "spark-connect-", "remaining_count": 0},
-        ),
-        TestCase(
-            name="valid flow with empty options auto generates",
-            expected_status=SUCCESS,
-            config={"options": []},
-            expected_output={"name_prefix": "spark-connect-", "remaining_count": 0},
-        ),
-    ],
-)
-def test_extract_name_option(kubernetes_backend, test_case):
-    """Test KubernetesBackend._extract_name_option for name extraction and auto-generation."""
-    print("Executing test:", test_case.name)
-    try:
-        name, filtered = kubernetes_backend._extract_name_option(test_case.config["options"])
-
-        assert test_case.expected_status == SUCCESS
-        if "name" in test_case.expected_output:
-            assert name == test_case.expected_output["name"]
-        else:
-            assert name.startswith(test_case.expected_output["name_prefix"])
-        assert len(filtered) == test_case.expected_output["remaining_count"]
-        if "remaining_type" in test_case.expected_output:
-            assert isinstance(filtered[0], test_case.expected_output["remaining_type"])
-
-    except Exception as e:
-        assert type(e) is test_case.expected_error
-=======
     options = [Name(test_case.config["session_name"])] if test_case.config["session_name"] else None
     session_name = test_case.config["session_name"] or "spark-connect-abc"
     ready_info = SparkConnectInfo(
@@ -1063,7 +927,71 @@ def test_extract_name_option(kubernetes_backend, test_case):
         if not create_error:
             mock_create.assert_called_once()
             assert mock_create.call_args.kwargs.get("options") == options
->>>>>>> upstream/main
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid flow with name option provided",
+            expected_status=SUCCESS,
+            config={"options": [Name("test-name"), Labels({"app": "spark"})]},
+            expected_output={"name": "test-name", "remaining_count": 1, "remaining_type": Labels},
+        ),
+        TestCase(
+            name="valid flow with no name option auto generates",
+            expected_status=SUCCESS,
+            config={"options": [Labels({"app": "spark"})]},
+            expected_output={
+                "name_prefix": "spark-connect-",
+                "remaining_count": 1,
+                "remaining_type": Labels,
+            },
+        ),
+        TestCase(
+            name="valid flow with none options auto generates",
+            expected_status=SUCCESS,
+            config={"options": None},
+            expected_output={"name_prefix": "spark-connect-", "remaining_count": 0},
+        ),
+        TestCase(
+            name="valid flow with empty options auto generates",
+            expected_status=SUCCESS,
+            config={"options": []},
+            expected_output={"name_prefix": "spark-connect-", "remaining_count": 0},
+        ),
+    ],
+)
+def test_create_session_name_options(kubernetes_backend, test_case):
+    """Retain downstream name/label coverage through upstream option application."""
+    print("Executing test:", test_case.name)
+    try:
+        options = test_case.config["options"]
+        with patch.object(
+            kubernetes_backend.custom_api,
+            "create_namespaced_custom_object",
+            side_effect=lambda **kwargs: create_mock_thread(kwargs["body"]),
+        ) as mock_create:
+            session = kubernetes_backend._create_session(options=options)
+        name = session.name
+        filtered = [option for option in options or [] if not isinstance(option, Name)]
+        body = mock_create.call_args.kwargs["body"]
+        for option in filtered:
+            if isinstance(option, Labels):
+                assert body["metadata"]["labels"] == option.labels
+
+        assert test_case.expected_status == SUCCESS
+        if "name" in test_case.expected_output:
+            assert name == test_case.expected_output["name"]
+        else:
+            assert name.startswith(test_case.expected_output["name_prefix"])
+        assert len(filtered) == test_case.expected_output["remaining_count"]
+        if "remaining_type" in test_case.expected_output:
+            assert isinstance(filtered[0], test_case.expected_output["remaining_type"])
+
+    except Exception as e:
+        assert type(e) is test_case.expected_error
     print("test execution complete")
 
 
@@ -1425,8 +1353,6 @@ def test_validate_job(kubernetes_backend, test_case):
                 "use_mock_command": True,
             },
         ),
-<<<<<<< HEAD
-=======
         TestCase(
             name="valid remote file submission with spark conf",
             expected_status=SUCCESS,
@@ -1455,7 +1381,6 @@ def test_validate_job(kubernetes_backend, test_case):
                 ],
             },
         ),
->>>>>>> upstream/main
     ],
 )
 def test_submit_job(kubernetes_backend, test_case):
@@ -1478,36 +1403,24 @@ def test_submit_job(kubernetes_backend, test_case):
 
                 job = kubernetes_backend.submit_job(
                     job=test_case.config["job"],
-<<<<<<< HEAD
-=======
                     options=test_case.config.get("options"),
                     spark_conf=test_case.config.get("spark_conf"),
->>>>>>> upstream/main
                 )
 
                 mock_build.assert_called_once()
 
                 assert mock_build.call_args.kwargs["func"] == test_case.config["job"].func
                 assert mock_build.call_args.kwargs["func_args"] == test_case.config["job"].func_args
-<<<<<<< HEAD
-=======
                 if test_case.config.get("options"):
                     assert mock_build.call_args.kwargs["options"] == test_case.config["options"]
                     assert mock_build.call_args.kwargs["backend"] is kubernetes_backend
                 assert mock_build.call_args.kwargs["spark_conf"] == test_case.config.get(
                     "spark_conf"
                 )
->>>>>>> upstream/main
 
         else:
             job = kubernetes_backend.submit_job(
                 job=test_case.config["job"],
-<<<<<<< HEAD
-            )
-
-        assert test_case.expected_status == SUCCESS
-        assert job.name.startswith("spark-job-")
-=======
                 options=test_case.config.get("options"),
                 spark_conf=test_case.config.get("spark_conf"),
             )
@@ -1518,7 +1431,6 @@ def test_submit_job(kubernetes_backend, test_case):
             assert job.name == "custom-job"
         else:
             assert job.name.startswith("spark-job-")
->>>>>>> upstream/main
 
     except Exception as e:
         assert type(e) is test_case.expected_error

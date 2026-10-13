@@ -67,15 +67,6 @@ class TrainerClient:
             raise ValueError(f"Invalid backend config '{backend_config}'")
 
     def list_runtimes(self) -> list[types.Runtime]:
-<<<<<<< HEAD
-        """List of the available runtimes, preferring namespaced over cluster-scoped for duplicates.
-
-        Returns:
-            A list of training runtimes from both namespace-scoped and
-            cluster-scoped resources. If duplicates exist, the
-            namespace-scoped runtime is preferred. Returns an empty list
-            if no runtimes are found.
-=======
         """List the available training runtimes.
 
         This method lists available runtimes, preferring namespace-scoped over
@@ -84,7 +75,6 @@ class TrainerClient:
         Returns:
             A list of training runtimes from namespace-scoped
             and cluster-scoped resources. Returns an empty list if no runtimes are found.
->>>>>>> upstream/main
 
         Raises:
             TimeoutError: Timeout occurred while listing runtimes.
@@ -100,21 +90,13 @@ class TrainerClient:
         return self.backend.list_runtimes()
 
     def get_runtime(self, name: str) -> types.Runtime:
-<<<<<<< HEAD
-        """Get the runtime object
-=======
         """Get a specific training runtime.
->>>>>>> upstream/main
 
         Args:
             name: Name of the runtime.
 
         Returns:
             A runtime object. If both namespace-scoped and
-<<<<<<< HEAD
-            cluster-scoped runtimes exist with the same name, the
-            namespace-scoped runtime is returned.
-=======
             cluster-scoped runtimes exist with the same name, the namespace-scoped
             runtime is returned.
 
@@ -128,7 +110,6 @@ class TrainerClient:
             >>> client = TrainerClient()
             >>> runtime = client.get_runtime("torch-distributed")
             >>> print(runtime.trainer.image)
->>>>>>> upstream/main
         """
         return self.backend.get_runtime(name=name)
 
@@ -159,10 +140,7 @@ class TrainerClient:
         trainer: types.CustomTrainer
         | types.CustomTrainerContainer
         | types.BuiltinTrainer
-<<<<<<< HEAD
         | RHAITrainer
-=======
->>>>>>> upstream/main
         | None = None,
         options: list | None = None,
     ) -> str:
@@ -170,7 +148,6 @@ class TrainerClient:
 
         You can configure the TrainJob using one of these trainers:
 
-<<<<<<< HEAD
         - CustomTrainer: Run a user-defined function that encapsulates the
           training process.
         - CustomTrainerContainer: Run a user-defined container image that
@@ -179,28 +156,14 @@ class TrainerClient:
           logic, configured by parameters only.
         - RHAITrainer: Use an RHAI-compatible trainer (TrainingHubTrainer or
           TransformersTrainer).
-=======
-        - CustomTrainer: Runs training with a user-defined function that fully encapsulates the
-          training process.
-        - CustomTrainerContainer: Runs training with a user-defined image that fully encapsulates
-          the training process.
-        - BuiltinTrainer: Uses a predefined trainer with built-in post-training logic, requiring
-          only parameter configuration.
->>>>>>> upstream/main
 
         Args:
             runtime: Optional reference to one of the existing runtimes. It can accept the runtime
                 name or Runtime object. Defaults to the torch-distributed runtime if not provided.
             initializer: Optional configuration for the dataset and model initializers.
-<<<<<<< HEAD
             trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer,
                 BuiltinTrainer, or RHAITrainer. If not specified, the TrainJob
                 uses the runtime's default values.
-=======
-            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer, or
-                BuiltinTrainer. If not specified, the TrainJob will use the runtime's
-                default values.
->>>>>>> upstream/main
             options: Optional list of configuration options to apply to the TrainJob.
                 Options can be imported from kubeflow.trainer.options.
 
@@ -228,24 +191,15 @@ class TrainerClient:
         )
 
     def list_jobs(self, runtime: types.Runtime | None = None) -> list[types.TrainJob]:
-<<<<<<< HEAD
-        """List of the created TrainJobs. If a runtime is specified, only TrainJobs associated with
-        that runtime are returned.
-=======
         """List created TrainJobs.
->>>>>>> upstream/main
 
         Args:
             runtime: Optional reference to one of the existing runtimes. If specified,
                 only TrainJobs associated with that runtime are returned.
 
         Returns:
-<<<<<<< HEAD
-            List of created TrainJobs. If no TrainJobs exist, an empty list is returned.
-=======
             List of created TrainJobs. If no TrainJobs exist, an
             empty list is returned.
->>>>>>> upstream/main
 
         Raises:
             TimeoutError: Timeout occurred while listing TrainJobs.
@@ -261,11 +215,7 @@ class TrainerClient:
         return self.backend.list_jobs(runtime=runtime)
 
     def get_job(self, name: str) -> types.TrainJob:
-<<<<<<< HEAD
-        """Get the TrainJob object.
-=======
         """Get the TrainJob object by name.
->>>>>>> upstream/main
 
         Args:
             name: Name of the TrainJob.

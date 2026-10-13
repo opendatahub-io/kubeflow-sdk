@@ -12,8 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-<<<<<<< HEAD
-__version__ = "0.4.1+rhai0"
-=======
 __version__ = "0.5.0"
->>>>>>> upstream/main

@@ -33,32 +33,7 @@ from kubernetes import client
 import pytest
 
 from kubeflow.common.types import KubernetesBackendConfig
-<<<<<<< HEAD
-from kubeflow.trainer.backends.kubernetes.backend import KubernetesBackend
-import kubeflow.trainer.backends.kubernetes.utils as utils
-from kubeflow.trainer.constants import constants
-from kubeflow.trainer.options import (
-    Annotations,
-    JobSetSpecPatch,
-    JobSetTemplatePatch,
-    JobSpecPatch,
-    JobTemplatePatch,
-    Labels,
-    PodSpecPatch,
-    PodTemplatePatch,
-    ReplicatedJobPatch,
-    RuntimePatch,
-    TrainingRuntimeSpecPatch,
-)
-from kubeflow.trainer.rhai import (
-    TrainingHubAlgorithms,
-    TrainingHubTrainer,
-    traininghub as rhai_traininghub,
-)
-from kubeflow.trainer.test.common import (
-=======
 from kubeflow.test.common import (
->>>>>>> upstream/main
     DEFAULT_NAMESPACE,
     FAILED,
     RUNTIME,
@@ -82,6 +57,11 @@ from kubeflow.trainer.options import (
     ReplicatedJobPatch,
     RuntimePatch,
     TrainingRuntimeSpecPatch,
+)
+from kubeflow.trainer.rhai import (
+    TrainingHubAlgorithms,
+    TrainingHubTrainer,
+    traininghub as rhai_traininghub,
 )
 from kubeflow.trainer.types import types
 
@@ -320,15 +300,10 @@ def get_custom_trainer(
     # with torchrun as the entrypoint and a fixed lambda for deterministic tests.
     func_script = (
         "\nread -r -d '' SCRIPT << EOM\n\n"
-<<<<<<< HEAD
-        'func=lambda: print("Hello World"),\n\n'
-        "<lambda>(**{'learning_rate': 0.001, 'batch_size': 32})\n\n"
-=======
         "def sample_train_func() -> None:\n"
         '    """Sample training function."""\n'
         '    print("Hello World")\n\n'
         "sample_train_func(**{'learning_rate': 0.001, 'batch_size': 32})\n\n"
->>>>>>> upstream/main
         'EOM\nprintf "%s" "$SCRIPT" > "backend_test.py"\n'
         'torchrun "backend_test.py"'
     )
@@ -402,10 +377,7 @@ def get_train_job(
     annotations: dict[str, str] | None = None,
     runtime_patches: list[models.TrainerV1alpha1RuntimePatch] | None = None,
     runtime_kind: types.RuntimeKind = types.RuntimeKind.TRAINING_RUNTIME,
-<<<<<<< HEAD
-=======
     active_deadline_seconds: int | None = None,
->>>>>>> upstream/main
 ) -> models.TrainerV1alpha1TrainJob:
     """
     Create a mock TrainJob object with optional trainer configurations.
@@ -425,10 +397,7 @@ def get_train_job(
             ),
             trainer=train_job_trainer,
             runtimePatches=runtime_patches,
-<<<<<<< HEAD
-=======
             activeDeadlineSeconds=active_deadline_seconds,
->>>>>>> upstream/main
         ),
     )
 
@@ -1525,8 +1494,6 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
             ),
         ),
         TestCase(
-<<<<<<< HEAD
-=======
             name="train with active deadline seconds",
             expected_status=SUCCESS,
             config={
@@ -1557,7 +1524,6 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
             ),
         ),
         TestCase(
->>>>>>> upstream/main
             name="train with metadata labels and runtime patches",
             expected_status=SUCCESS,
             config={
@@ -1622,7 +1588,7 @@ def test_train(kubernetes_backend, test_case):
         expected_output = test_case.expected_output
         expected_output.metadata.name = train_job_name
 
-        # Compare request payload with tolerance for empty podTemplateOverrides
+        # Compare the complete serialized request; do not hide obsolete API fields.
         call_args, call_kwargs = (
             kubernetes_backend.custom_api.create_namespaced_custom_object.call_args
         )
@@ -1633,15 +1599,6 @@ def test_train(kubernetes_backend, test_case):
 
         actual_body = copy.deepcopy(call_args[4])
         expected_body = expected_output.to_dict()
-
-        # If backend included an empty podTemplateOverrides list, drop it for comparison
-        if (
-            isinstance(actual_body, dict)
-            and "spec" in actual_body
-            and isinstance(actual_body["spec"], dict)
-            and actual_body["spec"].get("podTemplateOverrides") == []
-        ):
-            actual_body["spec"].pop("podTemplateOverrides", None)
 
         assert actual_body == expected_body
 

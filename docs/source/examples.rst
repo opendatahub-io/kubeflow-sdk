@@ -98,25 +98,6 @@ Spark Examples
    * - Task
      - Example
      - Description
-<<<<<<< HEAD
-     - Code
-   * - Basic Spark Client
-     - SparkClient API
-     - Basic ``SparkClient`` usage with a simple API
-     - `View Example <https://github.com/kubeflow/sdk/blob/main/examples/spark/spark_connect_simple.py>`_
-   * - Advanced Spark Configuration
-     - Driver / Executor Configuration
-     - Configure Spark jobs using Driver and Executor objects
-     - `View Example <https://github.com/kubeflow/sdk/blob/main/examples/spark/spark_advanced_options.py>`_
-   * - Connect to Existing Spark Cluster
-     - Existing Spark Connect Session
-     - Connect to an already running Spark Connect cluster
-     - `View Example <https://github.com/kubeflow/sdk/blob/main/examples/spark/connect_existing_session.py>`_
-   * - URL-based Connection
-     - Spark Connect URL
-     - Connect to Spark Connect using a connection URL
-     - `View Example <https://github.com/kubeflow/sdk/blob/main/examples/spark/test_connect_url.py>`_
-=======
      - Notebook
    * - Basic Spark Client
      - SparkClient API
@@ -150,4 +131,3 @@ Spark Examples
      - Error Diagnostics & Logs
      - Inspect failure statuses and driver pod logs for failed batch jobs
      - `Open Notebook <https://github.com/kubeflow/sdk/blob/main/examples/spark/batch_failed_job.ipynb>`_
->>>>>>> upstream/main

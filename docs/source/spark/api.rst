@@ -10,8 +10,6 @@ Spark Client
    :members:
    :undoc-members:
    :show-inheritance:
-<<<<<<< HEAD
-=======
 
 Types
 -----
@@ -28,4 +26,3 @@ Kubernetes Options
    :members:
    :undoc-members:
    :show-inheritance:
->>>>>>> upstream/main

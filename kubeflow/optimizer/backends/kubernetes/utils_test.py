@@ -15,11 +15,7 @@
 import pytest
 
 from kubeflow.optimizer.backends.kubernetes.utils import convert_value
-<<<<<<< HEAD
-from kubeflow.trainer.test.common import FAILED, SUCCESS, TestCase
-=======
 from kubeflow.test.common import FAILED, SUCCESS, TestCase
->>>>>>> upstream/main
 
 
 @pytest.mark.parametrize(
