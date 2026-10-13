@@ -104,7 +104,7 @@ class VLLMSpeculativeConfig:
 
         config = SpeculatorConfig(
             target_layer_ids=[0, 7, 14, 27],
-            vllm_speculator_config=VLLMSpeculativeConfig(
+            vllm_speculative_config=VLLMSpeculativeConfig(
                 enforce_eager=True,
                 max_model_len=2048,
                 parallel_drafting=False,
@@ -183,7 +183,7 @@ class SpeculatorConfig:
         target_layer_ids: Specific layer IDs for hidden state extraction. When ``None``,
             auto-selected from the verifier model architecture.
         from_pretrained: Path to a pretrained draft model to resume training from.
-        vllm_speculator_config: vLLM speculative-decoding overrides for the managed sidecar.
+        vllm_speculative_config: vLLM speculative-decoding overrides for the managed sidecar.
             This is separate from the speculator's training and data-generation settings.
     """
 
@@ -204,16 +204,16 @@ class SpeculatorConfig:
     datagen_concurrency: int = 4
     target_layer_ids: list[int] | None = None
     from_pretrained: str | None = None
-    vllm_speculator_config: VLLMSpeculativeConfig | None = None
+    vllm_speculative_config: VLLMSpeculativeConfig | None = None
 
     def __post_init__(self) -> None:
         """Validate the nested vLLM configuration."""
-        if self.vllm_speculator_config is not None and not isinstance(
-            self.vllm_speculator_config, VLLMSpeculativeConfig
+        if self.vllm_speculative_config is not None and not isinstance(
+            self.vllm_speculative_config, VLLMSpeculativeConfig
         ):
             raise ValueError(
-                "vllm_speculator_config must be a VLLMSpeculativeConfig object or None, "
-                f"but got {type(self.vllm_speculator_config).__name__}. Wrap the options, "
+                "vllm_speculative_config must be a VLLMSpeculativeConfig object or None, "
+                f"but got {type(self.vllm_speculative_config).__name__}. Wrap the options, "
                 "for example: VLLMSpeculativeConfig(max_model_len=2048)."
             )
 
@@ -253,7 +253,7 @@ class SpeculativeDecodingTrainer:
         vllm_gpu_memory_utilization: Fraction of GPU memory for vLLM (default: 0.9).
         config: A ``SpeculatorConfig`` containing advanced speculator training and
             data-generation settings. To configure the managed vLLM sidecar, set its
-            ``vllm_speculator_config`` field to a ``VLLMSpeculativeConfig`` instance;
+            ``vllm_speculative_config`` field to a ``VLLMSpeculativeConfig`` instance;
             this nested setting is separate from the training/data options.
         packages_to_install: Python packages to install before training.
         pip_index_urls: PyPI index URLs for package installation.
@@ -1921,7 +1921,7 @@ def apply_speculator_sidecar_overrides(
         {"name": "SPECULATOR_TARGET_LAYER_IDS", "value": layer_ids_str},
     ]
 
-    if cfg.vllm_speculator_config is not None:
+    if cfg.vllm_speculative_config is not None:
         speculative_config: dict[str, Any] = {
             "method": "extract_hidden_states",
             "num_speculative_tokens": 1,
@@ -1929,7 +1929,7 @@ def apply_speculator_sidecar_overrides(
                 "hf_config": {"eagle_aux_hidden_state_layer_ids": list(cfg.target_layer_ids or [])}
             },
         }
-        vllm_overrides = cfg.vllm_speculator_config.to_dict()
+        vllm_overrides = cfg.vllm_speculative_config.to_dict()
         vllm_overrides.pop("num_speculative_tokens", None)
         _merge_speculative_config(speculative_config, vllm_overrides)
         sidecar_env.append(

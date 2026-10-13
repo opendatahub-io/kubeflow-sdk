@@ -47,7 +47,7 @@ def test_vllm_config_defaults():
     assert vllm.max_model_len is None
     assert vllm.max_num_seqs is None
     assert vllm.to_dict() == {}
-    assert config.vllm_speculator_config is None
+    assert config.vllm_speculative_config is None
 
 
 @pytest.mark.parametrize(
@@ -59,12 +59,12 @@ def test_speculator_config_validates_nested_vllm_config_type(field_value):
     with pytest.raises(
         ValueError,
         match=(
-            r"vllm_speculator_config must be a VLLMSpeculativeConfig object or None, "
+            r"vllm_speculative_config must be a VLLMSpeculativeConfig object or None, "
             r"but got (dict|str)\. Wrap the options, for example: "
             r"VLLMSpeculativeConfig\(max_model_len=2048\)\."
         ),
     ):
-        SpeculatorConfig(vllm_speculator_config=field_value)
+        SpeculatorConfig(vllm_speculative_config=field_value)
 
 
 def test_vllm_config_accepts_kwargs_and_preserves_json_types():
@@ -112,7 +112,7 @@ def test_empty_vllm_config_sends_extraction_defaults():
         vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(
             target_layer_ids=[0, 7, 14, 27],
-            vllm_speculator_config=VLLMSpeculativeConfig(),
+            vllm_speculative_config=VLLMSpeculativeConfig(),
         ),
     )
 
@@ -139,7 +139,7 @@ def test_non_json_speculative_value_raises_native_serialization_error():
         vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(
             target_layer_ids=[2, 16, 29, 31],
-            vllm_speculator_config=VLLMSpeculativeConfig(custom_value=object()),
+            vllm_speculative_config=VLLMSpeculativeConfig(custom_value=object()),
         ),
     )
 
@@ -1759,7 +1759,7 @@ def test_speculative_config_merges_into_runtime_patch(mode: SpeculatorMode) -> N
         vllm_resources={"nvidia.com/gpu": 1},
         config=SpeculatorConfig(
             target_layer_ids=[2, 16, 29, 31],
-            vllm_speculator_config=VLLMSpeculativeConfig(
+            vllm_speculative_config=VLLMSpeculativeConfig(
                 enforce_eager=True,
                 max_model_len=2048,
                 max_num_seqs=3,
