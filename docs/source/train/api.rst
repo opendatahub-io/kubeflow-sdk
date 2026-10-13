@@ -69,3 +69,18 @@ Utilities
 ---------
 
 .. autofunction:: kubeflow.trainer.backends.kubernetes.utils.update_trainjob_status
+
+RHAI Speculator Training
+------------------------
+
+.. autoclass:: kubeflow.trainer.rhai.SpeculativeDecodingTrainer
+   :members:
+   :show-inheritance:
+
+.. autoclass:: kubeflow.trainer.rhai.SpeculatorConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: kubeflow.trainer.rhai.VLLMSpeculativeConfig
+   :members:
+   :show-inheritance:
