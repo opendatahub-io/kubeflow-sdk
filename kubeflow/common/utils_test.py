@@ -20,7 +20,7 @@ import pytest
 
 from kubeflow.common import constants, utils
 from kubeflow.common.utils import get_default_target_namespace, is_running_in_k8s
-from kubeflow.trainer.test.common import SUCCESS, TestCase
+from kubeflow.test.common import SUCCESS, TestCase
 
 # --------------------------
 # is_running_in_k8s tests
@@ -160,6 +160,34 @@ def test_get_default_target_namespace(test_case: TestCase):
 # --------------------------
 # validate_wait_for_job_status tests
 # --------------------------
+# Test Helpers
+# --------------------------
+
+
+def sample_function() -> None:
+    """Sample function for testing."""
+    print("Hello World")
+
+
+async def sample_async_function() -> None:
+    """Sample async function for testing."""
+    pass
+
+
+def sample_decorator(func):
+    """Pass-through decorator for testing."""
+    return func
+
+
+@sample_decorator
+def sample_decorated_function() -> None:
+    """Sample decorated function."""
+    pass
+
+
+# --------------------------
+# Tests
+# --------------------------
 
 
 @pytest.mark.parametrize(
@@ -212,3 +240,79 @@ def test_validate_wait_for_job_status(test_case):
             utils.validate_wait_for_job_status(polling_interval, timeout)
     else:
         utils.validate_wait_for_job_status(polling_interval, timeout)
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
+            name="valid function",
+            expected_status=SUCCESS,
+            config={"func": sample_function},
+        ),
+        TestCase(
+            name="not a function",
+            expected_status=SUCCESS,
+            config={"func": "not a function"},
+            expected_error=ValueError,
+            expected_output="Function must be a Python function.",
+        ),
+        TestCase(
+            name="lambda function",
+            expected_status=SUCCESS,
+            config={"func": lambda: None},
+            expected_error=ValueError,
+            expected_output="Lambda functions are not supported.",
+        ),
+        TestCase(
+            name="async function",
+            expected_status=SUCCESS,
+            config={"func": sample_async_function},
+            expected_error=ValueError,
+            expected_output="Async functions are not supported.",
+        ),
+        TestCase(
+            name="decorated function",
+            expected_status=SUCCESS,
+            config={"func": sample_decorated_function},
+            expected_error=ValueError,
+            expected_output="Decorated functions are not supported.",
+        ),
+    ],
+)
+def test_validate_python_function(test_case):
+    """Test validate_python_function with valid and invalid functions."""
+    print("Executing test:", test_case.name)
+
+    func = test_case.config["func"]
+
+    if test_case.expected_error:
+        with pytest.raises(test_case.expected_error, match=test_case.expected_output):
+            utils.validate_python_function(func)
+    else:
+        utils.validate_python_function(func)
+
+
+@pytest.mark.parametrize(
+    "source_error,message",
+    [
+        (OSError("source unavailable"), "Function source could not be read"),
+        (TypeError("not pure Python"), "Function must be a pure-Python function"),
+    ],
+)
+def test_validate_python_function_uninspectable_source(source_error, message) -> None:
+    """Source-inspection failures are explicit validation errors, not silent acceptance."""
+    with (
+        patch("kubeflow.common.utils.inspect.getsource", side_effect=source_error),
+        pytest.raises(ValueError, match=message),
+    ):
+        utils.validate_python_function(sample_function)
+
+
+def test_validate_python_function_unparseable_source() -> None:
+    """Malformed inspected source cannot be serialized into a training job."""
+    with (
+        patch("kubeflow.common.utils.inspect.getsource", return_value="def invalid("),
+        pytest.raises(ValueError, match="Function source could not be parsed"),
+    ):
+        utils.validate_python_function(sample_function)

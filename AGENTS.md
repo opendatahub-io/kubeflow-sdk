@@ -50,8 +50,7 @@ kubeflow/                        # Main Python package
 │   │   └── localprocess/              # Subprocess backend for quick prototyping
 │   ├── constants/                   # Common trainer constants and defaults
 │   ├── options/                     # Backend configuration options (KubernetesOptions, etc.)
-│   ├── types/                       # Common trainer types (e.g. TrainJob, CustomTrainer, BuiltinTrainer)
-│   └── test/                        # Shared test fixtures (common.py)
+│   └── types/                       # Common trainer types (e.g. TrainJob, CustomTrainer, BuiltinTrainer)
 │
 ├── optimizer/                     # Kubeflow Optimizer
 │   ├── api/                         # OptimizerClient - main user interface
@@ -66,9 +65,11 @@ kubeflow/                        # Main Python package
 │   │   └── kubernetes/                # Kubernetes backend
 │   └── types/                       # Spark types and options
 │
-└── hub/                           # Kubeflow Hub
-    ├── api/                         # ModelRegistryClient - main user interface
-    └── types/                       # Hub types
+├── hub/                           # Kubeflow Hub
+│   ├── api/                         # ModelRegistryClient - main user interface
+│   └── types/                       # Hub types
+│
+└── test/                          # Shared test helpers (common.py)
 ```
 
 ## Environment & Tooling
@@ -165,32 +166,7 @@ uv run pre-commit run --all-files           # Run all hooks
 
 ### 2. Code Quality Standards
 
-**All Python code MUST include type hints and return types.**
-
-❌ **Bad:**
-
-```python
-def p(u, d):
-    return [x for x in u if x not in d]
-```
-
-✅ **Good:**
-
-```python
-def filter_completed_jobs(jobs: list[str], completed: set[str]) -> list[str]:
-    """Filter out jobs that are already completed.
-
-    Args:
-        jobs: List of job identifiers to filter.
-        completed: Set of completed job identifiers.
-
-    Returns:
-        List of jobs that are not yet completed.
-    """
-    return [job for job in jobs if job not in completed]
-```
-
-**Style Requirements:**
+- All Python code MUST include type hints and return types
 - Line length 100, Python 3.10 target, double quotes, spaces indent
 - Imports: isort via ruff; first-party is `kubeflow`; prefer absolute imports
 - Naming: pep8-naming; functions/vars `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE_CASE`; prefix private with `_`
@@ -203,7 +179,7 @@ def filter_completed_jobs(jobs: list[str], completed: set[str]) -> list[str]:
 - Every new feature or bugfix MUST be covered by unit tests
 - Unit tests: `kubeflow/trainer/**/*_test.py` (no network calls allowed)
 - Use `pytest` with `TestCase` dataclass for parametrized tests (see `kubeflow/trainer/backends/kubernetes/backend_test.py` for the reference pattern)
-- See `kubeflow/trainer/test/common.py` for fixtures and patterns
+- See `kubeflow/test/common.py` for shared fixtures and patterns
 
 ### 4. Security
 
