@@ -1,0 +1,642 @@
+openapi: 3.0.3
+info:
+  title: Red Hat Training-as-a-Service (TaaS) API
+  description: >
+    Unified, backend-agnostic Training API for model fine-tuning and distributed training in Red Hat OpenShift AI.
+    Scoped by OpenShift Project (`/projects/{project}/...`), supporting Kubeflow Trainer v2, KubeRay,
+    optional multi-tenant Kueue scheduling, and global pre-flight resource estimation.
+  version: 1.2.0
+servers:
+  - url: https://taas.openshift.example.com/api/v1
+    description: Production TaaS Control Plane
+
+paths:
+  /training-jobs/estimate:
+    post:
+      summary: Estimate resources, duration, and VRAM requirements (Global/Pure algorithmic estimation)
+      description: >
+        Calculates theoretical compute, VRAM per GPU, FLOPs, and runtime estimates for a training setup.
+        Operates globally without OpenShift Project or Kueue queue context.
+      operationId: estimateTrainingJob
+      tags:
+        - Estimations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobEstimationRequest'
+      responses:
+        '200':
+          description: Resource and duration estimation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobEstimationResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+
+  /algorithms:
+    get:
+      summary: List cluster-wide built-in algorithms (LoRA, QLoRA, DPO, etc.)
+      operationId: listAlgorithms
+      tags:
+        - Infrastructure & Discovery
+      responses:
+        '200':
+          description: Catalog of available training algorithms and hyperparameter schemas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  algorithms:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AlgorithmDescriptor'
+
+  /projects/{project}/training-jobs:
+    post:
+      summary: Submit a new training or fine-tuning job in an OpenShift Project
+      operationId: createTrainingJob
+      tags:
+        - Training Jobs
+      parameters:
+        - $ref: '#/components/parameters/Project'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '201':
+          description: Job created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingJob'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '409':
+          description: Job with the same name already exists in this project
+
+    get:
+      summary: List training jobs in an OpenShift Project
+      operationId: listTrainingJobs
+      tags:
+        - Training Jobs
+      parameters:
+        - $ref: '#/components/parameters/Project'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/JobStatus'
+        - name: queue_name
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: page_token
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of training jobs in the specified OpenShift Project
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TrainingJob'
+                  next_page_token:
+                    type: string
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+
+  /projects/{project}/training-jobs/{job_id}:
+    parameters:
+      - $ref: '#/components/parameters/Project'
+      - $ref: '#/components/parameters/JobId'
+
+    get:
+      summary: Get job status, metrics, and progress
+      operationId: getTrainingJob
+      tags:
+        - Training Jobs
+      responses:
+        '200':
+          description: Detailed job metrics and execution status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingJob'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+    delete:
+      summary: Delete job and associated Kubernetes resources
+      operationId: deleteTrainingJob
+      tags:
+        - Training Jobs
+      parameters:
+        - name: purge_checkpoints
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '204':
+          description: Job successfully deleted
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /projects/{project}/training-jobs/{job_id}/cancel:
+    post:
+      summary: Cancel a running or queued job
+      operationId: cancelTrainingJob
+      tags:
+        - Job Lifecycle
+      parameters:
+        - $ref: '#/components/parameters/Project'
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job cancellation initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingJob'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /projects/{project}/training-jobs/{job_id}/pause:
+    post:
+      summary: Pause job execution
+      description: Un-schedules workload via Kueue (if configured) or suspends underlying custom resources.
+      operationId: pauseTrainingJob
+      tags:
+        - Job Lifecycle
+      parameters:
+        - $ref: '#/components/parameters/Project'
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job paused successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingJob'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /projects/{project}/training-jobs/{job_id}/resume:
+    post:
+      summary: Resume a paused job
+      operationId: resumeTrainingJob
+      tags:
+        - Job Lifecycle
+      parameters:
+        - $ref: '#/components/parameters/Project'
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingJob'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /projects/{project}/training-jobs/{job_id}/logs:
+    get:
+      summary: Stream logs for a specific training job
+      operationId: streamJobLogs
+      tags:
+        - Observability
+      parameters:
+        - $ref: '#/components/parameters/Project'
+        - $ref: '#/components/parameters/JobId'
+        - name: follow
+          in: query
+          description: Keep connection open to stream real-time logs via SSE
+          schema:
+            type: boolean
+            default: false
+        - name: tail_lines
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: node_rank
+          in: query
+          description: Node rank index (e.g. 0 for primary node logs)
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Log stream (Server-Sent Events or Plain Text)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: "event: log\ndata: {\"timestamp\":\"2026-09-06T10:00:00Z\",\"message\":\"Epoch 1/5 - loss: 0.241\"}\n\n"
+            text/plain:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /projects/{project}/queues:
+    get:
+      summary: List available Kueue LocalQueues in the OpenShift Project (if Kueue is enabled)
+      operationId: listQueues
+      tags:
+        - Infrastructure & Discovery
+      parameters:
+        - $ref: '#/components/parameters/Project'
+      responses:
+        '200':
+          description: List of LocalQueues accessible in the specified OpenShift Project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueInfoResponse'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+
+components:
+  parameters:
+    Project:
+      name: project
+      in: path
+      required: true
+      description: Target OpenShift Project name
+      schema:
+        type: string
+      example: team-alpha-ml
+
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      description: Unique identifier or name of the training job
+      schema:
+        type: string
+      example: job-9a8f2b1c
+
+  responses:
+    '400BadRequest':
+      description: Invalid payload or parameter specification
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    '403Forbidden':
+      description: User lacks OpenShift RBAC permissions for the requested resource or project
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    '404NotFound':
+      description: Requested resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    JobBackend:
+      type: string
+      enum: [auto, kubeflow, ray]
+      default: auto
+      description: Engine backend. If 'auto', TaaS evaluates algorithm and dataset characteristics.
+
+    JobStatus:
+      type: string
+      enum: [QUEUED, PROVISIONING, RUNNING, PAUSED, SUCCEEDED, FAILED, CANCELLED]
+
+    CreateJobRequest:
+      type: object
+      required:
+        - name
+        - model
+        - dataset
+        - algorithm
+      properties:
+        name:
+          type: string
+          example: llama3-8b-alpaca-lora
+        description:
+          type: string
+        queue_name:
+          type: string
+          nullable: true
+          description: >
+            Optional Kueue LocalQueue name. If omitted, uses project default queue if present,
+            or schedules directly via Kubernetes/OpenShift scheduler.
+          example: team-alpha-local-queue
+        backend:
+          $ref: '#/components/schemas/JobBackend'
+        model:
+          $ref: '#/components/schemas/ModelSpec'
+        dataset:
+          $ref: '#/components/schemas/DatasetSpec'
+        algorithm:
+          $ref: '#/components/schemas/AlgorithmSpec'
+        resources:
+          $ref: '#/components/schemas/ResourceSpec'
+        output:
+          $ref: '#/components/schemas/OutputSpec'
+
+    JobEstimationRequest:
+      type: object
+      required:
+        - model
+        - dataset
+        - algorithm
+      properties:
+        model:
+          $ref: '#/components/schemas/ModelSpec'
+        dataset:
+          $ref: '#/components/schemas/DatasetSpec'
+        algorithm:
+          $ref: '#/components/schemas/AlgorithmSpec'
+        resources:
+          $ref: '#/components/schemas/ResourceSpec'
+
+    ModelSpec:
+      type: object
+      required:
+        - source
+        - uri
+      properties:
+        source:
+          type: string
+          enum: [huggingface, s3, pvc, oci]
+          example: huggingface
+        uri:
+          type: string
+          example: meta-llama/Llama-3.2-3B
+        secret_ref:
+          type: string
+          description: OpenShift Secret reference in the target project containing access tokens
+          example: hf-secret-token
+
+    DatasetSpec:
+      type: object
+      required:
+        - source
+        - uri
+      properties:
+        source:
+          type: string
+          enum: [huggingface, s3, pvc, http]
+          example: huggingface
+        uri:
+          type: string
+          example: tatsu-lab/alpaca
+        split:
+          type: string
+          default: train
+        secret_ref:
+          type: string
+
+    AlgorithmSpec:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: >
+            Builtin algorithm identifier from the Training Hub set shipped in the target release
+            (for example lora_sft, qlora_sft, sft, dpo). Use GET /algorithms for the catalog and
+            parameter schemas.
+          example: lora_sft
+        parameters:
+          type: object
+          additionalProperties: true
+          description: >
+            Optional hyperparameter overrides. Opaque values validated against the selected
+            algorithm's Training Hub parameter schema.
+          example:
+            learning_rate: 0.0002
+            num_train_epochs: 3
+            per_device_train_batch_size: 4
+            lora_r: 16
+            lora_alpha: 32
+
+    ResourceSpec:
+      type: object
+      description: Requested compute resources per job. If omitted, sensible defaults are applied.
+      properties:
+        num_nodes:
+          type: integer
+          default: 1
+          example: 2
+        gpus_per_node:
+          type: integer
+          default: 1
+          example: 4
+        gpu_type:
+          type: string
+          example: nvidia.com/gpu
+        cpus_per_node:
+          type: string
+          default: "8"
+          example: "16"
+        memory_per_node:
+          type: string
+          default: "32Gi"
+          example: "64Gi"
+
+    OutputSpec:
+      type: object
+      properties:
+        destination_uri:
+          type: string
+          example: s3://my-ml-bucket/checkpoints/llama3-lora/
+        secret_ref:
+          type: string
+
+    TrainingJob:
+      type: object
+      properties:
+        id:
+          type: string
+          example: job-9a8f2b1c
+        name:
+          type: string
+          example: llama3-8b-alpaca-lora
+        project:
+          type: string
+          example: team-alpha-ml
+        queue_name:
+          type: string
+          nullable: true
+          example: team-alpha-local-queue
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        selected_backend:
+          type: string
+          enum: [kubeflow, ray]
+          example: ray
+        backend_resource_ref:
+          type: object
+          properties:
+            kind:
+              type: string
+              example: RayJob
+            name:
+              type: string
+              example: job-9a8f2b1c-rayjob
+        progress:
+          type: object
+          properties:
+            percentage:
+              type: number
+              format: float
+              example: 45.5
+            current_epoch:
+              type: integer
+              example: 2
+            total_epochs:
+              type: integer
+              example: 5
+            current_step:
+              type: integer
+              example: 910
+            total_steps:
+              type: integer
+              example: 2000
+            eta_seconds:
+              type: integer
+              example: 1240
+        metrics:
+          type: object
+          additionalProperties:
+            type: number
+          example:
+            loss: 0.184
+            eval_loss: 0.212
+            learning_rate: 0.00015
+            throughput_tokens_per_sec: 1420.5
+        resources:
+          $ref: '#/components/schemas/ResourceSpec'
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        failure_reason:
+          type: string
+
+    JobEstimationResponse:
+      type: object
+      properties:
+        recommended_resources:
+          $ref: '#/components/schemas/ResourceSpec'
+        estimated_duration_seconds:
+          type: integer
+          example: 3600
+        estimated_cost_usd:
+          type: number
+          format: float
+          example: 12.50
+        gpu_memory_required_gb_per_device:
+          type: number
+          example: 22.4
+        warnings:
+          type: array
+          items:
+            type: string
+          example:
+            - "Full fine-tuning on 1 GPU will cause OOM. Recommended LoRA or minimum 4x GPUs."
+
+    QueueInfoResponse:
+      type: object
+      properties:
+        kueue_enabled:
+          type: boolean
+          example: true
+        queues:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueInfo'
+
+    QueueInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: team-alpha-local-queue
+        cluster_queue:
+          type: string
+          example: gpu-cluster-queue
+        pending_jobs:
+          type: integer
+          example: 1
+        quota_status:
+          type: object
+          example:
+            nvidia.com/gpu:
+              used: 8
+              max: 16
+
+    AlgorithmDescriptor:
+      type: object
+      properties:
+        name:
+          type: string
+          example: lora_sft
+        description:
+          type: string
+          example: Low-Rank Adaptation Supervised Fine-Tuning
+        supported_backends:
+          type: array
+          items:
+            type: string
+          example: ["kubeflow", "ray"]
+        parameter_schema:
+          type: object
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 403
+        message:
+          type: string
+          example: "User lacks permission to create trainjobs in OpenShift Project 'team-alpha-ml'."
