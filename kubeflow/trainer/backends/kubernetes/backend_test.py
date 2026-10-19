@@ -58,11 +58,14 @@ from kubeflow.trainer.options import (
     RuntimePatch,
     TrainingRuntimeSpecPatch,
 )
+<<<<<<< HEAD
 from kubeflow.trainer.rhai import (
     TrainingHubAlgorithms,
     TrainingHubTrainer,
     traininghub as rhai_traininghub,
 )
+=======
+>>>>>>> upstream/main
 from kubeflow.trainer.types import types
 
 NOT_FOUND = "not_found"
@@ -1187,11 +1190,14 @@ def test_get_runtime_packages(kubernetes_backend, test_case):
         kubernetes_backend.custom_api.delete_namespaced_custom_object.assert_called_once()
     else:
         kubernetes_backend.custom_api.delete_namespaced_custom_object.assert_not_called()
+<<<<<<< HEAD
 
     if test_case.expected_status == SUCCESS:
         kubernetes_backend.custom_api.delete_namespaced_custom_object.assert_called_once()
     else:
         kubernetes_backend.custom_api.delete_namespaced_custom_object.assert_not_called()
+=======
+>>>>>>> upstream/main
 
     print("test execution complete")
 

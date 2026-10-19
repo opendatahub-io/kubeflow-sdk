@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+<<<<<<< HEAD
 
 """Unit tests for kubeflow.common.utils module."""
 
@@ -160,6 +161,14 @@ def test_get_default_target_namespace(test_case: TestCase):
 # --------------------------
 # validate_wait_for_job_status tests
 # --------------------------
+=======
+import pytest
+
+from kubeflow.common import utils
+from kubeflow.test.common import SUCCESS, TestCase
+
+# --------------------------
+>>>>>>> upstream/main
 # Test Helpers
 # --------------------------
 
@@ -291,6 +300,7 @@ def test_validate_python_function(test_case):
             utils.validate_python_function(func)
     else:
         utils.validate_python_function(func)
+<<<<<<< HEAD
 
 
 @pytest.mark.parametrize(
@@ -316,3 +326,5 @@ def test_validate_python_function_unparseable_source() -> None:
         pytest.raises(ValueError, match="Function source could not be parsed"),
     ):
         utils.validate_python_function(sample_function)
+=======
+>>>>>>> upstream/main

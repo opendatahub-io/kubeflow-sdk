@@ -140,11 +140,15 @@ class TrainerClient:
         trainer: types.CustomTrainer
         | types.CustomTrainerContainer
         | types.BuiltinTrainer
+<<<<<<< HEAD
         | RHAITrainer
+=======
+>>>>>>> upstream/main
         | None = None,
         options: list | None = None,
     ) -> str:
         """Create and submit a TrainJob.
+<<<<<<< HEAD
 
         You can configure the TrainJob using one of these trainers:
 
@@ -156,14 +160,31 @@ class TrainerClient:
           logic, configured by parameters only.
         - RHAITrainer: Use an RHAI-compatible trainer (TrainingHubTrainer or
           TransformersTrainer).
+=======
+
+        You can configure the TrainJob using one of these trainers:
+
+        - CustomTrainer: Runs training with a user-defined function that fully encapsulates the
+          training process.
+        - CustomTrainerContainer: Runs training with a user-defined image that fully encapsulates
+          the training process.
+        - BuiltinTrainer: Uses a predefined trainer with built-in post-training logic, requiring
+          only parameter configuration.
+>>>>>>> upstream/main
 
         Args:
             runtime: Optional reference to one of the existing runtimes. It can accept the runtime
                 name or Runtime object. Defaults to the torch-distributed runtime if not provided.
             initializer: Optional configuration for the dataset and model initializers.
+<<<<<<< HEAD
             trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer,
                 BuiltinTrainer, or RHAITrainer. If not specified, the TrainJob
                 uses the runtime's default values.
+=======
+            trainer: Optional configuration for a CustomTrainer, CustomTrainerContainer, or
+                BuiltinTrainer. If not specified, the TrainJob will use the runtime's
+                default values.
+>>>>>>> upstream/main
             options: Optional list of configuration options to apply to the TrainJob.
                 Options can be imported from kubeflow.trainer.options.
 
