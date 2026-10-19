@@ -934,6 +934,7 @@ def test_create_and_connect(kubernetes_backend, test_case):
     "test_case",
     [
         TestCase(
+<<<<<<< HEAD
             name="valid flow with name option provided",
             expected_status=SUCCESS,
             config={"options": [Name("test-name"), Labels({"app": "spark"})]},
@@ -999,6 +1000,8 @@ def test_create_session_name_options(kubernetes_backend, test_case):
     "test_case",
     [
         TestCase(
+=======
+>>>>>>> upstream/main
             name="valid remote file job",
             expected_status=SUCCESS,
             config={

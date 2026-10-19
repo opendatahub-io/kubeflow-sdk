@@ -21,7 +21,11 @@ import random
 import re
 import string
 import time
+<<<<<<< HEAD
 from typing import Any, get_args
+=======
+from typing import Any
+>>>>>>> upstream/main
 import uuid
 
 from kubeflow_trainer_api import models
@@ -857,6 +861,7 @@ class KubernetesBackend(RuntimeBackend):
             if "args" in trainer_overrides:
                 trainer_cr.args = trainer_overrides["args"]
 
+<<<<<<< HEAD
         # Setup RHAI trainer storage: parse output_dir for volume mounts (PVC/S3)
         # and inject cloud storage credentials from data connection secret
         if is_rhai_trainer:
@@ -864,6 +869,8 @@ class KubernetesBackend(RuntimeBackend):
                 trainer, trainer_cr, runtime_patches, self.core_api, self.namespace
             )
 
+=======
+>>>>>>> upstream/main
         # Convert runtime patches dicts to native model objects.
         runtime_patch_models = None
         if runtime_patches:

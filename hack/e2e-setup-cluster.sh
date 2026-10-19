@@ -294,6 +294,7 @@ subjects:
   - kind: ServiceAccount
     name: default
     namespace: $NAMESPACE
+<<<<<<< HEAD
 ---
 # E2E in-cluster runner: default SA can create/get SparkConnect so Job pods use in-cluster URL (no port-forward).
 apiVersion: rbac.authorization.k8s.io/v1
@@ -322,6 +323,8 @@ subjects:
   - kind: ServiceAccount
     name: default
     namespace: $NAMESPACE
+=======
+>>>>>>> upstream/main
 EOF
     phase_end "ensure_sparkconnect_rbac"
 }
@@ -342,6 +345,7 @@ apply_sparkconnect_crd() {
     phase_end "apply_sparkconnect_crd"
 }
 
+<<<<<<< HEAD
 apply_crd_only() {
     phase_start "apply_crd_only"
     kubectl config use-context "kind-${CLUSTER_NAME}" 2>/dev/null || true
@@ -361,12 +365,15 @@ apply_crd_only() {
     phase_end "apply_crd_only"
 }
 
+=======
+>>>>>>> upstream/main
 print_status() {
     echo ""
     log_info "=== Cluster Status ==="
     echo "Cluster: $CLUSTER_NAME"
     echo "Kubernetes version: $K8S_VERSION"
     echo "Test namespace: $NAMESPACE"
+<<<<<<< HEAD
     if [[ "${E2E_CRD_ONLY:-0}" == "1" ]]; then
         echo "Mode: CRD-only (no Spark Operator controller)"
         echo "CRDs:"
@@ -378,17 +385,29 @@ print_status() {
         echo "Spark Operator Deployment:"
         kubectl get deployment -n spark-operator 2>/dev/null || true
     fi
+=======
+    echo "Spark Operator version: $SPARK_OPERATOR_VERSION"
+    echo "Image tag: $SPARK_OPERATOR_IMAGE_TAG"
+    echo ""
+    echo "Spark Operator Deployment:"
+    kubectl get deployment -n spark-operator 2>/dev/null || true
+>>>>>>> upstream/main
     echo ""
     echo "Test Namespace Pods:"
     kubectl get pods -n "$NAMESPACE" 2>/dev/null || echo "No pods yet"
     echo ""
     log_info "=== Usage ==="
+<<<<<<< HEAD
     if [[ "${E2E_CRD_ONLY:-0}" == "1" ]]; then
         echo "Smoke test: uv run pytest test/e2e/spark/test_spark_examples.py -v -k smoke"
     else
         echo "To run E2E tests:"
         echo "  python -m pytest test/e2e/spark/test_spark_examples.py -v"
     fi
+=======
+    echo "To run E2E notebook tests:"
+    echo "  make test-e2e-notebook"
+>>>>>>> upstream/main
     echo ""
     echo "To delete cluster:"
     echo "  make test-e2e-setup-cluster K8S_VERSION=$K8S_VERSION --delete"
@@ -406,6 +425,7 @@ main() {
     check_prerequisites
     create_cluster
     setup_test_namespace
+<<<<<<< HEAD
     if [[ "${E2E_CRD_ONLY:-0}" == "1" ]]; then
         apply_crd_only
     else
@@ -419,6 +439,17 @@ main() {
         fi
         install_spark_operator
     fi
+=======
+    ensure_sparkconnect_rbac
+    apply_sparkconnect_crd
+    if [[ "$SPARK_OPERATOR_IMAGE_TAG" == "local" ]]; then
+        phase_start "kind_load_local_image"
+        log_info "Loading locally built controller image into Kind..."
+        "$KIND_BIN" load docker-image "ghcr.io/kubeflow/spark-operator/controller:local" --name "$CLUSTER_NAME"
+        phase_end "kind_load_local_image"
+    fi
+    install_spark_operator
+>>>>>>> upstream/main
     print_status
     local total_elapsed
     total_elapsed=$(($(date +%s) - main_start))
