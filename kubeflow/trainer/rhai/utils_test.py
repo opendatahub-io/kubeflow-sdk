@@ -24,10 +24,14 @@ import pytest
 from kubeflow.trainer.rhai.constants import (
     CHECKPOINT_MOUNT_PATH,
     CHECKPOINT_VOLUME_NAME,
+    SHUTDOWN_GRACE_BUFFER_SECONDS,
+    TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV,
 )
+from kubeflow.trainer.rhai.transformers import TransformersTrainer
 from kubeflow.trainer.rhai.utils import (
     RUNTIME_PATCH_MANAGER,
     apply_output_dir_uri_to_pod_overrides,
+    apply_shutdown_timeout_overrides,
     get_cloud_storage_credential_env_vars,
     inject_cloud_storage_credentials,
     is_primary_pod,
@@ -804,6 +808,157 @@ def test_speculator_pvc_and_direct_path_no_conflict():
         "volume_name": all_volumes[0] if all_volumes else None,
     }
     assert actual == expected
+
+    print("test execution complete")
+
+
+def _get_node_pod_spec(patch_dict):
+    """Navigate a RuntimePatch dict and return the raw pod spec for the 'node' replicatedJob."""
+    replicated_jobs = patch_dict["trainingRuntimeSpec"]["template"]["spec"]["replicatedJobs"]
+    node_rj = next(rj for rj in replicated_jobs if rj["name"] == "node")
+    return node_rj["template"]["spec"]["template"]["spec"]
+
+
+def _make_trainer_with_timeout(seconds):
+    """Create a mock trainer with only the shutdown_timeout_seconds attribute set."""
+    trainer = MagicMock(spec=["shutdown_timeout_seconds"])
+    trainer.shutdown_timeout_seconds = seconds
+    return trainer
+
+
+def test_apply_shutdown_timeout_overrides_sets_env_and_grace_period():
+    """Test that shutdown_timeout_seconds sets the env var and pod grace period."""
+    print("Executing test: apply_shutdown_timeout_overrides_sets_env_and_grace_period")
+
+    trainer = _make_trainer_with_timeout(600)
+    trainer_cr = models.TrainerV1alpha1Trainer()
+
+    result_cr, patches = apply_shutdown_timeout_overrides(trainer, trainer_cr, None)
+
+    assert len(patches) == 1
+    _assert_valid_runtime_patch(patches[0])
+    pod_spec = _get_node_pod_spec(patches[0])
+    assert pod_spec["terminationGracePeriodSeconds"] == 600 + SHUTDOWN_GRACE_BUFFER_SECONDS
+
+    env = {e.name: e.value for e in result_cr.env}
+    assert env[TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV] == "600"
+
+    print("test execution complete")
+
+
+def test_apply_shutdown_timeout_overrides_user_env_var_wins():
+    """Test that a user-provided TORCH_ELASTIC_SHUTDOWN_TIMEOUT env var is not overridden."""
+    print("Executing test: apply_shutdown_timeout_overrides_user_env_var_wins")
+
+    trainer = _make_trainer_with_timeout(600)
+    trainer_cr = models.TrainerV1alpha1Trainer(
+        env=[models.IoK8sApiCoreV1EnvVar(name=TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV, value="120")]
+    )
+
+    result_cr, patches = apply_shutdown_timeout_overrides(trainer, trainer_cr, None)
+
+    # The env var list is unchanged (user value kept, nothing appended).
+    assert len(result_cr.env) == 1
+    assert result_cr.env[0].value == "120"
+
+    # The grace period follows the user's effective timeout, not the default.
+    pod_spec = _get_node_pod_spec(patches[0])
+    assert pod_spec["terminationGracePeriodSeconds"] == 120 + SHUTDOWN_GRACE_BUFFER_SECONDS
+
+    print("test execution complete")
+
+
+def test_apply_shutdown_timeout_overrides_user_grace_period_wins():
+    """Test that an existing terminationGracePeriodSeconds in the patch is not overwritten."""
+    print("Executing test: apply_shutdown_timeout_overrides_user_grace_period_wins")
+
+    trainer = _make_trainer_with_timeout(600)
+    trainer_cr = models.TrainerV1alpha1Trainer()
+
+    existing_patch = {
+        "manager": RUNTIME_PATCH_MANAGER,
+        "trainingRuntimeSpec": {
+            "template": {
+                "spec": {
+                    "replicatedJobs": [
+                        {
+                            "name": "node",
+                            "template": {
+                                "spec": {
+                                    "template": {"spec": {"terminationGracePeriodSeconds": 9999}}
+                                }
+                            },
+                        }
+                    ]
+                }
+            }
+        },
+    }
+
+    result_cr, patches = apply_shutdown_timeout_overrides(trainer, trainer_cr, [existing_patch])
+
+    assert len(patches) == 1
+    pod_spec = _get_node_pod_spec(patches[0])
+    assert pod_spec["terminationGracePeriodSeconds"] == 9999
+
+    # The env var is still applied.
+    env = {e.name: e.value for e in result_cr.env}
+    assert env[TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV] == "600"
+
+    print("test execution complete")
+
+
+def test_apply_shutdown_timeout_overrides_noop_without_attribute():
+    """Test that trainers without shutdown_timeout_seconds are left unchanged."""
+    print("Executing test: apply_shutdown_timeout_overrides_noop_without_attribute")
+
+    trainer = MagicMock(spec=[])
+    trainer_cr = models.TrainerV1alpha1Trainer()
+
+    result_cr, patches = apply_shutdown_timeout_overrides(trainer, trainer_cr, None)
+
+    assert patches == []
+    assert result_cr.env is None
+
+    print("test execution complete")
+
+
+def test_setup_rhai_trainer_storage_applies_shutdown_timeout():
+    """Test that setup_rhai_trainer_storage applies shutdown overrides for TransformersTrainer."""
+    print("Executing test: setup_rhai_trainer_storage_applies_shutdown_timeout")
+
+    mock_core_api = MagicMock()
+
+    def train_step():
+        print("training")
+
+    trainer = TransformersTrainer(
+        func=train_step,
+        output_dir="pvc://my-pvc/checkpoints",
+    )
+
+    trainer_cr = models.TrainerV1alpha1Trainer()
+
+    resolved_dir, result_cr, patches = setup_rhai_trainer_storage(
+        trainer, trainer_cr, None, mock_core_api, "default"
+    )
+
+    # Storage overrides are applied.
+    assert resolved_dir == f"{CHECKPOINT_MOUNT_PATH}/checkpoints"
+    assert len(patches) == 1
+
+    # The same SDK patch carries both the checkpoint volume and the grace period.
+    rp = _assert_valid_runtime_patch(patches[0])
+    rj = rp.training_runtime_spec.template.spec.replicated_jobs[0]
+    pod_spec = rj.template.spec.template.spec
+    assert pod_spec.termination_grace_period_seconds == (
+        trainer.shutdown_timeout_seconds + SHUTDOWN_GRACE_BUFFER_SECONDS
+    )
+    assert len(pod_spec.volumes) == 1
+
+    # The env var is injected with the default timeout.
+    env = {e.name: e.value for e in result_cr.env}
+    assert env[TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV] == str(trainer.shutdown_timeout_seconds)
 
     print("test execution complete")
 

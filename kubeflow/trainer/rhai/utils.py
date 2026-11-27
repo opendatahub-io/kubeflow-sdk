@@ -19,6 +19,8 @@ from kubeflow.trainer.rhai.constants import (
     CHECKPOINT_VOLUME_NAME,
     PVC_URI_SCHEME,
     S3_URI_SCHEME,
+    SHUTDOWN_GRACE_BUFFER_SECONDS,
+    TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV,
 )
 from kubeflow.trainer.types import types
 
@@ -371,6 +373,83 @@ def apply_output_dir_uri_to_pod_overrides(
     return resolved_output_dir, runtime_patches
 
 
+def apply_shutdown_timeout_overrides(
+    trainer: RHAITrainer,
+    trainer_cr: "models.TrainerV1alpha1Trainer",
+    runtime_patches: list | None,
+) -> tuple["models.TrainerV1alpha1Trainer", list]:
+    """Configure the torchrun shutdown timeout and pod termination grace period.
+
+    Torch Elastic waits a fixed 30 seconds between sending SIGTERM and SIGKILL to
+    workers, and Kubernetes pods default to a 30 second termination grace period.
+    Both clocks must be raised together for just-in-time checkpointing on
+    preemption to complete for large models (RHOAIENG-44392).
+
+    This sets the TORCH_ELASTIC_SHUTDOWN_TIMEOUT env var on the trainer container
+    and the terminationGracePeriodSeconds pod spec field (torchrun timeout plus a
+    buffer for the agent's own shutdown) via the SDK runtime patch. Values already
+    provided by the user always win.
+
+    Args:
+        trainer: RHAI trainer instance. Only trainers that define the
+                 shutdown_timeout_seconds attribute are affected.
+        trainer_cr: Trainer custom resource to inject the env var into.
+        runtime_patches: Existing runtime patches list.
+
+    Returns:
+        Tuple of (updated_trainer_cr, updated_runtime_patches).
+    """
+    shutdown_timeout = getattr(trainer, "shutdown_timeout_seconds", None)
+    if not isinstance(shutdown_timeout, int) or isinstance(shutdown_timeout, bool):
+        return trainer_cr, runtime_patches if runtime_patches is not None else []
+
+    if runtime_patches is None:
+        runtime_patches = []
+
+    # Find an existing RuntimePatch owned by the SDK, or create a new one.
+    sdk_patch = None
+    for patch in runtime_patches:
+        if patch.get("manager") == RUNTIME_PATCH_MANAGER:
+            sdk_patch = patch
+            break
+
+    if sdk_patch is None:
+        sdk_patch = {"manager": RUNTIME_PATCH_MANAGER}
+        runtime_patches.append(sdk_patch)
+
+    # Respect a user-provided TORCH_ELASTIC_SHUTDOWN_TIMEOUT env var.
+    torch_timeout = shutdown_timeout
+    env_vars = list(trainer_cr.env) if trainer_cr.env else []
+    for env_var in env_vars:
+        if env_var.name == TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV:
+            try:
+                torch_timeout = int(env_var.value)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Ignoring non-numeric %s=%r; using shutdown_timeout_seconds=%s",
+                    TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV,
+                    env_var.value,
+                    shutdown_timeout,
+                )
+            break
+    else:
+        env_vars.append(
+            models.IoK8sApiCoreV1EnvVar(
+                name=TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV,
+                value=str(shutdown_timeout),
+            )
+        )
+        trainer_cr.env = env_vars
+
+    # Set the pod grace period to the torchrun timeout plus a buffer, unless the
+    # user already set it (e.g. via the RuntimePatch option).
+    pod_spec = _get_pod_spec_from_runtime_patch(sdk_patch)
+    if "terminationGracePeriodSeconds" not in pod_spec:
+        pod_spec["terminationGracePeriodSeconds"] = torch_timeout + SHUTDOWN_GRACE_BUFFER_SECONDS
+
+    return trainer_cr, runtime_patches
+
+
 def get_cloud_storage_credential_env_vars(
     core_api: "client.CoreV1Api",
     data_connection_name: str,
@@ -551,6 +630,11 @@ def setup_rhai_trainer_storage(
     else:
         if runtime_patches is None:
             runtime_patches = []
+
+    # Apply torchrun shutdown timeout and pod termination grace period overrides.
+    trainer_cr, runtime_patches = apply_shutdown_timeout_overrides(
+        trainer, trainer_cr, runtime_patches
+    )
 
     # Inject cloud storage credentials if applicable
     trainer_cr = inject_cloud_storage_credentials(trainer, trainer_cr, core_api, namespace)
