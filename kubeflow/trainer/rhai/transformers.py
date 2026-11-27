@@ -110,10 +110,20 @@ class TransformersTrainer:
                                        This parameter only applies when using a custom S3-compatible
                                        endpoint (via AWS_S3_ENDPOINT environment variable).
                                        WARNING: Disabling SSL verification is a security risk.
+        shutdown_timeout_seconds: Seconds torchrun waits between sending SIGTERM and SIGKILL
+                                  to workers when a job is paused, preempted, or deleted.
+                                  Also the basis for the pod termination grace period
+                                  (this value plus a 60 second buffer). Raise this when
+                                  just-in-time checkpoints of large models need more than
+                                  the default. Default: 120 (2 minutes). Set to None to
+                                  keep the platform defaults (30 seconds).
+                                  Requires torch >= 2.12 in the training image for the
+                                  TORCH_ELASTIC_SHUTDOWN_TIMEOUT env var to take effect.
 
     Raises:
         ValueError: If metrics_port is not in range 1024-65535.
         ValueError: If metrics_poll_interval_seconds is not in range 5-300.
+        ValueError: If shutdown_timeout_seconds is not in range 30-86400.
         ValueError: If func is not callable.
         ValueError: If output_dir uses unsupported URI scheme (only pvc:// and s3:// are supported).
     """
@@ -141,6 +151,9 @@ class TransformersTrainer:
     data_connection_name: str | None = None
     verify_cloud_storage_access: bool = True
     verify_cloud_storage_ssl: bool = True
+
+    # Shutdown timeout configuration
+    shutdown_timeout_seconds: int | None = 120
 
     def __post_init__(self):
         """Validate configuration after initialization.
@@ -183,6 +196,22 @@ class TransformersTrainer:
                 f"metrics_poll_interval_seconds must be in range 5-300, "
                 f"got {self.metrics_poll_interval_seconds}"
             )
+
+        # Validate shutdown_timeout_seconds
+        if self.shutdown_timeout_seconds is not None:
+            if not isinstance(self.shutdown_timeout_seconds, int) or isinstance(
+                self.shutdown_timeout_seconds, bool
+            ):
+                raise ValueError(
+                    f"shutdown_timeout_seconds must be an integer or None, got "
+                    f"{type(self.shutdown_timeout_seconds).__name__}"
+                )
+
+            if self.shutdown_timeout_seconds < 30 or self.shutdown_timeout_seconds > 86400:
+                raise ValueError(
+                    f"shutdown_timeout_seconds must be in range 30-86400 (30s to 24h), "
+                    f"got {self.shutdown_timeout_seconds}"
+                )
 
         # Normalize and validate output_dir URI
         if self.output_dir:

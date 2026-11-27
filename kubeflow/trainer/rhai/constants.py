@@ -35,6 +35,15 @@ CHECKPOINT_EPHEMERAL_VOLUME_SIZE = "50Gi"
 # Cloud storage URI schemes
 S3_URI_SCHEME = "s3://"
 
+# Torch Elastic shutdown timeout: seconds torchrun waits between sending SIGTERM
+# and SIGKILL to workers. Configurable via this env var since PyTorch 2.12
+# (pytorch/pytorch#172596); older versions hardcode 30 seconds and ignore it.
+TORCH_ELASTIC_SHUTDOWN_TIMEOUT_ENV = "TORCH_ELASTIC_SHUTDOWN_TIMEOUT"
+
+# Buffer added to the torchrun shutdown timeout when setting the pod termination
+# grace period, so the elastic agent can finish its own shutdown after workers exit.
+SHUTDOWN_GRACE_BUFFER_SECONDS = 60
+
 # vLLM sidecar constants (for speculator DATA_ONLY mode)
 VLLM_SIDECAR_CONTAINER_NAME = "vllm-sidecar"
 VLLM_SIDECAR_PORT = 8234

@@ -219,6 +219,76 @@ def test_metrics_port_validation(test_case):
     "test_case",
     [
         TestCase(
+            name="shutdown timeout too low (29 seconds)",
+            expected_status="failed",
+            config={"shutdown_timeout_seconds": 29},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="shutdown timeout too high (86401 seconds)",
+            expected_status="failed",
+            config={"shutdown_timeout_seconds": 86401},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="shutdown timeout minimum boundary (30 seconds)",
+            expected_status="success",
+            config={"shutdown_timeout_seconds": 30},
+            expected_output=30,
+        ),
+        TestCase(
+            name="shutdown timeout maximum boundary (86400 seconds)",
+            expected_status="success",
+            config={"shutdown_timeout_seconds": 86400},
+            expected_output=86400,
+        ),
+        TestCase(
+            name="shutdown timeout invalid type (float)",
+            expected_status="failed",
+            config={"shutdown_timeout_seconds": 600.5},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="shutdown timeout invalid type (string)",
+            expected_status="failed",
+            config={"shutdown_timeout_seconds": "600"},
+            expected_error=ValueError,
+        ),
+        TestCase(
+            name="shutdown timeout disabled (None)",
+            expected_status="success",
+            config={"shutdown_timeout_seconds": None},
+            expected_output=None,
+        ),
+    ],
+)
+def test_shutdown_timeout_validation(test_case):
+    """Test shutdown_timeout_seconds validation."""
+    print(f"Executing test: {test_case.name}")
+
+    def dummy_train():
+        pass
+
+    try:
+        trainer = TransformersTrainer(
+            func=dummy_train,
+            shutdown_timeout_seconds=test_case.config["shutdown_timeout_seconds"],
+        )
+
+        assert test_case.expected_status == "success"
+        assert trainer.shutdown_timeout_seconds == test_case.expected_output
+
+    except Exception as e:
+        assert test_case.expected_status == "failed"
+        assert type(e) is test_case.expected_error
+
+    print("test execution complete")
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        TestCase(
             name="func is string",
             expected_status="failed",
             config={"func": "not_callable"},
